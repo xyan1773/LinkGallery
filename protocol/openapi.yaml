@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: Read-only LAN API exposed by the Android companion.
 servers:
-  - url: https://{deviceAddress}:39570/api/v1
+  - url: http://{deviceAddress}:39570/api/v1
     variables:
       deviceAddress:
         default: 192.168.1.10
@@ -55,6 +55,7 @@ paths:
     get:
       summary: Get information about this phone
       operationId: getDevice
+      security: []
       responses:
         "200":
           description: Device information
@@ -64,10 +65,13 @@ paths:
                 $ref: "#/components/schemas/DeviceInfo"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /media:
     get:
       summary: Get a page of media metadata
       operationId: getMediaPage
+      security: []
       parameters:
         - name: cursor
           in: query
@@ -94,6 +98,10 @@ paths:
                 $ref: "#/components/schemas/MediaPage"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /media/{mediaId}/thumbnail:
     get:
       summary: Get a generated media thumbnail
@@ -179,6 +187,12 @@ components:
             $ref: "#/components/schemas/Problem"
     Unauthorized:
       description: Authentication is missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Android media permission has not been granted
       content:
         application/json:
           schema:

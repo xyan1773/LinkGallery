@@ -31,3 +31,18 @@ $env:JAVA_HOME = 'E:\coding_ide\android\jbr'
 $env:ANDROID_HOME = 'E:\tools\android-sdk'
 .\gradlew.bat :app:assembleDebug
 ```
+
+## Development HTTP API
+
+While the companion activity is visible, the development server listens on port
+`39570`. Grant photo/video read permission first, find the phone's LAN address,
+then verify the first read-only endpoints from Windows:
+
+```powershell
+curl.exe http://PHONE_IP:39570/api/v1/device
+curl.exe "http://PHONE_IP:39570/api/v1/media?limit=20&type=image,video"
+```
+
+The server stops when the activity leaves the foreground. This development slice
+uses HTTP without authentication; pairing and HTTPS are added by later issues.
+Media upload and all `DELETE`, `PATCH`, and `PUT` routes are intentionally absent.

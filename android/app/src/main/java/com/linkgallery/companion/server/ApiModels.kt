@@ -1,0 +1,24 @@
+package com.linkgallery.companion.server
+
+data class DeviceInfo(
+    val id: String,
+    val name: String,
+    val model: String?,
+    val battery: Int?,
+    val mediaCount: Int,
+)
+
+sealed interface DeviceInfoResult {
+    data class Success(val device: DeviceInfo) : DeviceInfoResult
+
+    data class PermissionDenied(val requiredPermissions: Set<String>) : DeviceInfoResult
+}
+
+fun interface DeviceInfoProvider {
+    fun get(): DeviceInfoResult
+}
+
+data class ApiResponse(
+    val status: Int,
+    val body: String,
+)

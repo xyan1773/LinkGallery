@@ -1,7 +1,9 @@
 package com.linkgallery.companion.media
 
 interface MediaRepository {
-    suspend fun getPage(query: MediaQuery): MediaPage
+    suspend fun getPage(query: MediaQuery): MediaPageResult
+
+    suspend fun getById(id: String): MediaItemResult
 }
 
 data class MediaQuery(
@@ -20,3 +22,18 @@ data class MediaPage(
     val nextCursor: String?,
 )
 
+sealed interface MediaPageResult {
+    data class Success(val page: MediaPage) : MediaPageResult
+
+    data class PermissionDenied(val requiredPermissions: Set<String>) : MediaPageResult
+
+    data object InvalidCursor : MediaPageResult
+}
+
+sealed interface MediaItemResult {
+    data class Found(val item: MediaRecord) : MediaItemResult
+
+    data class PermissionDenied(val requiredPermissions: Set<String>) : MediaItemResult
+
+    data object NotFound : MediaItemResult
+}
