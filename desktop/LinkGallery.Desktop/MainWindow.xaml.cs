@@ -24,6 +24,7 @@ public partial class MainWindow : Window, IDisposable
     private readonly SqliteMediaIndex _mediaIndex;
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
     private readonly LocalCopyCatalog _localCopies;
+    private readonly ThumbnailCacheReader _thumbnailCache;
     private CancellationTokenSource? _connectionCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
@@ -39,6 +40,8 @@ public partial class MainWindow : Window, IDisposable
         _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
         _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
         _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
+        _thumbnailCache = new ThumbnailCacheReader(
+            Path.Combine(dataDirectory, "cache", "thumbnails"));
         InitializeComponent();
         DataContext = this;
     }
@@ -256,7 +259,12 @@ public partial class MainWindow : Window, IDisposable
             items,
             item => item.DeviceId == selected.Item.DeviceId &&
                 item.RemoteId == selected.Item.RemoteId);
-        var detail = new MediaDetailWindow(items, selectedIndex, _source, _localCopies)
+        var detail = new MediaDetailWindow(
+            items,
+            selectedIndex,
+            _source,
+            _localCopies,
+            _thumbnailCache)
         {
             Owner = this,
         };

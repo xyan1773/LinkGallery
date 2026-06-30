@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import android.util.Size
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 
 class AndroidMediaStoreDataSource(
     private val contentResolver: ContentResolver,
@@ -72,6 +73,41 @@ class AndroidMediaStoreDataSource(
             null
         }
     }
+
+    override fun openContent(
+        mediaStoreId: Long,
+        type: MediaType,
+        offset: Long,
+    ): InputStream? {
+        val uri = ContentUris.withAppendedId(COLLECTION, mediaStoreId)
+        var descriptor: android.content.res.AssetFileDescriptor? = null
+        return try {
+            descriptor = contentResolver.openAssetFileDescriptor(uri, "r") ?: return null
+            val stream = descriptor.createInputStream()
+            var remaining = offset
+            while (remaining > 0) {
+                val skipped = stream.skip(remaining)
+                if (skipped > 0) {
+                    remaining -= skipped
+                } else if (stream.read() >= 0) {
+                    remaining--
+                } else {
+                    stream.close()
+                    return null
+                }
+            }
+            stream
+        } catch (_: IOException) {
+            descriptor?.close()
+            null
+        } catch (exception: Exception) {
+            descriptor?.close()
+            throw exception
+        }
+    }
+
+    override fun getContentType(mediaStoreId: Long, type: MediaType): String? =
+        contentResolver.getType(ContentUris.withAppendedId(COLLECTION, mediaStoreId))
 
     private fun selectionFor(
         types: Set<MediaType>,

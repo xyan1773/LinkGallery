@@ -27,9 +27,14 @@ public interface IMediaPlaybackUriSource
     Uri GetOriginalUri(string remoteId);
 }
 
-public interface IMediaCacheStatus
+public interface IMediaThumbnailCache
 {
-    bool IsThumbnailCached(string remoteId, DateTimeOffset modifiedAt, ThumbnailSize size);
+    bool IsThumbnailCached(MediaItem item, ThumbnailSize size);
+
+    Task<Stream?> OpenCachedThumbnailAsync(
+        MediaItem item,
+        ThumbnailSize size,
+        CancellationToken cancellationToken);
 }
 
 public sealed record MediaQuery(

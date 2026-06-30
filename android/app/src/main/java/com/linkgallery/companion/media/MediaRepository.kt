@@ -1,5 +1,7 @@
 package com.linkgallery.companion.media
 
+import java.io.InputStream
+
 interface MediaRepository {
     suspend fun getPage(query: MediaQuery): MediaPageResult
 
@@ -7,6 +9,9 @@ interface MediaRepository {
 
     suspend fun getThumbnail(id: String, width: Int, height: Int): MediaThumbnailResult =
         MediaThumbnailResult.NotFound
+
+    suspend fun getContent(id: String): MediaContentResult =
+        MediaContentResult.NotFound
 }
 
 data class MediaQuery(
@@ -47,4 +52,28 @@ sealed interface MediaThumbnailResult {
     data class PermissionDenied(val requiredPermissions: Set<String>) : MediaThumbnailResult
 
     data object NotFound : MediaThumbnailResult
+}
+
+class MediaContent(
+    val length: Long,
+    val contentType: String,
+    private val openAt: (Long) -> InputStream?,
+) {
+    init {
+        require(length >= 0) { "Content length cannot be negative." }
+        require(contentType.isNotBlank()) { "Content type is required." }
+    }
+
+    fun open(offset: Long): InputStream? {
+        require(offset in 0..length) { "Offset must be within the content." }
+        return openAt(offset)
+    }
+}
+
+sealed interface MediaContentResult {
+    data class Found(val content: MediaContent) : MediaContentResult
+
+    data class PermissionDenied(val requiredPermissions: Set<String>) : MediaContentResult
+
+    data object NotFound : MediaContentResult
 }

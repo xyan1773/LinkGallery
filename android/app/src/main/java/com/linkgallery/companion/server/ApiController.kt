@@ -1,10 +1,14 @@
 package com.linkgallery.companion.server
 
+import com.linkgallery.companion.media.MediaContent
+import com.linkgallery.companion.media.MediaContentResult
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import java.io.FilterInputStream
+import java.io.InputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
@@ -12,7 +16,11 @@ class ApiController(
     private val deviceInfoProvider: DeviceInfoProvider,
     private val mediaRepository: MediaRepository,
 ) {
-    suspend fun handle(method: String, requestTarget: String): ApiResponse {
+    suspend fun handle(
+        method: String,
+        requestTarget: String,
+        headers: Map<String, String> = emptyMap(),
+    ): ApiResponse {
         val path = requestTarget.substringBefore('?')
         if (!ReadOnlyRoutePolicy.permits(method, path)) {
             return problem(404, "not_found", "The requested route does not exist.")
@@ -36,10 +44,88 @@ class ApiController(
                     return problem(400, "invalid_parameter", "The query string is invalid.")
                 }
                 getThumbnail(mediaId, parameters)
+            } else if (CONTENT_PATH.matches(path)) {
+                val mediaId = try {
+                    val encodedId = checkNotNull(CONTENT_PATH.matchEntire(path)).groupValues[1]
+                    decode(encodedId)
+                } catch (_: IllegalArgumentException) {
+                    return problem(400, "invalid_parameter", "The media ID is invalid.")
+                }
+                getContent(mediaId, headers.entries.firstOrNull {
+                    it.key.equals("Range", ignoreCase = true)
+                }?.value)
             } else {
                 problem(404, "not_found", "The requested route does not exist.")
             }
         }
+    }
+
+    private suspend fun getContent(mediaId: String, rangeHeader: String?): ApiResponse {
+        return try {
+            when (val result = mediaRepository.getContent(mediaId)) {
+                is MediaContentResult.Found -> contentResponse(result.content, rangeHeader)
+                is MediaContentResult.PermissionDenied ->
+                    permissionDenied(result.requiredPermissions)
+                MediaContentResult.NotFound ->
+                    problem(404, "not_found", "The requested media item does not exist.")
+            }
+        } catch (_: SecurityException) {
+            permissionDenied(emptySet())
+        }
+    }
+
+    private fun contentResponse(content: MediaContent, rangeHeader: String?): ApiResponse {
+        val range = parseRange(rangeHeader, content.length)
+            ?: return ApiResponse(
+                status = 416,
+                body = "",
+                headers = mapOf("Content-Range" to "bytes */${content.length}"),
+            )
+        val stream = content.open(range.start)
+            ?: return problem(404, "not_found", "The requested media item does not exist.")
+        val length = range.endExclusive - range.start
+        return ApiResponse(
+            status = if (range.isPartial) 206 else 200,
+            body = "",
+            contentType = content.contentType,
+            binaryStream = LimitedInputStream(stream, length),
+            contentLength = length,
+            headers = buildMap {
+                put("Accept-Ranges", "bytes")
+                if (range.isPartial) {
+                    put(
+                        "Content-Range",
+                        "bytes ${range.start}-${range.endExclusive - 1}/${content.length}",
+                    )
+                }
+            },
+        )
+    }
+
+    private fun parseRange(header: String?, length: Long): ContentRange? {
+        if (header == null) return ContentRange(0, length, isPartial = false)
+        val match = RANGE_PATTERN.matchEntire(header.trim()) ?: return null
+        val startText = match.groupValues[1]
+        val endText = match.groupValues[2]
+        if (startText.isEmpty() && endText.isEmpty()) return null
+
+        if (startText.isEmpty()) {
+            val suffixLength = endText.toLongOrNull()?.takeIf { it > 0 } ?: return null
+            if (length == 0L) return null
+            val start = (length - suffixLength).coerceAtLeast(0)
+            return ContentRange(start, length, isPartial = true)
+        }
+
+        val start = startText.toLongOrNull()?.takeIf { it >= 0 } ?: return null
+        if (start >= length) return null
+        val requestedEnd = if (endText.isEmpty()) {
+            length - 1
+        } else {
+            endText.toLongOrNull() ?: return null
+        }
+        if (requestedEnd < start) return null
+        val endExclusive = minOf(requestedEnd, length - 1) + 1
+        return ContentRange(start, endExclusive, isPartial = true)
     }
 
     private suspend fun getThumbnail(
@@ -158,5 +244,32 @@ class ApiController(
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
         val THUMBNAIL_PATH = Regex("^/api/v1/media/([^/]+)/thumbnail$")
+        val CONTENT_PATH = Regex("^/api/v1/media/([^/]+)/content$")
+        val RANGE_PATTERN = Regex("^bytes=(\\d*)-(\\d*)$")
+    }
+
+    private data class ContentRange(
+        val start: Long,
+        val endExclusive: Long,
+        val isPartial: Boolean,
+    )
+
+    private class LimitedInputStream(
+        source: InputStream,
+        private var remaining: Long,
+    ) : FilterInputStream(source) {
+        override fun read(): Int {
+            if (remaining == 0L) return -1
+            val value = super.read()
+            if (value >= 0) remaining--
+            return value
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (remaining == 0L) return -1
+            val count = super.read(buffer, offset, minOf(length.toLong(), remaining).toInt())
+            if (count > 0) remaining -= count
+            return count
+        }
     }
 }

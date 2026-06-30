@@ -19,6 +19,7 @@ public partial class MediaDetailWindow : Window, IDisposable
     private readonly IReadOnlyList<MediaItem> _items;
     private readonly CachingReadOnlyMediaSource? _source;
     private readonly LocalCopyCatalog _localCopies;
+    private readonly IMediaThumbnailCache _thumbnailCache;
     private readonly DispatcherTimer _playbackTimer;
     private CancellationTokenSource? _loadCancellation;
     private int _index;
@@ -30,10 +31,12 @@ public partial class MediaDetailWindow : Window, IDisposable
         IReadOnlyList<MediaItem> items,
         int selectedIndex,
         CachingReadOnlyMediaSource? source,
-        LocalCopyCatalog localCopies)
+        LocalCopyCatalog localCopies,
+        IMediaThumbnailCache thumbnailCache)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(localCopies);
+        ArgumentNullException.ThrowIfNull(thumbnailCache);
         if (items.Count == 0)
         {
             throw new ArgumentException("详情窗口至少需要一项媒体。", nameof(items));
@@ -43,6 +46,7 @@ public partial class MediaDetailWindow : Window, IDisposable
         _index = Math.Clamp(selectedIndex, 0, items.Count - 1);
         _source = source;
         _localCopies = localCopies;
+        _thumbnailCache = thumbnailCache;
         _playbackTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(250),
@@ -118,15 +122,12 @@ public partial class MediaDetailWindow : Window, IDisposable
     {
         if (_source is null)
         {
-            throw new IOException("设备离线，且此照片没有本地副本。");
+            return await OpenCachedThumbnailOrThrowAsync(cancellationToken);
         }
 
         if (_source.IsOffline)
         {
-            return await _source.OpenThumbnailAsync(
-                Current.RemoteId,
-                OfflinePreviewSize,
-                cancellationToken);
+            return await OpenCachedThumbnailOrThrowAsync(cancellationToken);
         }
 
         try
@@ -134,14 +135,19 @@ public partial class MediaDetailWindow : Window, IDisposable
             return await _source.OpenOriginalAsync(Current.RemoteId, 0, cancellationToken);
         }
         catch (HttpRequestException) when (
-            _source.IsThumbnailCached(Current.RemoteId, Current.ModifiedAt, OfflinePreviewSize))
+            _thumbnailCache.IsThumbnailCached(Current, OfflinePreviewSize))
         {
-            return await _source.OpenThumbnailAsync(
-                Current.RemoteId,
-                OfflinePreviewSize,
-                cancellationToken);
+            return await OpenCachedThumbnailOrThrowAsync(cancellationToken);
         }
     }
+
+    private async Task<Stream> OpenCachedThumbnailOrThrowAsync(
+        CancellationToken cancellationToken) =>
+        await _thumbnailCache.OpenCachedThumbnailAsync(
+            Current,
+            OfflinePreviewSize,
+            cancellationToken) ??
+        throw new IOException("设备离线，且此照片只有元数据。");
 
     private void LoadVideo(LocalCopy? localCopy)
     {
@@ -204,8 +210,7 @@ public partial class MediaDetailWindow : Window, IDisposable
             return;
         }
 
-        var cached = _source is IMediaCacheStatus cache &&
-            cache.IsThumbnailCached(Current.RemoteId, Current.ModifiedAt, OfflinePreviewSize);
+        var cached = _thumbnailCache.IsThumbnailCached(Current, OfflinePreviewSize);
         AvailabilityText.Text = cached ? "有缓存（缩略图）" : "仅元数据";
         if (_source is not null && !_source.IsOffline)
         {

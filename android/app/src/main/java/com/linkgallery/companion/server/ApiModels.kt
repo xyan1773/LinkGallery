@@ -1,5 +1,7 @@
 package com.linkgallery.companion.server
 
+import java.io.InputStream
+
 data class DeviceInfo(
     val id: String,
     val name: String,
@@ -23,4 +25,7 @@ data class ApiResponse(
     val body: String,
     val contentType: String = "application/json; charset=utf-8",
     val binaryBody: ByteArray? = null,
+    val binaryStream: InputStream? = null,
+    val contentLength: Long? = null,
+    val headers: Map<String, String> = emptyMap(),
 )

@@ -10,7 +10,6 @@ namespace LinkGallery.Infrastructure.Media;
 public sealed class CachingReadOnlyMediaSource :
     IReadOnlyMediaSource,
     IMediaPlaybackUriSource,
-    IMediaCacheStatus,
     IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -124,21 +123,6 @@ public sealed class CachingReadOnlyMediaSource :
         }
 
         return source.GetOriginalUri(remoteId);
-    }
-
-    public bool IsThumbnailCached(
-        string remoteId,
-        DateTimeOffset modifiedAt,
-        ThumbnailSize size)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
-        var deviceId = _snapshot.Device?.Id ?? "unknown-device";
-        return _thumbnailCache.Contains(new ThumbnailCacheKey(
-            deviceId,
-            remoteId,
-            modifiedAt.UtcTicks,
-            size.Width,
-            size.Height));
     }
 
     public Task ClearThumbnailCacheAsync(CancellationToken cancellationToken = default) =>
