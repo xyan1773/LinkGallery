@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LinkGallery.Desktop", "desk
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LinkGallery.Domain.Tests", "desktop\LinkGallery.Domain.Tests\LinkGallery.Domain.Tests.csproj", "{F9E1D501-32AA-46A5-8C2E-469E1ED805C3}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LinkGallery.Infrastructure.Tests", "desktop\LinkGallery.Infrastructure.Tests\LinkGallery.Infrastructure.Tests.csproj", "{5D3E1706-7FA3-46B1-ACDC-640D7B2B1D84}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -44,6 +46,10 @@ Global
 		{F9E1D501-32AA-46A5-8C2E-469E1ED805C3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F9E1D501-32AA-46A5-8C2E-469E1ED805C3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F9E1D501-32AA-46A5-8C2E-469E1ED805C3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5D3E1706-7FA3-46B1-ACDC-640D7B2B1D84}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D3E1706-7FA3-46B1-ACDC-640D7B2B1D84}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D3E1706-7FA3-46B1-ACDC-640D7B2B1D84}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D3E1706-7FA3-46B1-ACDC-640D7B2B1D84}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{D9BFFCED-7FAA-4311-8FB1-A3725227AE04} = {E09DE497-E97F-4F2D-BD1F-B75E6E61B4AF}
@@ -51,5 +57,6 @@ Global
 		{AFDDCFF9-39CA-4411-8E3C-1DEB441134A1} = {E09DE497-E97F-4F2D-BD1F-B75E6E61B4AF}
 		{88AB39B9-DD0A-4284-8392-15552E76DA06} = {E09DE497-E97F-4F2D-BD1F-B75E6E61B4AF}
 		{F9E1D501-32AA-46A5-8C2E-469E1ED805C3} = {E09DE497-E97F-4F2D-BD1F-B75E6E61B4AF}
+		{5D3E1706-7FA3-46B1-ACDC-640D7B2B1D84} = {E09DE497-E97F-4F2D-BD1F-B75E6E61B4AF}
 	EndGlobalSection
 EndGlobal
