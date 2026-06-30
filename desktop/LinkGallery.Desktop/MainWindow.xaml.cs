@@ -20,24 +20,48 @@ public partial class MainWindow : Window, IDisposable
     private static readonly ThumbnailSize TimelineThumbnailSize = new(320, 240);
     private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
+    private readonly SqliteMediaIndex _mediaIndex;
+    private readonly IncrementalMediaIndexSynchronizer _synchronizer;
     private CancellationTokenSource? _connectionCancellation;
     private CachingReadOnlyMediaSource? _source;
-    private string? _nextCursor;
+    private string? _activeDeviceId;
+    private bool _hasMoreIndexedItems;
     private bool _isLoadingPage;
     private bool _disposed;
 
     public MainWindow()
     {
+        var dataDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LinkGallery");
+        _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
+        _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
         InitializeComponent();
         DataContext = this;
     }
 
     public ObservableCollection<MediaRow> TimelineRows { get; } = [];
 
+    private async void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await LoadIndexedPageAsync(
+                reset: true,
+                "本地缓存中还没有媒体",
+                CancellationToken.None);
+            UpdateIndexedStatus();
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"无法读取本地索引：{exception.Message}";
+        }
+    }
+
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
         Disconnect(clearTimeline: true);
-        SetLoading(true, "正在连接手机并读取媒体…");
+        SetLoading(true, "正在连接手机并同步媒体索引…");
         _connectionCancellation = new CancellationTokenSource();
         var cancellationToken = _connectionCancellation.Token;
 
@@ -53,7 +77,10 @@ public partial class MainWindow : Window, IDisposable
                 httpSource,
                 cacheRoot,
                 apiAddress.AbsoluteUri);
-            var device = await _source.GetDeviceInfoAsync(cancellationToken);
+
+            var sync = await _synchronizer.SynchronizeAsync(_source, cancellationToken);
+            var device = sync.Device;
+            _activeDeviceId = device.Id;
 
             DeviceNameText.Text = device.Name;
             DeviceModelText.Text = string.IsNullOrWhiteSpace(device.Model)
@@ -64,11 +91,16 @@ public partial class MainWindow : Window, IDisposable
                 : "电量未知";
             MediaCountText.Text = $"共 {device.MediaCount:N0} 项媒体";
             DevicePanel.Visibility = Visibility.Visible;
-            TimelineList.Visibility = Visibility.Visible;
             DisconnectButton.IsEnabled = true;
 
-            await LoadNextPageAsync(cancellationToken);
-            UpdateStatus();
+            await LoadIndexedPageAsync(
+                reset: true,
+                "手机中没有可显示的照片或视频",
+                cancellationToken);
+            var syncMode = sync.WasFullScan ? "完整索引" : "增量更新";
+            StatusText.Text =
+                $"已连接 · {syncMode} {sync.ItemsReceived:N0} 项（{sync.PagesFetched:N0} 页）" +
+                $" · 已显示 {TimelineRows.Count:N0} 项";
         }
         catch (OperationCanceledException)
         {
@@ -77,6 +109,10 @@ public partial class MainWindow : Window, IDisposable
         catch (Exception exception)
         {
             ShowConnectionError(exception);
+            await LoadIndexedPageAsync(
+                reset: true,
+                "手机当前不可用，本地缓存中还没有媒体",
+                CancellationToken.None);
         }
         finally
         {
@@ -84,9 +120,12 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private async Task LoadNextPageAsync(CancellationToken cancellationToken)
+    private async Task LoadIndexedPageAsync(
+        bool reset,
+        string emptyMessage,
+        CancellationToken cancellationToken)
     {
-        if (_source is null || _isLoadingPage || (_nextCursor is null && TimelineRows.Count > 0))
+        if (_isLoadingPage || (!reset && !_hasMoreIndexedItems))
         {
             return;
         }
@@ -94,28 +133,45 @@ public partial class MainWindow : Window, IDisposable
         _isLoadingPage = true;
         try
         {
-            var page = await _source.GetMediaPageAsync(
-                new MediaQuery(Cursor: _nextCursor, Limit: PageSize),
-                cancellationToken);
-            var previousDate = TimelineRows.LastOrDefault()?.Item.TakenAt.LocalDateTime.Date;
-            foreach (var item in page.Items)
+            if (reset)
             {
-                var date = item.TakenAt.LocalDateTime.Date;
-                var dateHeader = previousDate != date
-                    ? date.ToString("yyyy年M月d日 dddd", CultureInfo.CurrentCulture)
-                    : null;
-                TimelineRows.Add(new MediaRow(item, dateHeader));
-                previousDate = date;
+                TimelineRows.Clear();
+                _hasMoreIndexedItems = true;
             }
 
-            _nextCursor = page.NextCursor;
-            EmptyText.Text = "手机中没有可显示的照片或视频";
-            EmptyText.Visibility = TimelineRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            UpdateStatus();
+            var items = await _mediaIndex.SearchAsync(
+                _activeDeviceId,
+                SearchTextBox.Text,
+                PageSize,
+                TimelineRows.Count,
+                cancellationToken);
+            AppendTimelineItems(items);
+            _hasMoreIndexedItems = items.Count == PageSize;
+            TimelineList.Visibility = TimelineRows.Count == 0
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            EmptyText.Text = emptyMessage;
+            EmptyText.Visibility = TimelineRows.Count == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
         finally
         {
             _isLoadingPage = false;
+        }
+    }
+
+    private void AppendTimelineItems(IReadOnlyList<MediaItem> items)
+    {
+        var previousDate = TimelineRows.LastOrDefault()?.Item.TakenAt.LocalDateTime.Date;
+        foreach (var item in items)
+        {
+            var date = item.TakenAt.LocalDateTime.Date;
+            var dateHeader = previousDate != date
+                ? date.ToString("yyyy年M月d日 dddd", CultureInfo.CurrentCulture)
+                : null;
+            TimelineRows.Add(new MediaRow(item, dateHeader));
+            previousDate = date;
         }
     }
 
@@ -175,15 +231,19 @@ public partial class MainWindow : Window, IDisposable
     {
         if (e.VerticalChange <= 0 ||
             e.VerticalOffset < e.ExtentHeight - e.ViewportHeight - 600 ||
-            _nextCursor is null ||
-            _connectionCancellation is null)
+            !_hasMoreIndexedItems)
         {
             return;
         }
 
         try
         {
-            await LoadNextPageAsync(_connectionCancellation.Token);
+            var cancellationToken = _connectionCancellation?.Token ?? CancellationToken.None;
+            await LoadIndexedPageAsync(
+                reset: false,
+                "本地索引中没有可显示的媒体",
+                cancellationToken);
+            UpdateIndexedStatus();
         }
         catch (OperationCanceledException)
         {
@@ -191,6 +251,22 @@ public partial class MainWindow : Window, IDisposable
         catch (Exception exception)
         {
             StatusText.Text = $"无法继续加载：{exception.Message}";
+        }
+    }
+
+    private async void OnSearchClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await LoadIndexedPageAsync(
+                reset: true,
+                "本地索引中没有匹配的媒体",
+                CancellationToken.None);
+            UpdateIndexedStatus();
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"无法读取本地索引：{exception.Message}";
         }
     }
 
@@ -219,7 +295,22 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void OnDisconnectClick(object sender, RoutedEventArgs e) => Disconnect(clearTimeline: true);
+    private async void OnDisconnectClick(object sender, RoutedEventArgs e)
+    {
+        Disconnect(clearTimeline: true);
+        try
+        {
+            await LoadIndexedPageAsync(
+                reset: true,
+                "本地缓存中还没有媒体",
+                CancellationToken.None);
+            UpdateIndexedStatus();
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"无法读取本地索引：{exception.Message}";
+        }
+    }
 
     private void OnWindowClosing(object? sender, CancelEventArgs e) => Dispose();
 
@@ -231,7 +322,9 @@ public partial class MainWindow : Window, IDisposable
         }
 
         Disconnect(clearTimeline: true);
+        _thumbnailConcurrency.Dispose();
         _httpClient.Dispose();
+        _mediaIndex.Dispose();
         _disposed = true;
         GC.SuppressFinalize(this);
     }
@@ -241,8 +334,10 @@ public partial class MainWindow : Window, IDisposable
         _connectionCancellation?.Cancel();
         _connectionCancellation?.Dispose();
         _connectionCancellation = null;
+        _source?.Dispose();
         _source = null;
-        _nextCursor = null;
+        _activeDeviceId = null;
+        _hasMoreIndexedItems = false;
         _isLoadingPage = false;
         DevicePanel.Visibility = Visibility.Collapsed;
         TimelineList.Visibility = Visibility.Collapsed;
@@ -269,16 +364,13 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void UpdateStatus()
+    private void UpdateIndexedStatus()
     {
-        if (_source is null)
-        {
-            return;
-        }
-
-        var mode = _source.IsOffline ? "离线缓存" : "在线";
-        var suffix = _nextCursor is null ? " · 已全部加载" : "";
-        StatusText.Text = $"{mode} · 已加载 {TimelineRows.Count:N0} 项{suffix}";
+        var mode = _source is null
+            ? "离线缓存"
+            : _source.IsOffline ? "离线缓存" : "在线";
+        var suffix = _hasMoreIndexedItems ? "" : " · 已全部加载";
+        StatusText.Text = $"{mode} · 已显示 {TimelineRows.Count:N0} 项{suffix}";
     }
 
     private void ShowConnectionError(Exception exception)
@@ -287,18 +379,18 @@ public partial class MainWindow : Window, IDisposable
         StatusText.Text = exception switch
         {
             FormatException => exception.Message,
-            MediaSourceTimeoutException => "连接超时。请确认手机在线、地址正确，且两台设备在同一 Wi-Fi。",
+            MediaSourceTimeoutException =>
+                "连接超时。请确认手机在线、地址正确，且两台设备在同一 Wi-Fi。",
             MediaSourceProtocolException => $"协议错误：{exception.Message}",
             MediaSourceHttpException { StatusCode: HttpStatusCode.Forbidden } =>
                 "手机未授予照片和视频读取权限，请在手机端授权后重试。",
             MediaSourceHttpException { StatusCode: HttpStatusCode.BadRequest } =>
                 $"手机拒绝了请求：{exception.Message}",
             MediaSourceHttpException => $"手机返回错误：{exception.Message}",
-            HttpRequestException => "无法连接手机，且该地址没有可用的离线缓存。",
+            HttpRequestException =>
+                "无法连接手机。请检查 IP、端口、Wi-Fi 和手机服务状态；仍可浏览本地索引。",
             _ => $"连接失败：{exception.Message}",
         };
-        EmptyText.Text = "未能加载媒体";
-        EmptyText.Visibility = Visibility.Visible;
     }
 
     public sealed class MediaRow : INotifyPropertyChanged
