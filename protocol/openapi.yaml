@@ -75,6 +75,10 @@ paths:
       parameters:
         - name: cursor
           in: query
+          description: >
+            Opaque keyset cursor returned by the preceding page. Media is ordered by
+            modified time descending and stable media ID descending. Clients must not
+            parse or construct this value.
           schema:
             type: string
         - name: limit
@@ -339,4 +343,5 @@ components:
             $ref: "#/components/schemas/MediaItem"
         nextCursor:
           type: string
+          description: Opaque cursor for the next page; null when the snapshot tail is reached.
           nullable: true
