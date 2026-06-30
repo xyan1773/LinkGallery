@@ -1,8 +1,5 @@
-using System.Windows;
-
 namespace LinkGallery.Desktop;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
 }
-

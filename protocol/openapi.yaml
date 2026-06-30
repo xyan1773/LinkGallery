@@ -11,8 +11,49 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /pair/request:
+    post:
+      summary: Start pairing with this phone
+      operationId: requestPairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingRequest"
+      responses:
+        "202":
+          description: Pairing is waiting for confirmation on the phone
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingChallenge"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /pair/confirm:
+    post:
+      summary: Confirm a pending pairing session
+      operationId: confirmPairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingConfirmation"
+      responses:
+        "200":
+          description: Pairing completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
   /device:
     get:
+      summary: Get information about this phone
       operationId: getDevice
       responses:
         "200":
@@ -21,8 +62,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DeviceInfo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /media:
     get:
+      summary: Get a page of media metadata
       operationId: getMediaPage
       parameters:
         - name: cursor
@@ -48,8 +92,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /media/{mediaId}/thumbnail:
     get:
+      summary: Get a generated media thumbnail
       operationId: getThumbnail
       parameters:
         - $ref: "#/components/parameters/MediaId"
@@ -75,8 +122,11 @@ paths:
               schema:
                 type: string
                 format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
   /media/{mediaId}/content:
     get:
+      summary: Stream original media content
       operationId: getMediaContent
       parameters:
         - $ref: "#/components/parameters/MediaId"
@@ -104,6 +154,10 @@ paths:
               schema:
                 type: string
                 format: binary
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "416":
+          description: Requested byte range is not satisfiable
 components:
   securitySchemes:
     bearerAuth:
@@ -116,7 +170,83 @@ components:
       required: true
       schema:
         type: string
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: Authentication is missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: The requested media item does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Problem"
   schemas:
+    Problem:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    PairingRequest:
+      type: object
+      required: [desktopDeviceId, desktopName, desktopPublicKey, oneTimeToken]
+      properties:
+        desktopDeviceId:
+          type: string
+        desktopName:
+          type: string
+        desktopPublicKey:
+          type: string
+          description: Base64 encoded public key
+        oneTimeToken:
+          type: string
+          description: Short-lived secret encoded in the QR code
+    PairingChallenge:
+      type: object
+      required: [sessionId, confirmationCode, expiresAt]
+      properties:
+        sessionId:
+          type: string
+        confirmationCode:
+          type: string
+          pattern: "^[0-9]{6}$"
+        expiresAt:
+          type: string
+          format: date-time
+    PairingConfirmation:
+      type: object
+      required: [sessionId, confirmationCode]
+      properties:
+        sessionId:
+          type: string
+        confirmationCode:
+          type: string
+          pattern: "^[0-9]{6}$"
+    PairingResult:
+      type: object
+      required: [deviceId, devicePublicKey, accessToken, expiresAt]
+      properties:
+        deviceId:
+          type: string
+        devicePublicKey:
+          type: string
+          description: Base64 encoded public key
+        accessToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
     DeviceInfo:
       type: object
       required: [id, name, platform, mediaCount]
@@ -196,4 +326,3 @@ components:
         nextCursor:
           type: string
           nullable: true
-

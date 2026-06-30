@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dotnet-test:
+        patterns:
+          - "Microsoft.NET.Test.Sdk"
+          - "MSTest.*"
+          - "coverlet.collector"
+
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+

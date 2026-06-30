@@ -29,3 +29,11 @@ Desktop.ini
 *.partial
 artifacts/
 
+# Local tool configuration
+android/local.properties
+*.DotSettings.user
+
+# Test output
+TestResults/
+coverage/
+

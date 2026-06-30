@@ -2,8 +2,8 @@
 
 Android 端负责通过 MediaStore 读取媒体，并在局域网暴露只读 API。
 
-工程基于 AGP 9.2.1、内置 Kotlin 和 Jetpack Compose。开发机使用
-`E:\tools\SDK26`；该机器安装 Android SDK 后，可在 Android Studio 中直接导入
+工程基于 AGP 9.2.1、内置 Kotlin 和 Jetpack Compose。开发机使用 Android
+Studio 自带的 JDK 21 与 `E:\tools\android-sdk`，可在 Android Studio 中直接导入
 本目录。
 
 ```text
@@ -27,9 +27,7 @@ app/src/main/java/com/linkgallery/companion/
 本地构建：
 
 ```powershell
-$env:JAVA_HOME = 'E:\tools\SDK26'
+$env:JAVA_HOME = 'E:\coding_ide\android\jbr'
+$env:ANDROID_HOME = 'E:\tools\android-sdk'
 .\gradlew.bat :app:assembleDebug
 ```
-
-Gradle Wrapper 需要在 Android Studio 首次导入或可用 Gradle 环境中生成。
-

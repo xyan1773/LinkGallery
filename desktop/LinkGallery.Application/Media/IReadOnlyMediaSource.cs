@@ -31,5 +31,21 @@ public sealed record MediaPage(
     IReadOnlyList<MediaItem> Items,
     string? NextCursor);
 
-public readonly record struct ThumbnailSize(int Width, int Height);
+public readonly record struct ThumbnailSize
+{
+    public ThumbnailSize(int width, int height)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(width, 2048);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(height, 2048);
+
+        Width = width;
+        Height = height;
+    }
+
+    public int Width { get; }
+
+    public int Height { get; }
+}
 

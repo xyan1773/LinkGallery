@@ -28,13 +28,27 @@ LinkGallery/
 
 ## 开发状态
 
-当前仓库是初始化骨架。第一条纵向链路是：
+当前仓库已完成工程化基线，包括：
+
+- .NET solution、领域测试和 warnings-as-errors；
+- Android Compose 工程、Gradle Wrapper 和只读路由边界测试；
+- OpenAPI 协议、ADR、CI、Dependabot 和贡献规范；
+- 可复用的本地环境发现与统一构建脚本。
+
+下一条纵向链路是：
 
 1. Android 从 MediaStore 读取设备信息和媒体列表。
 2. Android 在局域网提供只读 HTTP API。
 3. Windows 通过手动 IP 连接并展示媒体列表。
 4. 验证可行后再加入缩略图、自动发现、配对和可靠传输。
 
-详细边界与里程碑见 [架构说明](docs/architecture.md) 和
-[开发路线图](docs/roadmap.md)。
+## 本地构建
 
+```powershell
+.\scripts\build.ps1
+```
+
+详细边界与里程碑见 [架构说明](docs/architecture.md) 和
+[开发路线图](docs/roadmap.md)。环境准备见
+[开发环境](docs/development.md)，参与修改前请阅读
+[贡献指南](CONTRIBUTING.md)。
