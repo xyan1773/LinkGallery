@@ -6,6 +6,7 @@
         Height="720"
         MinWidth="800"
         MinHeight="500"
+        Loaded="OnWindowLoaded"
         Closing="OnWindowClosing">
     <Grid>
         <Grid.ColumnDefinitions>
@@ -44,6 +45,17 @@
                              Height="4"
                              IsIndeterminate="True"
                              Visibility="Collapsed" />
+                <Separator Margin="0,22,0,18" />
+                <TextBlock FontWeight="SemiBold" Text="缓存搜索" />
+                <TextBox x:Name="SearchTextBox"
+                         Margin="0,8,0,0"
+                         Padding="8"
+                         ToolTip="即使手机离线也可搜索文件名、相册和路径" />
+                <Button x:Name="SearchButton"
+                        Margin="0,8,0,0"
+                        Padding="8"
+                        Click="OnSearchClick"
+                        Content="搜索本地索引" />
                 <TextBlock x:Name="StatusText"
                            Margin="0,12,0,0"
                            Foreground="#4B5563"
