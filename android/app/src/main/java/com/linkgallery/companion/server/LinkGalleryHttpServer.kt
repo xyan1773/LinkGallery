@@ -148,7 +148,7 @@ class LinkGalleryHttpServer(
     }
 
     private fun write(socket: Socket, response: ApiResponse) {
-        val body = response.body.toByteArray(StandardCharsets.UTF_8)
+        val body = response.binaryBody ?: response.body.toByteArray(StandardCharsets.UTF_8)
         val reason = when (response.status) {
             200 -> "OK"
             400 -> "Bad Request"
@@ -160,7 +160,7 @@ class LinkGalleryHttpServer(
         }
         socket.getOutputStream().buffered().use { output ->
             output.write("HTTP/1.1 ${response.status} $reason\r\n".toByteArray())
-            output.write("Content-Type: application/json; charset=utf-8\r\n".toByteArray())
+            output.write("Content-Type: ${response.contentType}\r\n".toByteArray())
             output.write("Content-Length: ${body.size}\r\n".toByteArray())
             output.write("Connection: close\r\n\r\n".toByteArray())
             output.write(body)

@@ -50,6 +50,21 @@ class DefaultMediaRepository(
         return MediaItemResult.Found(toRecord(row))
     }
 
+    override suspend fun getThumbnail(
+        id: String,
+        width: Int,
+        height: Int,
+    ): MediaThumbnailResult {
+        val locator = tokenCodec.decodeId(id) ?: return MediaThumbnailResult.NotFound
+        val missingPermissions = permissionGateway.missingPermissions(setOf(locator.type))
+        if (missingPermissions.isNotEmpty()) {
+            return MediaThumbnailResult.PermissionDenied(missingPermissions)
+        }
+        val bytes = dataSource.loadThumbnail(locator.mediaStoreId, locator.type, width, height)
+            ?: return MediaThumbnailResult.NotFound
+        return MediaThumbnailResult.Found(bytes)
+    }
+
     private fun toRecord(row: MediaStoreRow): MediaRecord {
         val modifiedAt = Instant.ofEpochSecond(row.dateModifiedEpochSeconds)
         return MediaRecord(

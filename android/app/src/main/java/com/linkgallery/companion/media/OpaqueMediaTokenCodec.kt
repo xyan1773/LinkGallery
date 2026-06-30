@@ -22,15 +22,15 @@ class OpaqueMediaTokenCodec {
     }
 
     internal fun encodeCursor(row: MediaStoreRow): String =
-        CURSOR_PREFIX + encode("${row.dateModifiedEpochSeconds}:${row.mediaStoreId}")
+        CURSOR_PREFIX + encode("${row.sortTimestampEpochMillis}:${row.mediaStoreId}")
 
     internal fun decodeCursor(value: String): MediaStoreCursor? {
         if (!value.startsWith(CURSOR_PREFIX)) return null
         val parts = decode(value.removePrefix(CURSOR_PREFIX))?.split(':') ?: return null
         if (parts.size != 2) return null
-        val modifiedAt = parts[0].toLongOrNull()?.takeIf { it >= 0 } ?: return null
+        val sortTimestamp = parts[0].toLongOrNull()?.takeIf { it >= 0 } ?: return null
         val id = parts[1].toLongOrNull()?.takeIf { it >= 0 } ?: return null
-        return MediaStoreCursor(modifiedAt, id)
+        return MediaStoreCursor(sortTimestamp, id)
     }
 
     private fun encode(value: String): String =
@@ -45,6 +45,6 @@ class OpaqueMediaTokenCodec {
 
     private companion object {
         const val ID_PREFIX = "lgm1_"
-        const val CURSOR_PREFIX = "lgc1_"
+        const val CURSOR_PREFIX = "lgc2_"
     }
 }

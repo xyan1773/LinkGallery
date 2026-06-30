@@ -33,11 +33,11 @@ class DefaultMediaRepositoryTest {
         assertEquals(1920, page.items[0].width)
         assertEquals("Camera", page.items[0].albumName)
         assertFalse(page.items[0].id.contains("DCIM"))
-        assertTrue(page.nextCursor?.startsWith("lgc1_") == true)
+        assertTrue(page.nextCursor?.startsWith("lgc2_") == true)
         assertEquals(3, source.lastRequest?.limit)
 
         repository.getPage(MediaQuery(cursor = page.nextCursor, limit = 2))
-        assertEquals(MediaStoreCursor(20, 2), source.lastRequest?.after)
+        assertEquals(MediaStoreCursor(30_500, 2), source.lastRequest?.after)
     }
 
     @Test
@@ -126,14 +126,14 @@ class DefaultMediaRepositoryTest {
                 .filter { it.type in request.types }
                 .filter {
                     request.after == null ||
-                        it.dateModifiedEpochSeconds < request.after.modifiedAtEpochSeconds ||
+                        it.sortTimestampEpochMillis < request.after.sortTimestampEpochMillis ||
                         (
-                            it.dateModifiedEpochSeconds == request.after.modifiedAtEpochSeconds &&
+                            it.sortTimestampEpochMillis == request.after.sortTimestampEpochMillis &&
                                 it.mediaStoreId < request.after.mediaStoreId
                             )
                 }
                 .sortedWith(
-                    compareByDescending<MediaStoreRow> { it.dateModifiedEpochSeconds }
+                    compareByDescending<MediaStoreRow> { it.sortTimestampEpochMillis }
                         .thenByDescending { it.mediaStoreId },
                 )
                 .take(request.limit)
