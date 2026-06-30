@@ -1,7 +1,7 @@
 package com.linkgallery.companion.media
 
 data class MediaStoreCursor(
-    val modifiedAtEpochSeconds: Long,
+    val sortTimestampEpochMillis: Long,
     val mediaStoreId: Long,
 )
 
@@ -23,17 +23,23 @@ data class MediaStoreRow(
     val durationMilliseconds: Long?,
     val albumName: String?,
     val relativePath: String?,
-)
+) {
+    val sortTimestampEpochMillis: Long
+        get() = dateTakenEpochMillis?.takeIf { it > 0 } ?: dateModifiedEpochSeconds * 1000
+}
 
 /**
  * Injectable, read-only boundary around Android's MediaStore.
  *
- * Implementations must return rows ordered by modified time and ID, both descending.
+ * Implementations must return rows ordered by taken time (falling back to modified time)
+ * and ID, both descending.
  */
 interface MediaStoreDataSource {
     fun query(request: MediaStoreRequest): List<MediaStoreRow>
 
     fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow?
+
+    fun loadThumbnail(mediaStoreId: Long, type: MediaType, width: Int, height: Int): ByteArray? = null
 }
 
 interface MediaPermissionGateway {

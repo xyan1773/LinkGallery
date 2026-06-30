@@ -3,6 +3,7 @@ package com.linkgallery.companion.server
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRepository
+import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
@@ -27,8 +28,47 @@ class ApiController(
                 }
                 getMedia(parameters)
             }
-            else -> problem(404, "not_found", "The requested route does not exist.")
+            else -> if (THUMBNAIL_PATH.matches(path)) {
+                val (mediaId, parameters) = try {
+                    val encodedId = checkNotNull(THUMBNAIL_PATH.matchEntire(path)).groupValues[1]
+                    decode(encodedId) to parseQuery(requestTarget.substringAfter('?', ""))
+                } catch (_: IllegalArgumentException) {
+                    return problem(400, "invalid_parameter", "The query string is invalid.")
+                }
+                getThumbnail(mediaId, parameters)
+            } else {
+                problem(404, "not_found", "The requested route does not exist.")
+            }
         }
+    }
+
+    private suspend fun getThumbnail(
+        mediaId: String,
+        parameters: Map<String, List<String>>,
+    ): ApiResponse {
+        val width = singleDimension(parameters, "width") ?: return invalidParameter("width")
+        val height = singleDimension(parameters, "height") ?: return invalidParameter("height")
+        return try {
+            when (val result = mediaRepository.getThumbnail(mediaId, width, height)) {
+                is MediaThumbnailResult.Found -> ApiResponse(
+                    status = 200,
+                    body = "",
+                    contentType = "image/jpeg",
+                    binaryBody = result.jpeg,
+                )
+                is MediaThumbnailResult.PermissionDenied ->
+                    permissionDenied(result.requiredPermissions)
+                MediaThumbnailResult.NotFound ->
+                    problem(404, "not_found", "The requested media item does not exist.")
+            }
+        } catch (_: SecurityException) {
+            permissionDenied(emptySet())
+        }
+    }
+
+    private fun singleDimension(parameters: Map<String, List<String>>, name: String): Int? {
+        val raw = parameters[name]?.singleOrNull() ?: return null
+        return raw.toIntOrNull()?.takeIf { it in 1..2048 }
     }
 
     private fun getDevice(): ApiResponse = try {
@@ -117,5 +157,6 @@ class ApiController(
     private companion object {
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
+        val THUMBNAIL_PATH = Regex("^/api/v1/media/([^/]+)/thumbnail$")
     }
 }

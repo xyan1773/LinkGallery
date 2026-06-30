@@ -4,6 +4,9 @@ interface MediaRepository {
     suspend fun getPage(query: MediaQuery): MediaPageResult
 
     suspend fun getById(id: String): MediaItemResult
+
+    suspend fun getThumbnail(id: String, width: Int, height: Int): MediaThumbnailResult =
+        MediaThumbnailResult.NotFound
 }
 
 data class MediaQuery(
@@ -36,4 +39,12 @@ sealed interface MediaItemResult {
     data class PermissionDenied(val requiredPermissions: Set<String>) : MediaItemResult
 
     data object NotFound : MediaItemResult
+}
+
+sealed interface MediaThumbnailResult {
+    data class Found(val jpeg: ByteArray) : MediaThumbnailResult
+
+    data class PermissionDenied(val requiredPermissions: Set<String>) : MediaThumbnailResult
+
+    data object NotFound : MediaThumbnailResult
 }

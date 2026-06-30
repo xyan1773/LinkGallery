@@ -39,6 +39,10 @@
                         IsEnabled="False"
                         Click="OnDisconnectClick"
                         Content="断开" />
+                <Button Margin="0,8,0,0"
+                        Padding="8"
+                        Click="OnClearCacheClick"
+                        Content="清理缩略图缓存" />
                 <ProgressBar x:Name="LoadingProgress"
                              Margin="0,18,0,0"
                              Height="4"
@@ -90,20 +94,92 @@
                            FontSize="22"
                            Foreground="#6B7280"
                            Text="输入手机地址开始连接" />
-                <DataGrid x:Name="MediaGrid"
-                          AutoGenerateColumns="False"
-                          CanUserAddRows="False"
-                          IsReadOnly="True"
-                          Visibility="Collapsed">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Width="90" Header="类型" Binding="{Binding Type}" />
-                        <DataGridTextColumn Width="*" Header="文件名" Binding="{Binding FileName}" />
-                        <DataGridTextColumn Width="110" Header="大小" Binding="{Binding DisplaySize}" />
-                        <DataGridTextColumn Width="130" Header="尺寸/时长" Binding="{Binding Details}" />
-                        <DataGridTextColumn Width="170" Header="拍摄时间" Binding="{Binding TakenAt}" />
-                        <DataGridTextColumn Width="140" Header="相册" Binding="{Binding AlbumName}" />
-                    </DataGrid.Columns>
-                </DataGrid>
+                <ListBox x:Name="TimelineList"
+                         ItemsSource="{Binding TimelineRows}"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.ScrollChanged="OnTimelineScrollChanged"
+                         ScrollViewer.CanContentScroll="True"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         VirtualizingPanel.ScrollUnit="Pixel"
+                         VirtualizingPanel.CacheLength="1,2"
+                         Visibility="Collapsed">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0" />
+                            <EventSetter Event="Loaded" Handler="OnTimelineItemLoaded" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel>
+                                <TextBlock Margin="0,22,0,10"
+                                           FontSize="20"
+                                           FontWeight="SemiBold"
+                                           Text="{Binding DateHeader}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding DateHeader}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <Border Margin="0,0,0,8"
+                                        Padding="8"
+                                        Background="#F9FAFB"
+                                        CornerRadius="6">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="160" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Width="144"
+                                                Height="96"
+                                                Background="#E5E7EB"
+                                                CornerRadius="4"
+                                                ClipToBounds="True">
+                                            <Grid>
+                                                <Image Source="{Binding Thumbnail}"
+                                                       Stretch="UniformToFill" />
+                                                <TextBlock Padding="5,2"
+                                                           HorizontalAlignment="Right"
+                                                           VerticalAlignment="Bottom"
+                                                           Background="#99000000"
+                                                           Foreground="White"
+                                                           Text="{Binding TypeLabel}" />
+                                            </Grid>
+                                        </Border>
+                                        <StackPanel Grid.Column="1"
+                                                    Margin="12,0"
+                                                    VerticalAlignment="Center">
+                                            <TextBlock FontWeight="SemiBold"
+                                                       Text="{Binding FileName}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Margin="0,6,0,0"
+                                                       Foreground="#6B7280"
+                                                       Text="{Binding Details}" />
+                                            <TextBlock Margin="0,4,0,0"
+                                                       Foreground="#6B7280"
+                                                       Text="{Binding AlbumName}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="#6B7280"
+                                                   Text="{Binding TakenAt}" />
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
             </Grid>
         </Grid>
     </Grid>

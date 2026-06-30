@@ -21,4 +21,6 @@ fun interface DeviceInfoProvider {
 data class ApiResponse(
     val status: Int,
     val body: String,
+    val contentType: String = "application/json; charset=utf-8",
+    val binaryBody: ByteArray? = null,
 )

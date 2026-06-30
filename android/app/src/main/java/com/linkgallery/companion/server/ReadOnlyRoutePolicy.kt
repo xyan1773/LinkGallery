@@ -7,5 +7,10 @@ object ReadOnlyRoutePolicy {
     )
 
     fun permits(method: String, routeTemplate: String): Boolean =
-        method.equals("GET", ignoreCase = true) && routeTemplate in mediaReadRoutes
+        method.equals("GET", ignoreCase = true) &&
+            (routeTemplate in mediaReadRoutes ||
+                THUMBNAIL_ROUTE.matches(routeTemplate))
+
+    private val THUMBNAIL_ROUTE =
+        Regex("^/api/v1/media/[^/]+/thumbnail$")
 }

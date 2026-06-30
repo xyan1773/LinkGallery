@@ -6,6 +6,7 @@ import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
+import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
@@ -85,6 +86,29 @@ class ApiControllerTest {
     }
 
     @Test
+    fun thumbnailResponseReturnsJpegBytesAndValidatesDimensions() {
+        val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2)
+        val controller = controller(
+            repository = FakeMediaRepository(
+                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaThumbnailResult.Found(jpeg),
+            ),
+        )
+
+        val response = runSuspend {
+            controller.handle("GET", "/api/v1/media/media-1/thumbnail?width=320&height=240")
+        }
+        val invalid = runSuspend {
+            controller.handle("GET", "/api/v1/media/media-1/thumbnail?width=4096&height=240")
+        }
+
+        assertEquals(200, response.status)
+        assertEquals("image/jpeg", response.contentType)
+        assertTrue(jpeg.contentEquals(response.binaryBody))
+        assertEquals(400, invalid.status)
+    }
+
+    @Test
     fun writesAndUnimplementedMediaRoutesDoNotExist() {
         val controller = controller()
         val delete = runSuspend { controller.handle("DELETE", "/api/v1/media") }
@@ -118,10 +142,17 @@ class ApiControllerTest {
 
     private class FakeMediaRepository(
         private val pageResult: MediaPageResult,
+        private val thumbnailResult: MediaThumbnailResult = MediaThumbnailResult.NotFound,
     ) : MediaRepository {
         override suspend fun getPage(query: MediaQuery): MediaPageResult = pageResult
 
         override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
+
+        override suspend fun getThumbnail(
+            id: String,
+            width: Int,
+            height: Int,
+        ): MediaThumbnailResult = thumbnailResult
     }
 
     private companion object {
