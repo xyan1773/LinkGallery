@@ -1,0 +1,180 @@
+package com.linkgallery.companion.media
+
+import java.time.Instant
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class DefaultMediaRepositoryTest {
+    @Test
+    fun `maps MediaStore fields and returns a stable next cursor`() = runSuspend {
+        val source = FakeDataSource(
+            rows = listOf(
+                row(id = 3, modified = 30, type = MediaType.IMAGE),
+                row(id = 2, modified = 20, type = MediaType.VIDEO),
+                row(id = 1, modified = 10, type = MediaType.IMAGE),
+            ),
+        )
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+
+        val result = repository.getPage(MediaQuery(limit = 2))
+
+        assertTrue(result is MediaPageResult.Success)
+        val page = (result as MediaPageResult.Success).page
+        assertEquals(2, page.items.size)
+        assertEquals("photo-3.jpg", page.items[0].fileName)
+        assertEquals(Instant.ofEpochMilli(30_500), page.items[0].takenAt)
+        assertEquals(Instant.ofEpochSecond(30), page.items[0].modifiedAt)
+        assertEquals(1920, page.items[0].width)
+        assertEquals("Camera", page.items[0].albumName)
+        assertFalse(page.items[0].id.contains("DCIM"))
+        assertTrue(page.nextCursor?.startsWith("lgc1_") == true)
+        assertEquals(3, source.lastRequest?.limit)
+
+        repository.getPage(MediaQuery(cursor = page.nextCursor, limit = 2))
+        assertEquals(MediaStoreCursor(20, 2), source.lastRequest?.after)
+    }
+
+    @Test
+    fun `returns empty success for an empty library`() = runSuspend {
+        val repository = DefaultMediaRepository(FakeDataSource(), FakePermissionGateway())
+
+        val result = repository.getPage(MediaQuery())
+
+        val page = (result as MediaPageResult.Success).page
+        assertTrue(page.items.isEmpty())
+        assertNull(page.nextCursor)
+    }
+
+    @Test
+    fun `returns permissions without querying MediaStore`() = runSuspend {
+        val source = FakeDataSource(rows = listOf(row()))
+        val repository = DefaultMediaRepository(
+            source,
+            FakePermissionGateway(setOf("android.permission.READ_MEDIA_IMAGES")),
+        )
+
+        val result = repository.getPage(MediaQuery(types = setOf(MediaType.IMAGE)))
+
+        assertEquals(
+            MediaPageResult.PermissionDenied(setOf("android.permission.READ_MEDIA_IMAGES")),
+            result,
+        )
+        assertNull(source.lastRequest)
+    }
+
+    @Test
+    fun `rejects malformed cursors without querying MediaStore`() = runSuspend {
+        val source = FakeDataSource()
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+
+        val result = repository.getPage(MediaQuery(cursor = "not-a-cursor"))
+
+        assertEquals(MediaPageResult.InvalidCursor, result)
+        assertNull(source.lastRequest)
+    }
+
+    @Test
+    fun `returns not found when a previously listed item was removed`() = runSuspend {
+        val source = FakeDataSource(rows = listOf(row(id = 42)))
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+        val page = (repository.getPage(MediaQuery()) as MediaPageResult.Success).page
+        val id = page.items.single().id
+        source.rows = emptyList()
+
+        val result = repository.getById(id)
+
+        assertEquals(MediaItemResult.NotFound, result)
+    }
+
+    @Test
+    fun `falls back to modified time when taken time is absent`() = runSuspend {
+        val repository = DefaultMediaRepository(
+            FakeDataSource(rows = listOf(row(taken = null, modified = 123))),
+            FakePermissionGateway(),
+        )
+
+        val page = (repository.getPage(MediaQuery()) as MediaPageResult.Success).page
+
+        assertEquals(Instant.ofEpochSecond(123), page.items.single().takenAt)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `rejects page sizes above protocol maximum`() {
+        MediaQuery(limit = 201)
+    }
+
+    private class FakePermissionGateway(
+        private val missing: Set<String> = emptySet(),
+    ) : MediaPermissionGateway {
+        override fun missingPermissions(types: Set<MediaType>): Set<String> = missing
+    }
+
+    private class FakeDataSource(
+        var rows: List<MediaStoreRow> = emptyList(),
+    ) : MediaStoreDataSource {
+        var lastRequest: MediaStoreRequest? = null
+
+        override fun query(request: MediaStoreRequest): List<MediaStoreRow> {
+            lastRequest = request
+            return rows
+                .filter { it.type in request.types }
+                .filter {
+                    request.after == null ||
+                        it.dateModifiedEpochSeconds < request.after.modifiedAtEpochSeconds ||
+                        (
+                            it.dateModifiedEpochSeconds == request.after.modifiedAtEpochSeconds &&
+                                it.mediaStoreId < request.after.mediaStoreId
+                            )
+                }
+                .sortedWith(
+                    compareByDescending<MediaStoreRow> { it.dateModifiedEpochSeconds }
+                        .thenByDescending { it.mediaStoreId },
+                )
+                .take(request.limit)
+        }
+
+        override fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow? =
+            rows.find { it.mediaStoreId == mediaStoreId && it.type == type }
+    }
+
+    private companion object {
+        fun row(
+            id: Long = 1,
+            modified: Long = 10,
+            taken: Long? = 30_500,
+            type: MediaType = MediaType.IMAGE,
+        ) = MediaStoreRow(
+            mediaStoreId = id,
+            fileName = "photo-$id.jpg",
+            type = type,
+            fileSize = 4_096,
+            dateTakenEpochMillis = taken,
+            dateModifiedEpochSeconds = modified,
+            width = 1920,
+            height = 1080,
+            durationMilliseconds = if (type == MediaType.VIDEO) 12_000 else null,
+            albumName = "Camera",
+            relativePath = "DCIM/Camera/",
+        )
+
+        fun runSuspend(block: suspend () -> Unit) {
+            var failure: Throwable? = null
+            block.startCoroutine(
+                object : Continuation<Unit> {
+                    override val context = EmptyCoroutineContext
+
+                    override fun resumeWith(result: Result<Unit>) {
+                        failure = result.exceptionOrNull()
+                    }
+                },
+            )
+            failure?.let { throw it }
+        }
+    }
+}
