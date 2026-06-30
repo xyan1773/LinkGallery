@@ -65,6 +65,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <MediaElement x:Name="VideoPlayer"
                                   LoadedBehavior="Manual"
@@ -74,7 +75,13 @@
                                   MediaOpened="OnVideoOpened"
                                   MediaEnded="OnVideoEnded"
                                   MediaFailed="OnVideoFailed" />
-                    <Grid Grid.Row="1" Margin="0,12,0,0">
+                    <TextBlock x:Name="VideoStatusText"
+                               Grid.Row="1"
+                               Margin="0,10,0,0"
+                               HorizontalAlignment="Center"
+                               Foreground="#D1D5DB"
+                               Text="正在加载视频…" />
+                    <Grid Grid.Row="2" Margin="0,10,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
@@ -83,6 +90,7 @@
                         <Button x:Name="PlayPauseButton"
                                 Width="72"
                                 Padding="8"
+                                IsEnabled="False"
                                 Click="OnPlayPauseClick"
                                 Content="播放" />
                         <Slider x:Name="VideoProgress"
@@ -90,6 +98,7 @@
                                 Margin="14,0"
                                 VerticalAlignment="Center"
                                 Minimum="0"
+                                IsEnabled="False"
                                 ValueChanged="OnVideoProgressChanged" />
                         <TextBlock x:Name="VideoTimeText"
                                    Grid.Column="2"

@@ -21,9 +21,10 @@ public partial class MediaDetailWindow : Window, IDisposable
     private readonly LocalCopyCatalog _localCopies;
     private readonly IMediaThumbnailCache _thumbnailCache;
     private readonly DispatcherTimer _playbackTimer;
+    private readonly DispatcherTimer _videoOpenTimer;
+    private readonly VideoPlaybackState _videoState = new();
     private CancellationTokenSource? _loadCancellation;
     private int _index;
-    private bool _isPlaying;
     private bool _isUpdatingProgress;
     private bool _disposed;
 
@@ -52,6 +53,11 @@ public partial class MediaDetailWindow : Window, IDisposable
             Interval = TimeSpan.FromMilliseconds(250),
         };
         _playbackTimer.Tick += OnPlaybackTimerTick;
+        _videoOpenTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(15),
+        };
+        _videoOpenTimer.Tick += OnVideoOpenTimeout;
 
         InitializeComponent();
         Loaded += async (_, _) => await LoadCurrentAsync();
@@ -168,12 +174,14 @@ public partial class MediaDetailWindow : Window, IDisposable
 
         VideoPlayer.Source = source;
         VideoProgress.Maximum = Math.Max(Current.DurationMilliseconds ?? 0, 1);
+        VideoProgress.IsEnabled = false;
+        PlayPauseButton.IsEnabled = false;
+        PlayPauseButton.Content = "播放";
+        VideoStatusText.Text = "正在加载视频…";
+        _videoState.BeginLoading();
         SetPanel(VideoPanel);
         SetZoomControls(Visibility.Collapsed);
-        VideoPlayer.Play();
-        _isPlaying = true;
-        PlayPauseButton.Content = "暂停";
-        _playbackTimer.Start();
+        _videoOpenTimer.Start();
     }
 
     private void UpdateMetadata()
@@ -334,42 +342,94 @@ public partial class MediaDetailWindow : Window, IDisposable
 
     private void TogglePlayback()
     {
-        if (_isPlaying)
+        if (!_videoState.CanControl)
+        {
+            VideoStatusText.Text = "视频仍在加载，请稍候…";
+            return;
+        }
+
+        if (_videoState.Status == VideoPlaybackStatus.Playing)
         {
             VideoPlayer.Pause();
             _playbackTimer.Stop();
+            VideoStatusText.Text = "已暂停";
+            _videoState.Pause();
         }
         else
         {
+            if (_videoState.Status == VideoPlaybackStatus.Ended)
+            {
+                VideoPlayer.Position = TimeSpan.Zero;
+                VideoProgress.Value = 0;
+            }
+
             VideoPlayer.Play();
             _playbackTimer.Start();
+            VideoStatusText.Text = "正在播放";
+            _videoState.Play();
         }
 
-        _isPlaying = !_isPlaying;
-        PlayPauseButton.Content = _isPlaying ? "暂停" : "播放";
+        PlayPauseButton.Content =
+            _videoState.Status == VideoPlaybackStatus.Playing ? "暂停" : "播放";
     }
 
     private void OnVideoOpened(object sender, RoutedEventArgs e)
     {
+        if (_videoState.Status != VideoPlaybackStatus.Loading)
+        {
+            return;
+        }
+
+        _videoOpenTimer.Stop();
+        _videoState.MarkReady();
+        PlayPauseButton.IsEnabled = true;
+        VideoProgress.IsEnabled = true;
         if (VideoPlayer.NaturalDuration.HasTimeSpan)
         {
             VideoProgress.Maximum = VideoPlayer.NaturalDuration.TimeSpan.TotalMilliseconds;
         }
 
+        VideoStatusText.Text = "已就绪 · 点击播放";
         UpdateVideoTime();
     }
 
     private void OnVideoEnded(object sender, RoutedEventArgs e)
     {
+        if (_videoState.Status != VideoPlaybackStatus.Playing)
+        {
+            return;
+        }
+
         VideoPlayer.Stop();
-        _isPlaying = false;
+        _videoState.MarkEnded();
         _playbackTimer.Stop();
         PlayPauseButton.Content = "播放";
+        VideoStatusText.Text = "播放结束 · 可重新播放";
         UpdateVideoTime();
     }
 
-    private void OnVideoFailed(object sender, ExceptionRoutedEventArgs e) =>
-        ShowError($"视频播放失败：{e.ErrorException?.Message ?? "不支持的格式或内容不可用"}");
+    private void OnVideoFailed(object sender, ExceptionRoutedEventArgs e)
+    {
+        if (_videoState.Status == VideoPlaybackStatus.Idle)
+        {
+            return;
+        }
+
+        _videoOpenTimer.Stop();
+        _videoState.MarkFailed();
+        var reason = e.ErrorException?.Message ?? "不支持的格式或内容不可用";
+        ShowError($"视频播放失败：{reason}。请确认设备在线，或尝试使用常见 H.264/AAC MP4。");
+    }
+
+    private void OnVideoOpenTimeout(object? sender, EventArgs e)
+    {
+        _videoOpenTimer.Stop();
+        if (_videoState.Status == VideoPlaybackStatus.Loading &&
+            VideoPanel.Visibility == Visibility.Visible)
+        {
+            ShowError("视频加载超时。请检查手机连接后重试，或先复制到本地再播放。");
+        }
+    }
 
     private void OnVideoProgressChanged(
         object sender,
@@ -408,10 +468,13 @@ public partial class MediaDetailWindow : Window, IDisposable
     private void StopVideo()
     {
         _playbackTimer.Stop();
+        _videoOpenTimer.Stop();
         VideoPlayer.Stop();
         VideoPlayer.Source = null;
-        _isPlaying = false;
+        _videoState.Reset();
         PlayPauseButton.Content = "播放";
+        PlayPauseButton.IsEnabled = false;
+        VideoProgress.IsEnabled = false;
         VideoProgress.Value = 0;
     }
 
