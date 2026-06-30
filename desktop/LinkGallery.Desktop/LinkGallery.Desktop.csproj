@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LinkGallery.Application\LinkGallery.Application.csproj" />
+    <ProjectReference Include="..\LinkGallery.Infrastructure\LinkGallery.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
+

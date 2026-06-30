@@ -1,0 +1,39 @@
+<Window x:Class="LinkGallery.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="LinkGallery"
+        Width="1100"
+        Height="720"
+        MinWidth="800"
+        MinHeight="500">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="220" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <Border Padding="24" Background="#F3F4F6">
+            <StackPanel>
+                <TextBlock FontSize="24" FontWeight="SemiBold" Text="LinkGallery" />
+                <TextBlock Margin="0,28,0,0" Text="所有照片" />
+                <TextBlock Margin="0,14,0,0" Text="我的手机" />
+                <TextBlock Margin="0,14,0,0" Text="已复制到电脑" />
+                <TextBlock Margin="0,14,0,0" Text="传输任务" />
+                <TextBlock Margin="0,14,0,0" Text="设置" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Column="1" Margin="32">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock HorizontalAlignment="Center"
+                           FontSize="28"
+                           FontWeight="SemiBold"
+                           Text="连接你的 Android 手机" />
+                <TextBlock Margin="0,12,0,0"
+                           Foreground="#6B7280"
+                           Text="第一阶段将从手动 IP 连接开始。" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>
+

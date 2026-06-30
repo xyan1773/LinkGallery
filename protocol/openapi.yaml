@@ -1,0 +1,199 @@
+openapi: 3.0.3
+info:
+  title: LinkGallery Companion API
+  version: 0.1.0
+  description: Read-only LAN API exposed by the Android companion.
+servers:
+  - url: https://{deviceAddress}:39570/api/v1
+    variables:
+      deviceAddress:
+        default: 192.168.1.10
+security:
+  - bearerAuth: []
+paths:
+  /device:
+    get:
+      operationId: getDevice
+      responses:
+        "200":
+          description: Device information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceInfo"
+  /media:
+    get:
+      operationId: getMediaPage
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 100
+        - name: type
+          in: query
+          schema:
+            type: string
+            example: image,video
+      responses:
+        "200":
+          description: A page of media metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaPage"
+  /media/{mediaId}/thumbnail:
+    get:
+      operationId: getThumbnail
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+        - name: width
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2048
+        - name: height
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2048
+      responses:
+        "200":
+          description: Encoded thumbnail
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+  /media/{mediaId}/content:
+    get:
+      operationId: getMediaContent
+      parameters:
+        - $ref: "#/components/parameters/MediaId"
+        - name: Range
+          in: header
+          schema:
+            type: string
+            example: bytes=1048576-
+      responses:
+        "200":
+          description: Complete media content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial media content
+          headers:
+            Content-Range:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    MediaId:
+      name: mediaId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    DeviceInfo:
+      type: object
+      required: [id, name, platform, mediaCount]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        platform:
+          type: string
+          enum: [android]
+        model:
+          type: string
+          nullable: true
+        battery:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+        mediaCount:
+          type: integer
+          minimum: 0
+    MediaItem:
+      type: object
+      required:
+        [id, fileName, type, fileSize, takenAt, modifiedAt]
+      properties:
+        id:
+          type: string
+        fileName:
+          type: string
+        type:
+          type: string
+          enum: [image, video]
+        fileSize:
+          type: integer
+          format: int64
+        width:
+          type: integer
+          nullable: true
+        height:
+          type: integer
+          nullable: true
+        durationMilliseconds:
+          type: integer
+          format: int64
+          nullable: true
+        takenAt:
+          type: string
+          format: date-time
+        modifiedAt:
+          type: string
+          format: date-time
+        albumName:
+          type: string
+          nullable: true
+        relativePath:
+          type: string
+          nullable: true
+        sourceDevice:
+          type: string
+          nullable: true
+        sourceApplication:
+          type: string
+          nullable: true
+        isEditedExport:
+          type: boolean
+          default: false
+    MediaPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaItem"
+        nextCursor:
+          type: string
+          nullable: true
+
