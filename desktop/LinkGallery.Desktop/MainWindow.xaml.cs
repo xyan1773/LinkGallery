@@ -213,13 +213,11 @@ public partial class MainWindow : Window, IDisposable
         catch (OperationCanceledException)
         {
         }
-        catch (HttpRequestException)
+        catch (Exception exception) when (
+            ThumbnailLoadFailurePolicy.KeepsPlaceholder(exception))
         {
-            // An offline cache miss keeps the placeholder; the timeline remains usable.
-        }
-        catch (MediaSourceProtocolException)
-        {
-            // A malformed thumbnail keeps the placeholder without interrupting scrolling.
+            // Timeouts, connection failures, and malformed thumbnails keep the
+            // placeholder without escaping into the WPF Dispatcher.
         }
         finally
         {
