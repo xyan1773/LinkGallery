@@ -7,7 +7,11 @@ using LinkGallery.Domain.Media;
 
 namespace LinkGallery.Infrastructure.Media;
 
-public sealed class CachingReadOnlyMediaSource : IReadOnlyMediaSource, IDisposable
+public sealed class CachingReadOnlyMediaSource :
+    IReadOnlyMediaSource,
+    IMediaPlaybackUriSource,
+    IMediaCacheStatus,
+    IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IReadOnlyMediaSource _inner;
@@ -111,6 +115,31 @@ public sealed class CachingReadOnlyMediaSource : IReadOnlyMediaSource, IDisposab
         long offset,
         CancellationToken cancellationToken) =>
         _inner.OpenOriginalAsync(remoteId, offset, cancellationToken);
+
+    public Uri GetOriginalUri(string remoteId)
+    {
+        if (_inner is not IMediaPlaybackUriSource source)
+        {
+            throw new NotSupportedException("当前媒体源不支持直接流式播放。");
+        }
+
+        return source.GetOriginalUri(remoteId);
+    }
+
+    public bool IsThumbnailCached(
+        string remoteId,
+        DateTimeOffset modifiedAt,
+        ThumbnailSize size)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        var deviceId = _snapshot.Device?.Id ?? "unknown-device";
+        return _thumbnailCache.Contains(new ThumbnailCacheKey(
+            deviceId,
+            remoteId,
+            modifiedAt.UtcTicks,
+            size.Width,
+            size.Height));
+    }
 
     public Task ClearThumbnailCacheAsync(CancellationToken cancellationToken = default) =>
         _thumbnailCache.ClearAsync(cancellationToken);

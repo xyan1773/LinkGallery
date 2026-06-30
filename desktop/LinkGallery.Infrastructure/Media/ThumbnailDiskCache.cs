@@ -29,6 +29,12 @@ public sealed class ThumbnailDiskCache : IDisposable
 
     public long MaximumBytes => _maximumBytes;
 
+    public bool Contains(ThumbnailCacheKey key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return File.Exists(GetPath(key));
+    }
+
     public async Task<Stream> GetOrCreateAsync(
         ThumbnailCacheKey key,
         Func<CancellationToken, Task<Stream>> fetch,
