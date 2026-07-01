@@ -3,8 +3,13 @@ package com.linkgallery.companion.media
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.database.Cursor
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Size
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InputStream
 
 class AndroidMediaStoreDataSource(
     private val contentResolver: ContentResolver,
@@ -14,13 +19,9 @@ class AndroidMediaStoreDataSource(
         val queryArguments = Bundle().apply {
             putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
             putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arguments.toTypedArray())
-            putStringArray(
-                ContentResolver.QUERY_ARG_SORT_COLUMNS,
-                arrayOf(DATE_MODIFIED, ID),
-            )
-            putInt(
-                ContentResolver.QUERY_ARG_SORT_DIRECTION,
-                ContentResolver.QUERY_SORT_DIRECTION_DESCENDING,
+            putString(
+                ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
+                "$SORT_TIMESTAMP DESC, $ID DESC",
             )
             putInt(ContentResolver.QUERY_ARG_LIMIT, request.limit)
         }
@@ -48,6 +49,66 @@ class AndroidMediaStoreDataSource(
         }
     }
 
+    override fun loadThumbnail(
+        mediaStoreId: Long,
+        type: MediaType,
+        width: Int,
+        height: Int,
+    ): ByteArray? {
+        val uri = ContentUris.withAppendedId(COLLECTION, mediaStoreId)
+        return try {
+            val bitmap = contentResolver.loadThumbnail(uri, Size(width, height), null)
+            try {
+                ByteArrayOutputStream().use { output ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)) {
+                        null
+                    } else {
+                        output.toByteArray()
+                    }
+                }
+            } finally {
+                bitmap.recycle()
+            }
+        } catch (_: IOException) {
+            null
+        }
+    }
+
+    override fun openContent(
+        mediaStoreId: Long,
+        type: MediaType,
+        offset: Long,
+    ): InputStream? {
+        val uri = ContentUris.withAppendedId(COLLECTION, mediaStoreId)
+        var descriptor: android.content.res.AssetFileDescriptor? = null
+        return try {
+            descriptor = contentResolver.openAssetFileDescriptor(uri, "r") ?: return null
+            val stream = descriptor.createInputStream()
+            var remaining = offset
+            while (remaining > 0) {
+                val skipped = stream.skip(remaining)
+                if (skipped > 0) {
+                    remaining -= skipped
+                } else if (stream.read() >= 0) {
+                    remaining--
+                } else {
+                    stream.close()
+                    return null
+                }
+            }
+            stream
+        } catch (_: IOException) {
+            descriptor?.close()
+            null
+        } catch (exception: Exception) {
+            descriptor?.close()
+            throw exception
+        }
+    }
+
+    override fun getContentType(mediaStoreId: Long, type: MediaType): String? =
+        contentResolver.getType(ContentUris.withAppendedId(COLLECTION, mediaStoreId))
+
     private fun selectionFor(
         types: Set<MediaType>,
         after: MediaStoreCursor?,
@@ -59,9 +120,9 @@ class AndroidMediaStoreDataSource(
         }
         val clauses = mutableListOf("$MEDIA_TYPE IN ($mediaTypePlaceholders)")
         if (after != null) {
-            clauses += "($DATE_MODIFIED < ? OR ($DATE_MODIFIED = ? AND $ID < ?))"
-            arguments += after.modifiedAtEpochSeconds.toString()
-            arguments += after.modifiedAtEpochSeconds.toString()
+            clauses += "($SORT_TIMESTAMP < ? OR ($SORT_TIMESTAMP = ? AND $ID < ?))"
+            arguments += after.sortTimestampEpochMillis.toString()
+            arguments += after.sortTimestampEpochMillis.toString()
             arguments += after.mediaStoreId.toString()
         }
         return clauses.joinToString(" AND ") to arguments
@@ -106,6 +167,7 @@ class AndroidMediaStoreDataSource(
         }
 
     private companion object {
+        const val JPEG_QUALITY = 85
         val COLLECTION = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
 
         const val ID = MediaStore.MediaColumns._ID
@@ -119,6 +181,7 @@ class AndroidMediaStoreDataSource(
         const val BUCKET_DISPLAY_NAME = MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME
         const val RELATIVE_PATH = MediaStore.MediaColumns.RELATIVE_PATH
         const val MEDIA_TYPE = MediaStore.Files.FileColumns.MEDIA_TYPE
+        const val SORT_TIMESTAMP = "COALESCE(NULLIF($DATE_TAKEN, 0), $DATE_MODIFIED * 1000)"
 
         val PROJECTION = arrayOf(
             ID,

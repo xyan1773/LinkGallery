@@ -1,12 +1,16 @@
 package com.linkgallery.companion.server
 
 import com.linkgallery.companion.media.MediaItemResult
+import com.linkgallery.companion.media.MediaContent
+import com.linkgallery.companion.media.MediaContentResult
 import com.linkgallery.companion.media.MediaPage
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
+import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import java.io.ByteArrayInputStream
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import kotlin.coroutines.Continuation
@@ -85,15 +89,130 @@ class ApiControllerTest {
     }
 
     @Test
-    fun writesAndUnimplementedMediaRoutesDoNotExist() {
+    fun thumbnailResponseReturnsJpegBytesAndValidatesDimensions() {
+        val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2)
+        val controller = controller(
+            repository = FakeMediaRepository(
+                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaThumbnailResult.Found(jpeg),
+            ),
+        )
+
+        val response = runSuspend {
+            controller.handle("GET", "/api/v1/media/media-1/thumbnail?width=320&height=240")
+        }
+        val invalid = runSuspend {
+            controller.handle("GET", "/api/v1/media/media-1/thumbnail?width=4096&height=240")
+        }
+
+        assertEquals(200, response.status)
+        assertEquals("image/jpeg", response.contentType)
+        assertTrue(jpeg.contentEquals(response.binaryBody))
+        assertEquals(400, invalid.status)
+    }
+
+    @Test
+    fun contentResponseSupportsFullAndRangeReads() {
+        val bytes = "0123456789".toByteArray()
+        val offsets = mutableListOf<Long>()
+        val controller = controller(
+            repository = FakeMediaRepository(
+                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                contentResult = MediaContentResult.Found(
+                    MediaContent(bytes.size.toLong(), "video/mp4") { offset ->
+                        offsets += offset
+                        ByteArrayInputStream(bytes, offset.toInt(), bytes.size - offset.toInt())
+                    },
+                ),
+            ),
+        )
+
+        val full = runSuspend {
+            controller.handle("GET", "/api/v1/media/media-1/content")
+        }
+        val partial = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/media/media-1/content",
+                mapOf("Range" to "bytes=3-6"),
+            )
+        }
+
+        assertEquals(200, full.status)
+        assertEquals("video/mp4", full.contentType)
+        assertEquals(10L, full.contentLength)
+        assertEquals("bytes", full.headers["Accept-Ranges"])
+        assertEquals("0123456789", full.binaryStream!!.use { String(it.readBytes()) })
+        assertEquals(206, partial.status)
+        assertEquals(4L, partial.contentLength)
+        assertEquals("bytes 3-6/10", partial.headers["Content-Range"])
+        assertEquals("3456", partial.binaryStream!!.use { String(it.readBytes()) })
+        assertEquals(listOf(0L, 3L), offsets)
+    }
+
+    @Test
+    fun invalidOrUnsatisfiableRangesReturn416WithoutOpeningContent() {
+        var opened = false
+        val controller = controller(
+            repository = FakeMediaRepository(
+                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                contentResult = MediaContentResult.Found(
+                    MediaContent(10, "video/mp4") {
+                        opened = true
+                        ByteArrayInputStream(ByteArray(10))
+                    },
+                ),
+            ),
+        )
+
+        val malformed = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/media/media-1/content",
+                mapOf("range" to "bytes=4-2"),
+            )
+        }
+        val pastEnd = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/media/media-1/content",
+                mapOf("Range" to "bytes=10-"),
+            )
+        }
+
+        assertEquals(416, malformed.status)
+        assertEquals("bytes */10", malformed.headers["Content-Range"])
+        assertEquals(416, pastEnd.status)
+        assertFalse(opened)
+    }
+
+    @Test
+    fun contentPermissionAndMissingItemsUseNormalizedProblems() {
+        val denied = runSuspend {
+            controller(
+                repository = FakeMediaRepository(
+                    MediaPageResult.Success(MediaPage(emptyList(), null)),
+                    contentResult = MediaContentResult.PermissionDenied(setOf("READ_MEDIA_VIDEO")),
+                ),
+            ).handle("GET", "/api/v1/media/media-1/content")
+        }
+        val missing = runSuspend {
+            controller().handle("GET", "/api/v1/media/missing/content")
+        }
+
+        assertEquals(403, denied.status)
+        assertTrue(denied.body.contains("media_permission_denied"))
+        assertEquals(404, missing.status)
+    }
+
+    @Test
+    fun writesAndUnknownMediaRoutesDoNotExist() {
         val controller = controller()
         val delete = runSuspend { controller.handle("DELETE", "/api/v1/media") }
         val upload = runSuspend { controller.handle("POST", "/api/v1/media/upload") }
-        val content = runSuspend { controller.handle("GET", "/api/v1/media/abc/content") }
 
         assertEquals(404, delete.status)
         assertEquals(404, upload.status)
-        assertEquals(404, content.status)
         assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/media"))
     }
 
@@ -118,10 +237,20 @@ class ApiControllerTest {
 
     private class FakeMediaRepository(
         private val pageResult: MediaPageResult,
+        private val thumbnailResult: MediaThumbnailResult = MediaThumbnailResult.NotFound,
+        private val contentResult: MediaContentResult = MediaContentResult.NotFound,
     ) : MediaRepository {
         override suspend fun getPage(query: MediaQuery): MediaPageResult = pageResult
 
         override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
+
+        override suspend fun getThumbnail(
+            id: String,
+            width: Int,
+            height: Int,
+        ): MediaThumbnailResult = thumbnailResult
+
+        override suspend fun getContent(id: String): MediaContentResult = contentResult
     }
 
     private companion object {

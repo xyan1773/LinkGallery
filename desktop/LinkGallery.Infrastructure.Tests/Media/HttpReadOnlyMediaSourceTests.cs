@@ -36,6 +36,48 @@ public sealed class HttpReadOnlyMediaSourceTests
     }
 
     [TestMethod]
+    public void OriginalUriTargetsReadOnlyContentEndpoint()
+    {
+        using var client = new HttpClient(new StubHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)));
+        var source = new HttpReadOnlyMediaSource(
+            client,
+            new Uri("http://phone:39570/api/v1/"));
+
+        var result = source.GetOriginalUri("camera/photo 1");
+
+        Assert.AreEqual(
+            "http://phone:39570/api/v1/media/camera%2Fphoto%201/content",
+            result.AbsoluteUri);
+    }
+
+    [TestMethod]
+    public async Task OriginalStreamUsesRangeForNonzeroOffset()
+    {
+        string? range = null;
+        var handler = new StubHandler(request =>
+        {
+            range = request.Headers.Range?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.PartialContent)
+            {
+                Content = new ByteArrayContent([1, 2, 3]),
+            };
+        });
+        using var client = new HttpClient(handler);
+        var source = new HttpReadOnlyMediaSource(
+            client,
+            new Uri("http://phone:39570/api/v1/"));
+
+        await using var stream = await source.OpenOriginalAsync(
+            "video-1",
+            1_048_576,
+            CancellationToken.None);
+
+        Assert.AreEqual("bytes=1048576-", range);
+        Assert.AreEqual(3, stream.Length);
+    }
+
+    [TestMethod]
     public async Task DeviceAndMediaResponsesAreMappedToDomainModels()
     {
         var handler = new StubHandler(request =>

@@ -11,7 +11,7 @@ using LinkGallery.Domain.Media;
 
 namespace LinkGallery.Infrastructure.Media;
 
-public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource
+public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlaybackUriSource
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -144,6 +144,14 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         return OpenStreamAsync($"media/{Uri.EscapeDataString(remoteId)}/content", offset, cancellationToken);
+    }
+
+    public Uri GetOriginalUri(string remoteId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        return new Uri(
+            _apiBaseAddress,
+            $"media/{Uri.EscapeDataString(remoteId)}/content");
     }
 
     private async Task<T> GetJsonAsync<T>(string relativePath, CancellationToken cancellationToken)

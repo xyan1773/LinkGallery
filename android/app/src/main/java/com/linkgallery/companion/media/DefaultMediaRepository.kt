@@ -50,6 +50,42 @@ class DefaultMediaRepository(
         return MediaItemResult.Found(toRecord(row))
     }
 
+    override suspend fun getThumbnail(
+        id: String,
+        width: Int,
+        height: Int,
+    ): MediaThumbnailResult {
+        val locator = tokenCodec.decodeId(id) ?: return MediaThumbnailResult.NotFound
+        val missingPermissions = permissionGateway.missingPermissions(setOf(locator.type))
+        if (missingPermissions.isNotEmpty()) {
+            return MediaThumbnailResult.PermissionDenied(missingPermissions)
+        }
+        val bytes = dataSource.loadThumbnail(locator.mediaStoreId, locator.type, width, height)
+            ?: return MediaThumbnailResult.NotFound
+        return MediaThumbnailResult.Found(bytes)
+    }
+
+    override suspend fun getContent(id: String): MediaContentResult {
+        val locator = tokenCodec.decodeId(id) ?: return MediaContentResult.NotFound
+        val missingPermissions = permissionGateway.missingPermissions(setOf(locator.type))
+        if (missingPermissions.isNotEmpty()) {
+            return MediaContentResult.PermissionDenied(missingPermissions)
+        }
+
+        val row = dataSource.find(locator.mediaStoreId, locator.type)
+            ?: return MediaContentResult.NotFound
+        val contentType = dataSource.getContentType(locator.mediaStoreId, locator.type)
+            ?: when (locator.type) {
+                MediaType.IMAGE -> "image/*"
+                MediaType.VIDEO -> "video/*"
+            }
+        return MediaContentResult.Found(
+            MediaContent(row.fileSize, contentType) { offset ->
+                dataSource.openContent(locator.mediaStoreId, locator.type, offset)
+            },
+        )
+    }
+
     private fun toRecord(row: MediaStoreRow): MediaRecord {
         val modifiedAt = Instant.ofEpochSecond(row.dateModifiedEpochSeconds)
         return MediaRecord(

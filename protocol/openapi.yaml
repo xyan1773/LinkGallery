@@ -115,6 +115,7 @@ paths:
         - name: width
           in: query
           required: true
+          description: Requested bounding-box width. The response preserves aspect ratio.
           schema:
             type: integer
             minimum: 1
@@ -122,6 +123,7 @@ paths:
         - name: height
           in: query
           required: true
+          description: Requested bounding-box height. The response preserves aspect ratio.
           schema:
             type: integer
             minimum: 1
@@ -136,6 +138,10 @@ paths:
                 format: binary
         "404":
           $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /media/{mediaId}/content:
     get:
       summary: Stream original media content

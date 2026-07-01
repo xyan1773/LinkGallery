@@ -1,5 +1,6 @@
 package com.linkgallery.companion.media
 
+import java.io.ByteArrayInputStream
 import java.time.Instant
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.EmptyCoroutineContext
@@ -33,11 +34,11 @@ class DefaultMediaRepositoryTest {
         assertEquals(1920, page.items[0].width)
         assertEquals("Camera", page.items[0].albumName)
         assertFalse(page.items[0].id.contains("DCIM"))
-        assertTrue(page.nextCursor?.startsWith("lgc1_") == true)
+        assertTrue(page.nextCursor?.startsWith("lgc2_") == true)
         assertEquals(3, source.lastRequest?.limit)
 
         repository.getPage(MediaQuery(cursor = page.nextCursor, limit = 2))
-        assertEquals(MediaStoreCursor(20, 2), source.lastRequest?.after)
+        assertEquals(MediaStoreCursor(30_500, 2), source.lastRequest?.after)
     }
 
     @Test
@@ -104,6 +105,24 @@ class DefaultMediaRepositoryTest {
         assertEquals(Instant.ofEpochSecond(123), page.items.single().takenAt)
     }
 
+    @Test
+    fun `opens original content at requested offset after permission check`() = runSuspend {
+        val source = FakeDataSource(rows = listOf(row(id = 7, type = MediaType.VIDEO)))
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+        val id = (
+            repository.getPage(MediaQuery(types = setOf(MediaType.VIDEO))) as
+                MediaPageResult.Success
+            ).page.items.single().id
+
+        val result = repository.getContent(id) as MediaContentResult.Found
+        val bytes = result.content.open(3)!!.use { it.readBytes() }
+
+        assertEquals(4_096L, result.content.length)
+        assertEquals("video/mp4", result.content.contentType)
+        assertEquals(3L, source.lastContentOffset)
+        assertEquals("3456789", String(bytes))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `rejects page sizes above protocol maximum`() {
         MediaQuery(limit = 201)
@@ -119,6 +138,7 @@ class DefaultMediaRepositoryTest {
         var rows: List<MediaStoreRow> = emptyList(),
     ) : MediaStoreDataSource {
         var lastRequest: MediaStoreRequest? = null
+        var lastContentOffset: Long? = null
 
         override fun query(request: MediaStoreRequest): List<MediaStoreRow> {
             lastRequest = request
@@ -126,14 +146,14 @@ class DefaultMediaRepositoryTest {
                 .filter { it.type in request.types }
                 .filter {
                     request.after == null ||
-                        it.dateModifiedEpochSeconds < request.after.modifiedAtEpochSeconds ||
+                        it.sortTimestampEpochMillis < request.after.sortTimestampEpochMillis ||
                         (
-                            it.dateModifiedEpochSeconds == request.after.modifiedAtEpochSeconds &&
+                            it.sortTimestampEpochMillis == request.after.sortTimestampEpochMillis &&
                                 it.mediaStoreId < request.after.mediaStoreId
                             )
                 }
                 .sortedWith(
-                    compareByDescending<MediaStoreRow> { it.dateModifiedEpochSeconds }
+                    compareByDescending<MediaStoreRow> { it.sortTimestampEpochMillis }
                         .thenByDescending { it.mediaStoreId },
                 )
                 .take(request.limit)
@@ -141,6 +161,19 @@ class DefaultMediaRepositoryTest {
 
         override fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow? =
             rows.find { it.mediaStoreId == mediaStoreId && it.type == type }
+
+        override fun openContent(
+            mediaStoreId: Long,
+            type: MediaType,
+            offset: Long,
+        ): ByteArrayInputStream {
+            lastContentOffset = offset
+            val bytes = "0123456789".toByteArray()
+            return ByteArrayInputStream(bytes, offset.toInt(), bytes.size - offset.toInt())
+        }
+
+        override fun getContentType(mediaStoreId: Long, type: MediaType): String =
+            if (type == MediaType.VIDEO) "video/mp4" else "image/jpeg"
     }
 
     private companion object {
