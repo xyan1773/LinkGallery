@@ -20,6 +20,25 @@ public interface IMediaIndexSynchronizer
         CancellationToken cancellationToken);
 }
 
+public enum MediaSyncStage
+{
+    Connecting,
+    DeviceLoaded,
+    FetchingPage,
+    WritingPage,
+    Completing,
+    Completed,
+}
+
+public sealed record MediaSyncProgress(
+    MediaSyncStage Stage,
+    Device? Device,
+    int PagesFetched,
+    int ItemsReceived,
+    int? TotalItems,
+    int ItemsRemoved,
+    bool WasFullScan);
+
 public sealed record MediaSyncResult(
     Device Device,
     int PagesFetched,

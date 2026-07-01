@@ -1,4 +1,5 @@
 using LinkGallery.Application.Media;
+using LinkGallery.Domain.Devices;
 using LinkGallery.Domain.Media;
 
 namespace LinkGallery.Infrastructure.Media;
@@ -22,16 +23,38 @@ public sealed class IncrementalMediaIndexSynchronizer : IMediaIndexSynchronizer
 
     public async Task<MediaSyncResult> SynchronizeAsync(
         IReadOnlyMediaSource source,
+        CancellationToken cancellationToken) =>
+        await SynchronizeAsync(source, progress: null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<MediaSyncResult> SynchronizeAsync(
+        IReadOnlyMediaSource source,
+        IProgress<MediaSyncProgress>? progress,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
 
+        progress?.Report(new MediaSyncProgress(
+            MediaSyncStage.Connecting,
+            Device: null,
+            PagesFetched: 0,
+            ItemsReceived: 0,
+            TotalItems: null,
+            ItemsRemoved: 0,
+            WasFullScan: false));
         var device = await source.GetDeviceInfoAsync(cancellationToken).ConfigureAwait(false);
         await _index.UpsertDeviceAsync(device, cancellationToken).ConfigureAwait(false);
+        progress?.Report(new MediaSyncProgress(
+            MediaSyncStage.DeviceLoaded,
+            device,
+            PagesFetched: 0,
+            ItemsReceived: 0,
+            TotalItems: device.MediaCount,
+            ItemsRemoved: 0,
+            WasFullScan: false));
         var checkpoint = await _index.GetCheckpointAsync(device.Id, cancellationToken).ConfigureAwait(false);
         var localCount = await _index.CountAsync(device.Id, cancellationToken).ConfigureAwait(false);
         var fullScan = checkpoint is null || device.MediaCount < localCount;
-        var result = await ScanAsync(source, device.Id, checkpoint, fullScan, cancellationToken)
+        var result = await ScanAsync(source, device, checkpoint, fullScan, progress, cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.WasFullScan &&
@@ -39,9 +62,10 @@ public sealed class IncrementalMediaIndexSynchronizer : IMediaIndexSynchronizer
         {
             var reconciliation = await ScanAsync(
                 source,
-                device.Id,
+                device,
                 checkpoint: null,
                 fullScan: true,
+                progress,
                 cancellationToken).ConfigureAwait(false);
             result = new ScanResult(
                 result.PagesFetched + reconciliation.PagesFetched,
@@ -50,6 +74,14 @@ public sealed class IncrementalMediaIndexSynchronizer : IMediaIndexSynchronizer
                 WasFullScan: true);
         }
 
+        progress?.Report(new MediaSyncProgress(
+            MediaSyncStage.Completed,
+            device,
+            result.PagesFetched,
+            result.ItemsReceived,
+            device.MediaCount,
+            result.ItemsRemoved,
+            result.WasFullScan));
         return new MediaSyncResult(
             device,
             result.PagesFetched,
@@ -60,9 +92,10 @@ public sealed class IncrementalMediaIndexSynchronizer : IMediaIndexSynchronizer
 
     private async Task<ScanResult> ScanAsync(
         IReadOnlyMediaSource source,
-        string deviceId,
+        Device device,
         SyncCheckpoint? checkpoint,
         bool fullScan,
+        IProgress<MediaSyncProgress>? progress,
         CancellationToken cancellationToken)
     {
         var seenAt = DateTimeOffset.UtcNow;
@@ -73,6 +106,14 @@ public sealed class IncrementalMediaIndexSynchronizer : IMediaIndexSynchronizer
         var reachedCheckpoint = false;
         do
         {
+            progress?.Report(new MediaSyncProgress(
+                MediaSyncStage.FetchingPage,
+                device,
+                pages,
+                received,
+                device.MediaCount,
+                ItemsRemoved: 0,
+                WasFullScan: fullScan));
             var page = await source.GetMediaPageAsync(
                 new MediaQuery(cursor, _pageSize),
                 cancellationToken).ConfigureAwait(false);
@@ -93,6 +134,14 @@ public sealed class IncrementalMediaIndexSynchronizer : IMediaIndexSynchronizer
                 }
             }
 
+            progress?.Report(new MediaSyncProgress(
+                MediaSyncStage.WritingPage,
+                device,
+                pages,
+                received + items.Count,
+                device.MediaCount,
+                ItemsRemoved: 0,
+                WasFullScan: fullScan));
             await _index.UpsertItemsAsync(items, seenAt, cancellationToken).ConfigureAwait(false);
             received += items.Count;
             cursor = page.NextCursor;
@@ -104,8 +153,16 @@ public sealed class IncrementalMediaIndexSynchronizer : IMediaIndexSynchronizer
         while (cursor is not null);
 
         var scannedEntireLibrary = fullScan || !reachedCheckpoint;
+        progress?.Report(new MediaSyncProgress(
+            MediaSyncStage.Completing,
+            device,
+            pages,
+            received,
+            device.MediaCount,
+            ItemsRemoved: 0,
+            WasFullScan: scannedEntireLibrary));
         var removed = await _index.CompleteAsync(
-            deviceId,
+            device.Id,
             newHead,
             seenAt,
             removeItemsNotSeen: scannedEntireLibrary,

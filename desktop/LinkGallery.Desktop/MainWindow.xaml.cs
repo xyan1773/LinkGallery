@@ -124,13 +124,15 @@ public partial class MainWindow : Window, IDisposable
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
         Disconnect(clearTimeline: true);
-        SetLoading(true, "正在连接手机并同步媒体索引…");
-        _connectionCancellation = new CancellationTokenSource();
-        var cancellationToken = _connectionCancellation.Token;
 
         try
         {
             var apiAddress = HttpReadOnlyMediaSource.NormalizeApiAddress(AddressTextBox.Text);
+            var endpoint = $"{apiAddress.Host}:{apiAddress.Port}";
+            SetLoading(true, $"正在连接 {endpoint}…");
+            SetEmptyState($"正在连接 {endpoint}…");
+            _connectionCancellation = new CancellationTokenSource();
+            var cancellationToken = _connectionCancellation.Token;
             var httpSource = new HttpReadOnlyMediaSource(_httpClient, apiAddress);
             var cacheRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -141,20 +143,17 @@ public partial class MainWindow : Window, IDisposable
                 cacheRoot,
                 apiAddress.AbsoluteUri);
 
-            var sync = await _synchronizer.SynchronizeAsync(_source, cancellationToken);
+            var syncProgress = new Progress<MediaSyncProgress>(
+                progress => UpdateSyncProgress(endpoint, progress));
+            var sync = await _synchronizer.SynchronizeAsync(
+                _source,
+                syncProgress,
+                cancellationToken);
             var device = sync.Device;
             _activeDeviceId = device.Id;
             _transferSourceResolver.SetSource(device.Id, _source);
 
-            DeviceNameText.Text = device.Name;
-            DeviceModelText.Text = string.IsNullOrWhiteSpace(device.Model)
-                ? device.Platform
-                : $"{device.Model} · {device.Platform}";
-            BatteryText.Text = device.BatteryPercent.HasValue
-                ? $"电量 {device.BatteryPercent}%"
-                : "电量未知";
-            MediaCountText.Text = $"共 {device.MediaCount:N0} 项媒体";
-            DevicePanel.Visibility = Visibility.Visible;
+            ShowDevice(device);
             DisconnectButton.IsEnabled = true;
 
             await LoadIndexedPageAsync(
@@ -182,6 +181,65 @@ public partial class MainWindow : Window, IDisposable
         {
             SetLoading(false);
         }
+    }
+
+    private void UpdateSyncProgress(string endpoint, MediaSyncProgress progress)
+    {
+        if (progress.Device is not null)
+        {
+            ShowDevice(progress.Device);
+        }
+
+        LoadingProgress.IsIndeterminate = progress.TotalItems is null || progress.TotalItems == 0;
+        if (progress.TotalItems > 0)
+        {
+            LoadingProgress.Value = Math.Min(
+                100,
+                (double)Math.Min(progress.ItemsReceived, progress.TotalItems.Value) /
+                    progress.TotalItems.Value * 100);
+        }
+
+        var totalText = progress.TotalItems.HasValue
+            ? progress.TotalItems.Value.ToString("N0", CultureInfo.CurrentCulture)
+            : "?";
+        var mode = progress.WasFullScan ? "完整索引" : "增量更新";
+        var status = progress.Stage switch
+        {
+            MediaSyncStage.Connecting => $"正在连接 {endpoint}…",
+            MediaSyncStage.DeviceLoaded =>
+                $"已连接 {progress.Device?.Name} · 共 {totalText} 项媒体",
+            MediaSyncStage.FetchingPage =>
+                $"正在读取第 {progress.PagesFetched + 1:N0} 页 · 已同步 {progress.ItemsReceived:N0}/{totalText}",
+            MediaSyncStage.WritingPage =>
+                $"正在写入本地索引 · {progress.ItemsReceived:N0}/{totalText} · 第 {progress.PagesFetched:N0} 页",
+            MediaSyncStage.Completing =>
+                $"正在收尾 {mode} · {progress.ItemsReceived:N0}/{totalText}",
+            MediaSyncStage.Completed =>
+                $"已完成 {mode} · {progress.ItemsReceived:N0}/{totalText}",
+            _ => $"正在同步 {endpoint}…",
+        };
+        StatusText.Text = status;
+        SetEmptyState(status);
+    }
+
+    private void ShowDevice(LinkGallery.Domain.Devices.Device device)
+    {
+        DeviceNameText.Text = device.Name;
+        DeviceModelText.Text = string.IsNullOrWhiteSpace(device.Model)
+            ? device.Platform
+            : $"{device.Model} · {device.Platform}";
+        BatteryText.Text = device.BatteryPercent.HasValue
+            ? $"电量 {device.BatteryPercent}%"
+            : "电量未知";
+        MediaCountText.Text = $"共 {device.MediaCount:N0} 项媒体";
+        DevicePanel.Visibility = Visibility.Visible;
+    }
+
+    private void SetEmptyState(string message)
+    {
+        TimelineList.Visibility = Visibility.Collapsed;
+        EmptyText.Text = message;
+        EmptyText.Visibility = Visibility.Visible;
     }
 
     private async Task LoadIndexedPageAsync(
@@ -605,6 +663,12 @@ public partial class MainWindow : Window, IDisposable
     private void SetLoading(bool isLoading, string? status = null)
     {
         LoadingProgress.Visibility = isLoading ? Visibility.Visible : Visibility.Collapsed;
+        if (isLoading)
+        {
+            LoadingProgress.IsIndeterminate = true;
+            LoadingProgress.Value = 0;
+        }
+
         ConnectButton.IsEnabled = !isLoading;
         AddressTextBox.IsEnabled = !isLoading;
         DisconnectButton.IsEnabled = isLoading || DevicePanel.Visibility == Visibility.Visible;

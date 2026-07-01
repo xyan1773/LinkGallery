@@ -94,6 +94,37 @@ public sealed class SqliteMediaIndexTests
     }
 
     [TestMethod]
+    public async Task LargeLibrarySyncReportsReadablePageAndWriteProgress()
+    {
+        var items = Enumerable.Range(1, 1_421)
+            .Select(id => Item(id, modifiedSeconds: id))
+            .ToArray();
+        var source = new FakeMediaSource(items);
+        var index = new SqliteMediaIndex(_databasePath);
+        var synchronizer = new IncrementalMediaIndexSynchronizer(index, pageSize: 200);
+        var updates = new List<MediaSyncProgress>();
+
+        var result = await synchronizer.SynchronizeAsync(
+            source,
+            new ProgressRecorder(updates),
+            CancellationToken.None);
+
+        Assert.IsTrue(result.WasFullScan);
+        Assert.AreEqual(8, result.PagesFetched);
+        Assert.AreEqual(1_421, result.ItemsReceived);
+        Assert.IsTrue(updates.Any(update => update.Stage == MediaSyncStage.DeviceLoaded));
+        Assert.IsTrue(updates.Any(update =>
+            update.Stage == MediaSyncStage.FetchingPage &&
+            update.PagesFetched == 0 &&
+            update.TotalItems == 1_421));
+        Assert.IsTrue(updates.Any(update =>
+            update.Stage == MediaSyncStage.WritingPage &&
+            update.PagesFetched == 8 &&
+            update.ItemsReceived == 1_421));
+        Assert.AreEqual(MediaSyncStage.Completed, updates[^1].Stage);
+    }
+
+    [TestMethod]
     public async Task NewAndRemovedItemsAreReconciledAndRemainSearchableOffline()
     {
         var source = new FakeMediaSource(
@@ -188,5 +219,10 @@ public sealed class SqliteMediaIndexTests
             long offset,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class ProgressRecorder(List<MediaSyncProgress> updates) : IProgress<MediaSyncProgress>
+    {
+        public void Report(MediaSyncProgress value) => updates.Add(value);
     }
 }

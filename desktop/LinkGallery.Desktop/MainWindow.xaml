@@ -60,6 +60,7 @@
                              Margin="0,18,0,0"
                              Height="4"
                              IsIndeterminate="True"
+                             Maximum="100"
                              Visibility="Collapsed" />
                 <Separator Margin="0,22,0,18" />
                 <TextBlock FontWeight="SemiBold" Text="缓存搜索" />
