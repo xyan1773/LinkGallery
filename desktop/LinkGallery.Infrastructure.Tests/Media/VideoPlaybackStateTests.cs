@@ -38,4 +38,25 @@ public sealed class VideoPlaybackStateTests
         Assert.AreEqual(VideoPlaybackStatus.Failed, state.Status);
         Assert.IsFalse(state.CanControl);
     }
+
+    [TestMethod]
+    public void SeekResumesOnlyWhenPlaybackWasRunning()
+    {
+        var state = new VideoPlaybackState();
+        state.BeginLoading();
+        state.MarkReady();
+        state.Play();
+
+        state.BeginSeek();
+        Assert.AreEqual(VideoPlaybackStatus.Seeking, state.Status);
+        Assert.IsTrue(state.ResumeAfterSeek);
+        state.CompleteSeek();
+        Assert.AreEqual(VideoPlaybackStatus.Playing, state.Status);
+
+        state.Pause();
+        state.BeginSeek();
+        Assert.IsFalse(state.ResumeAfterSeek);
+        state.CompleteSeek();
+        Assert.AreEqual(VideoPlaybackStatus.Paused, state.Status);
+    }
 }

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -26,6 +27,8 @@ public partial class MediaDetailWindow : Window, IDisposable
     private CancellationTokenSource? _loadCancellation;
     private int _index;
     private bool _isUpdatingProgress;
+    private bool _isSeeking;
+    private bool _isBuffering;
     private bool _disposed;
 
     public MediaDetailWindow(
@@ -60,6 +63,12 @@ public partial class MediaDetailWindow : Window, IDisposable
         _videoOpenTimer.Tick += OnVideoOpenTimeout;
 
         InitializeComponent();
+        VideoProgress.AddHandler(
+            Thumb.DragStartedEvent,
+            new DragStartedEventHandler(OnVideoSeekStarted));
+        VideoProgress.AddHandler(
+            Thumb.DragCompletedEvent,
+            new DragCompletedEventHandler(OnVideoSeekCompleted));
         Loaded += async (_, _) => await LoadCurrentAsync();
     }
 
@@ -421,6 +430,24 @@ public partial class MediaDetailWindow : Window, IDisposable
         ShowError($"视频播放失败：{reason}。请确认设备在线，或尝试使用常见 H.264/AAC MP4。");
     }
 
+    private void OnVideoBufferingStarted(object sender, RoutedEventArgs e)
+    {
+        _isBuffering = true;
+        if (!_isSeeking && _videoState.Status == VideoPlaybackStatus.Playing)
+        {
+            VideoStatusText.Text = "正在缓冲…";
+        }
+    }
+
+    private void OnVideoBufferingEnded(object sender, RoutedEventArgs e)
+    {
+        _isBuffering = false;
+        if (!_isSeeking && _videoState.Status == VideoPlaybackStatus.Playing)
+        {
+            VideoStatusText.Text = "正在播放";
+        }
+    }
+
     private void OnVideoOpenTimeout(object? sender, EventArgs e)
     {
         _videoOpenTimer.Stop();
@@ -440,13 +467,73 @@ public partial class MediaDetailWindow : Window, IDisposable
             return;
         }
 
+        if (_isSeeking)
+        {
+            UpdateVideoTime(TimeSpan.FromMilliseconds(e.NewValue));
+            return;
+        }
+
         VideoPlayer.Position = TimeSpan.FromMilliseconds(e.NewValue);
+        VideoStatusText.Text = _videoState.Status == VideoPlaybackStatus.Playing
+            ? "正在定位…"
+            : "已定位";
         UpdateVideoTime();
+    }
+
+    private void OnVideoSeekStarted(object sender, DragStartedEventArgs e)
+    {
+        if (!_videoState.CanControl)
+        {
+            return;
+        }
+
+        _isSeeking = true;
+        _videoState.BeginSeek();
+        if (_videoState.ResumeAfterSeek)
+        {
+            VideoPlayer.Pause();
+        }
+
+        _playbackTimer.Stop();
+        PlayPauseButton.IsEnabled = false;
+        VideoStatusText.Text = "拖动选择目标时间…";
+    }
+
+    private void OnVideoSeekCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (!_isSeeking || _videoState.Status != VideoPlaybackStatus.Seeking)
+        {
+            return;
+        }
+
+        var resume = _videoState.ResumeAfterSeek;
+        var target = e.Canceled
+            ? VideoPlayer.Position
+            : TimeSpan.FromMilliseconds(VideoProgress.Value);
+        _isSeeking = false;
+        VideoPlayer.Position = target;
+        _videoState.CompleteSeek();
+
+        _isUpdatingProgress = true;
+        VideoProgress.Value = target.TotalMilliseconds;
+        _isUpdatingProgress = false;
+        UpdateVideoTime(target);
+        PlayPauseButton.IsEnabled = true;
+        if (resume)
+        {
+            VideoPlayer.Play();
+            _playbackTimer.Start();
+            VideoStatusText.Text = "正在播放";
+        }
+        else
+        {
+            VideoStatusText.Text = "已定位";
+        }
     }
 
     private void OnPlaybackTimerTick(object? sender, EventArgs e)
     {
-        if (!VideoPlayer.NaturalDuration.HasTimeSpan)
+        if (_isSeeking || !VideoPlayer.NaturalDuration.HasTimeSpan)
         {
             return;
         }
@@ -455,14 +542,19 @@ public partial class MediaDetailWindow : Window, IDisposable
         VideoProgress.Value = VideoPlayer.Position.TotalMilliseconds;
         _isUpdatingProgress = false;
         UpdateVideoTime();
+        if (!_isBuffering && _videoState.Status == VideoPlaybackStatus.Playing)
+        {
+            VideoStatusText.Text = "正在播放";
+        }
     }
 
-    private void UpdateVideoTime()
+    private void UpdateVideoTime(TimeSpan? previewPosition = null)
     {
         var total = VideoPlayer.NaturalDuration.HasTimeSpan
             ? VideoPlayer.NaturalDuration.TimeSpan
             : TimeSpan.FromMilliseconds(Current.DurationMilliseconds ?? 0);
-        VideoTimeText.Text = $"{FormatDuration(VideoPlayer.Position)} / {FormatDuration(total)}";
+        var position = previewPosition ?? VideoPlayer.Position;
+        VideoTimeText.Text = $"{FormatDuration(position)} / {FormatDuration(total)}";
     }
 
     private void StopVideo()
@@ -472,6 +564,8 @@ public partial class MediaDetailWindow : Window, IDisposable
         VideoPlayer.Stop();
         VideoPlayer.Source = null;
         _videoState.Reset();
+        _isSeeking = false;
+        _isBuffering = false;
         PlayPauseButton.Content = "播放";
         PlayPauseButton.IsEnabled = false;
         VideoProgress.IsEnabled = false;

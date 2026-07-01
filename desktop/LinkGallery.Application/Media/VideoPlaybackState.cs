@@ -2,7 +2,11 @@ namespace LinkGallery.Application.Media;
 
 public sealed class VideoPlaybackState
 {
+    private VideoPlaybackStatus _statusBeforeSeek;
+
     public VideoPlaybackStatus Status { get; private set; } = VideoPlaybackStatus.Idle;
+
+    public bool ResumeAfterSeek { get; private set; }
 
     public bool CanControl =>
         Status is VideoPlaybackStatus.Ready or
@@ -39,9 +43,37 @@ public sealed class VideoPlaybackState
         Status = VideoPlaybackStatus.Ended;
     }
 
+    public void BeginSeek()
+    {
+        Ensure(
+            VideoPlaybackStatus.Ready,
+            VideoPlaybackStatus.Playing,
+            VideoPlaybackStatus.Paused,
+            VideoPlaybackStatus.Ended);
+        _statusBeforeSeek = Status;
+        ResumeAfterSeek = Status == VideoPlaybackStatus.Playing;
+        Status = VideoPlaybackStatus.Seeking;
+    }
+
+    public void CompleteSeek()
+    {
+        Ensure(VideoPlaybackStatus.Seeking);
+        Status = _statusBeforeSeek switch
+        {
+            VideoPlaybackStatus.Playing => VideoPlaybackStatus.Playing,
+            VideoPlaybackStatus.Ready => VideoPlaybackStatus.Ready,
+            _ => VideoPlaybackStatus.Paused,
+        };
+        ResumeAfterSeek = false;
+    }
+
     public void MarkFailed() => Status = VideoPlaybackStatus.Failed;
 
-    public void Reset() => Status = VideoPlaybackStatus.Idle;
+    public void Reset()
+    {
+        Status = VideoPlaybackStatus.Idle;
+        ResumeAfterSeek = false;
+    }
 
     private void Ensure(params VideoPlaybackStatus[] allowed)
     {
@@ -60,6 +92,7 @@ public enum VideoPlaybackStatus
     Ready,
     Playing,
     Paused,
+    Seeking,
     Ended,
     Failed,
 }
