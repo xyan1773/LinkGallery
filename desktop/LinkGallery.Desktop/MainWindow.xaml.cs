@@ -35,6 +35,7 @@ public partial class MainWindow : Window, IDisposable
     private readonly PersistentTransferCoordinator _transferCoordinator;
     private readonly DispatcherTimer _transferRefreshTimer;
     private CancellationTokenSource? _connectionCancellation;
+    private CancellationTokenSource? _backgroundSyncCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
     private bool _hasMoreIndexedItems;
@@ -143,27 +144,18 @@ public partial class MainWindow : Window, IDisposable
                 cacheRoot,
                 apiAddress.AbsoluteUri);
 
-            var syncProgress = new Progress<MediaSyncProgress>(
-                progress => UpdateSyncProgress(endpoint, progress));
-            var sync = await _synchronizer.SynchronizeAsync(
-                _source,
-                syncProgress,
-                cancellationToken);
-            var device = sync.Device;
+            var device = await GetDeviceInfoWithTimeoutAsync(_source, cancellationToken);
             _activeDeviceId = device.Id;
             _transferSourceResolver.SetSource(device.Id, _source);
 
             ShowDevice(device);
             DisconnectButton.IsEnabled = true;
+            StatusText.Text = $"已连接 {device.Name} · 正在加载第一页媒体";
+            SetEmptyState("正在加载第一页媒体…");
 
-            await LoadIndexedPageAsync(
-                reset: true,
-                "手机中没有可显示的照片或视频",
-                cancellationToken);
-            var syncMode = sync.WasFullScan ? "完整索引" : "增量更新";
-            StatusText.Text =
-                $"已连接 · {syncMode} {sync.ItemsReceived:N0} 项（{sync.PagesFetched:N0} 页）" +
-                $" · 已显示 {TimelineRows.Count:N0} 项";
+            await LoadInitialRemotePageAsync(_source, cancellationToken);
+            SetLoading(false);
+            StartBackgroundSync(_source, endpoint);
         }
         catch (OperationCanceledException)
         {
@@ -183,44 +175,149 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void UpdateSyncProgress(string endpoint, MediaSyncProgress progress)
+    private static async Task<LinkGallery.Domain.Devices.Device> GetDeviceInfoWithTimeoutAsync(
+        CachingReadOnlyMediaSource source,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(8));
+        try
+        {
+            return await source.GetDeviceInfoAsync(timeout.Token);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new MediaSourceTimeoutException("设备信息请求超时。", exception);
+        }
+    }
+
+    private async Task LoadInitialRemotePageAsync(
+        CachingReadOnlyMediaSource source,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            var page = await source.GetMediaPageAsync(
+                new MediaQuery(Limit: PageSize),
+                timeout.Token);
+
+            TimelineRows.Clear();
+            AppendTimelineItems(page.Items);
+            _hasMoreIndexedItems = false;
+            TimelineList.Visibility = TimelineRows.Count == 0
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            EmptyText.Text = "手机中没有可显示的照片或视频";
+            EmptyText.Visibility = TimelineRows.Count == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            StatusText.Text = page.Items.Count == 0
+                ? "已连接 · 手机中没有可显示的媒体"
+                : $"已连接 · 已显示最新 {page.Items.Count:N0} 项 · 后台继续同步索引";
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            await ShowInitialPageDegradedAsync("已连接 · 第一页媒体加载超时，后台继续同步索引");
+        }
+        catch (Exception exception)
+        {
+            await ShowInitialPageDegradedAsync(
+                $"已连接 · 第一页媒体加载失败：{DescribeConnectionStageError(exception)}");
+        }
+    }
+
+    private async Task ShowInitialPageDegradedAsync(string message)
+    {
+        StatusText.Text = message;
+        await LoadIndexedPageAsync(
+            reset: true,
+            "第一页加载失败，且本地缓存中还没有媒体",
+            CancellationToken.None);
+    }
+
+    private void StartBackgroundSync(CachingReadOnlyMediaSource source, string endpoint)
+    {
+        _backgroundSyncCancellation?.Cancel();
+        _backgroundSyncCancellation?.Dispose();
+        _backgroundSyncCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _connectionCancellation?.Token ?? CancellationToken.None);
+        var progress = new Progress<MediaSyncProgress>(
+            update => UpdateBackgroundSyncProgress(endpoint, update));
+        _ = SynchronizeInBackgroundAsync(source, progress, _backgroundSyncCancellation.Token);
+    }
+
+    private async Task SynchronizeInBackgroundAsync(
+        CachingReadOnlyMediaSource source,
+        IProgress<MediaSyncProgress> progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var sync = await _synchronizer.SynchronizeAsync(source, progress, cancellationToken);
+            await LoadIndexedPageAsync(
+                reset: true,
+                "手机中没有可显示的照片或视频",
+                cancellationToken);
+            var syncMode = sync.WasFullScan ? "完整索引" : "增量更新";
+            StatusText.Text =
+                $"已连接 · {syncMode} {sync.ItemsReceived:N0} 项（{sync.PagesFetched:N0} 页）" +
+                $" · 已显示 {TimelineRows.Count:N0} 项";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text =
+                $"已连接 · 后台索引同步失败：{DescribeConnectionStageError(exception)}";
+        }
+    }
+
+    private void UpdateBackgroundSyncProgress(string endpoint, MediaSyncProgress progress)
     {
         if (progress.Device is not null)
         {
             ShowDevice(progress.Device);
         }
 
-        LoadingProgress.IsIndeterminate = progress.TotalItems is null || progress.TotalItems == 0;
-        if (progress.TotalItems > 0)
-        {
-            LoadingProgress.Value = Math.Min(
-                100,
-                (double)Math.Min(progress.ItemsReceived, progress.TotalItems.Value) /
-                    progress.TotalItems.Value * 100);
-        }
-
         var totalText = progress.TotalItems.HasValue
             ? progress.TotalItems.Value.ToString("N0", CultureInfo.CurrentCulture)
             : "?";
         var mode = progress.WasFullScan ? "完整索引" : "增量更新";
-        var status = progress.Stage switch
+        StatusText.Text = progress.Stage switch
         {
-            MediaSyncStage.Connecting => $"正在连接 {endpoint}…",
+            MediaSyncStage.Connecting => $"已显示第一页 · 后台连接 {endpoint}…",
             MediaSyncStage.DeviceLoaded =>
-                $"已连接 {progress.Device?.Name} · 共 {totalText} 项媒体",
+                $"已连接 {progress.Device?.Name} · 后台准备同步 {totalText} 项媒体",
             MediaSyncStage.FetchingPage =>
-                $"正在读取第 {progress.PagesFetched + 1:N0} 页 · 已同步 {progress.ItemsReceived:N0}/{totalText}",
+                $"已显示第一页 · 后台读取第 {progress.PagesFetched + 1:N0} 页 · {progress.ItemsReceived:N0}/{totalText}",
             MediaSyncStage.WritingPage =>
-                $"正在写入本地索引 · {progress.ItemsReceived:N0}/{totalText} · 第 {progress.PagesFetched:N0} 页",
+                $"已显示第一页 · 后台写入索引 · {progress.ItemsReceived:N0}/{totalText}",
             MediaSyncStage.Completing =>
-                $"正在收尾 {mode} · {progress.ItemsReceived:N0}/{totalText}",
+                $"已显示第一页 · 后台收尾 {mode} · {progress.ItemsReceived:N0}/{totalText}",
             MediaSyncStage.Completed =>
-                $"已完成 {mode} · {progress.ItemsReceived:N0}/{totalText}",
-            _ => $"正在同步 {endpoint}…",
+                $"已显示第一页 · 后台完成 {mode} · {progress.ItemsReceived:N0}/{totalText}",
+            _ => $"已显示第一页 · 后台同步 {endpoint}…",
         };
-        StatusText.Text = status;
-        SetEmptyState(status);
     }
+
+    private static string DescribeConnectionStageError(Exception exception) =>
+        exception switch
+        {
+            MediaSourceTimeoutException => "请求超时",
+            MediaSourceConnectionException
+                { Failure: MediaSourceConnectionFailure.ConnectionRefused } => "手机服务拒绝连接",
+            MediaSourceConnectionException
+                { Failure: MediaSourceConnectionFailure.NetworkUnreachable } => "网络不可达",
+            MediaSourceConnectionException => "无法连接手机",
+            MediaSourceProtocolException => $"协议错误：{exception.Message}",
+            MediaSourceHttpException { StatusCode: HttpStatusCode.Forbidden } => "手机未授予媒体读取权限",
+            MediaSourceHttpException => $"手机返回错误：{exception.Message}",
+            HttpRequestException => "网络请求失败",
+            _ => exception.Message,
+        };
 
     private void ShowDevice(LinkGallery.Domain.Devices.Device device)
     {
@@ -639,6 +736,9 @@ public partial class MainWindow : Window, IDisposable
     private void Disconnect(bool clearTimeline)
     {
         _transferSourceResolver.Clear();
+        _backgroundSyncCancellation?.Cancel();
+        _backgroundSyncCancellation?.Dispose();
+        _backgroundSyncCancellation = null;
         _connectionCancellation?.Cancel();
         _connectionCancellation?.Dispose();
         _connectionCancellation = null;
