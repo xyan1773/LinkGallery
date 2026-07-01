@@ -18,8 +18,10 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
     private readonly TransferCoordinatorOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly ITransferFileSystem _fileSystem;
+    private readonly LocalCopyCatalog? _localCopies;
     private readonly Dictionary<Guid, TransferJob> _jobs = [];
     private readonly Dictionary<Guid, CancellationTokenSource> _activeTransfers = [];
+    private readonly HashSet<Guid> _committingTransfers = [];
     private readonly object _sync = new();
     private readonly SemaphoreSlim _signal = new(0);
     private readonly CancellationTokenSource _lifetime = new();
@@ -31,7 +33,8 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         ITransferMediaSourceResolver sourceResolver,
         TransferCoordinatorOptions? options = null,
         TimeProvider? timeProvider = null,
-        ITransferFileSystem? fileSystem = null)
+        ITransferFileSystem? fileSystem = null,
+        LocalCopyCatalog? localCopies = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(sourceResolver);
@@ -41,6 +44,7 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         _options.Validate();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _fileSystem = fileSystem ?? new PhysicalTransferFileSystem();
+        _localCopies = localCopies;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -58,6 +62,12 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         foreach (var job in loaded)
         {
             job.RecoverAfterRestart();
+            if (job.Status == TransferStatus.Completed &&
+                !_fileSystem.FileExists(job.DestinationPath))
+            {
+                job.MarkCompletedFileMissing();
+            }
+
             lock (_sync)
             {
                 if (!_jobs.TryAdd(job.Id, job))
@@ -88,6 +98,31 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(media);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
+        if (_localCopies is not null)
+        {
+            var existingCopy = await _localCopies.FindAsync(media, cancellationToken)
+                .ConfigureAwait(false);
+            if (existingCopy is not null)
+            {
+                return await AddCompletedDuplicateAsync(media, existingCopy, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        lock (_sync)
+        {
+            var existingJob = _jobs.Values.FirstOrDefault(job =>
+                job.Status != TransferStatus.Cancelled &&
+                job.DeviceId == media.DeviceId &&
+                job.RemoteId == media.RemoteId &&
+                job.TotalBytes == media.FileSize &&
+                SameInstant(job.RemoteModifiedAt, media.ModifiedAt));
+            if (existingJob is not null)
+            {
+                return TransferJob.Restore(existingJob.ToSnapshot());
+            }
+        }
+
         var fileName = Path.GetFileName(media.FileName);
         if (string.IsNullOrWhiteSpace(fileName))
         {
@@ -105,6 +140,17 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
             expectedSha256);
         lock (_sync)
         {
+            var existingJob = _jobs.Values.FirstOrDefault(candidate =>
+                candidate.Status != TransferStatus.Cancelled &&
+                candidate.DeviceId == media.DeviceId &&
+                candidate.RemoteId == media.RemoteId &&
+                candidate.TotalBytes == media.FileSize &&
+                SameInstant(candidate.RemoteModifiedAt, media.ModifiedAt));
+            if (existingJob is not null)
+            {
+                return TransferJob.Restore(existingJob.ToSnapshot());
+            }
+
             _jobs.Add(job.Id, job);
         }
 
@@ -119,6 +165,13 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         lock (_sync)
         {
             job = GetJob(jobId);
+            if (_committingTransfers.Contains(jobId) ||
+                job.Status is TransferStatus.Paused or TransferStatus.Completed or
+                TransferStatus.Failed or TransferStatus.Cancelled)
+            {
+                return;
+            }
+
             job.Pause();
             CancelActiveTransfer(jobId);
         }
@@ -132,7 +185,30 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         lock (_sync)
         {
             job = GetJob(jobId);
+            if (job.Status != TransferStatus.Paused)
+            {
+                return;
+            }
+
             job.Resume();
+        }
+
+        await _store.SaveAsync(job, cancellationToken).ConfigureAwait(false);
+        SignalWorkers();
+    }
+
+    public async Task RetryAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        TransferJob job;
+        lock (_sync)
+        {
+            job = GetJob(jobId);
+            if (job.Status != TransferStatus.Failed)
+            {
+                return;
+            }
+
+            job.Retry();
         }
 
         await _store.SaveAsync(job, cancellationToken).ConfigureAwait(false);
@@ -145,11 +221,72 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         lock (_sync)
         {
             job = GetJob(jobId);
+            if (_committingTransfers.Contains(jobId))
+            {
+                return;
+            }
+
             job.Cancel();
             CancelActiveTransfer(jobId);
         }
 
         await _store.SaveAsync(job, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task PauseAllAsync(CancellationToken cancellationToken = default)
+    {
+        Guid[] jobIds;
+        lock (_sync)
+        {
+            jobIds = _jobs.Values
+                .Where(job => job.Status is TransferStatus.Pending or
+                    TransferStatus.Running or TransferStatus.Retrying)
+                .Select(job => job.Id)
+                .ToArray();
+        }
+
+        foreach (var jobId in jobIds)
+        {
+            await PauseAsync(jobId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task ResumeAllAsync(CancellationToken cancellationToken = default)
+    {
+        Guid[] jobIds;
+        lock (_sync)
+        {
+            jobIds = _jobs.Values
+                .Where(job => job.Status == TransferStatus.Paused)
+                .Select(job => job.Id)
+                .ToArray();
+        }
+
+        foreach (var jobId in jobIds)
+        {
+            await ResumeAsync(jobId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task ClearCompletedAsync(CancellationToken cancellationToken = default)
+    {
+        Guid[] jobIds;
+        lock (_sync)
+        {
+            jobIds = _jobs.Values
+                .Where(job => job.Status == TransferStatus.Completed)
+                .Select(job => job.Id)
+                .ToArray();
+        }
+
+        foreach (var jobId in jobIds)
+        {
+            await _store.DeleteAsync(jobId, cancellationToken).ConfigureAwait(false);
+            lock (_sync)
+            {
+                _jobs.Remove(jobId);
+            }
+        }
     }
 
     public IReadOnlyList<TransferJob> GetJobs()
@@ -409,13 +546,14 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         }
 
         var sha256 = await VerifyAsync(job.PartialPath, job, cancellationToken).ConfigureAwait(false);
-        _fileSystem.Move(job.PartialPath, job.DestinationPath);
-        lock (_sync)
+        if (sha256 is not null &&
+            await CompleteDuplicateConflictAsync(job, sha256, cancellationToken).ConfigureAwait(false))
         {
-            job.Complete(sha256);
+            return;
         }
 
-        await _store.SaveAsync(job, cancellationToken).ConfigureAwait(false);
+        _fileSystem.Move(job.PartialPath, job.DestinationPath);
+        await CommitCompletionAsync(job, sha256).ConfigureAwait(false);
     }
 
     private async Task CompleteExistingDestinationAsync(
@@ -433,10 +571,9 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         lock (_sync)
         {
             job.ReportProgress(job.TotalBytes);
-            job.Complete(sha256);
         }
 
-        await _store.SaveAsync(job, cancellationToken).ConfigureAwait(false);
+        await CommitCompletionAsync(job, sha256).ConfigureAwait(false);
     }
 
     private async Task<string?> VerifyAsync(
@@ -483,6 +620,170 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
                 ? entityTag[prefix.Length..^1]
                 : null;
     }
+
+    private async Task RegisterLocalCopyAsync(
+        TransferJob job,
+        string? sha256,
+        CancellationToken cancellationToken)
+    {
+        if (_localCopies is null)
+        {
+            return;
+        }
+
+        await _localCopies.RegisterAsync(
+            new LocalCopy(
+                job.DeviceId,
+                job.RemoteId,
+                job.DestinationPath,
+                job.TotalBytes,
+                _timeProvider.GetUtcNow(),
+                sha256,
+                job.RemoteModifiedAt),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> CompleteDuplicateConflictAsync(
+        TransferJob job,
+        string sha256,
+        CancellationToken cancellationToken)
+    {
+        if (_localCopies is null)
+        {
+            return false;
+        }
+
+        var existing = await _localCopies.FindByIdentityAsync(
+            job.DeviceId,
+            job.RemoteId,
+            cancellationToken).ConfigureAwait(false);
+        if (existing is null ||
+            string.Equals(
+                existing.LocalPath,
+                job.DestinationPath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var existingSha256 = existing.Sha256;
+        if (existingSha256 is null)
+        {
+            await using var stream = _fileSystem.OpenRead(existing.LocalPath);
+            existingSha256 = Convert.ToHexString(
+                await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false))
+                .ToLowerInvariant();
+        }
+
+        if (!string.Equals(existingSha256, sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        _fileSystem.Delete(job.PartialPath);
+        await CommitCompletionAsync(job, sha256, existing.LocalPath).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task CommitCompletionAsync(
+        TransferJob job,
+        string? sha256,
+        string? existingDestinationPath = null)
+    {
+        TransferJob completed;
+        lock (_sync)
+        {
+            completed = TransferJob.Restore(job.ToSnapshot());
+            if (existingDestinationPath is null)
+            {
+                completed.Complete(sha256);
+            }
+            else
+            {
+                completed.CompleteUsingExistingCopy(existingDestinationPath, sha256!);
+            }
+
+            _committingTransfers.Add(job.Id);
+        }
+
+        try
+        {
+            await RegisterLocalCopyAsync(completed, sha256, CancellationToken.None)
+                .ConfigureAwait(false);
+            await _store.SaveAsync(completed, CancellationToken.None).ConfigureAwait(false);
+            lock (_sync)
+            {
+                if (existingDestinationPath is null)
+                {
+                    job.Complete(sha256);
+                }
+                else
+                {
+                    job.CompleteUsingExistingCopy(existingDestinationPath, sha256!);
+                }
+            }
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _committingTransfers.Remove(job.Id);
+            }
+        }
+    }
+
+    private async Task<TransferJob> AddCompletedDuplicateAsync(
+        MediaItem media,
+        LocalCopy copy,
+        CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            var existing = _jobs.Values.FirstOrDefault(job =>
+                job.Status != TransferStatus.Cancelled &&
+                job.DeviceId == media.DeviceId &&
+                job.RemoteId == media.RemoteId &&
+                job.TotalBytes == media.FileSize &&
+                SameInstant(job.RemoteModifiedAt, media.ModifiedAt));
+            if (existing is not null)
+            {
+                return TransferJob.Restore(existing.ToSnapshot());
+            }
+        }
+
+        var job = new TransferJob(
+            Guid.NewGuid(),
+            media.DeviceId,
+            media.RemoteId,
+            copy.LocalPath,
+            media.FileSize,
+            media.ModifiedAt,
+            copy.Sha256);
+        job.Start();
+        job.ReportProgress(media.FileSize);
+        job.Complete(copy.Sha256);
+        lock (_sync)
+        {
+            var existingJob = _jobs.Values.FirstOrDefault(candidate =>
+                candidate.Status != TransferStatus.Cancelled &&
+                candidate.DeviceId == media.DeviceId &&
+                candidate.RemoteId == media.RemoteId &&
+                candidate.TotalBytes == media.FileSize &&
+                SameInstant(candidate.RemoteModifiedAt, media.ModifiedAt));
+            if (existingJob is not null)
+            {
+                return TransferJob.Restore(existingJob.ToSnapshot());
+            }
+
+            _jobs.Add(job.Id, job);
+        }
+
+        await _store.SaveAsync(job, cancellationToken).ConfigureAwait(false);
+        return TransferJob.Restore(job.ToSnapshot());
+    }
+
+    private static bool SameInstant(DateTimeOffset? left, DateTimeOffset right) =>
+        left is DateTimeOffset value && Math.Abs((value - right).TotalSeconds) < 1;
 
     private async Task HandleFailureAsync(
         TransferJob job,

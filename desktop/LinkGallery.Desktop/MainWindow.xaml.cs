@@ -9,9 +9,14 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using LinkGallery.Application.Media;
+using LinkGallery.Application.Transfers;
 using LinkGallery.Domain.Media;
+using LinkGallery.Domain.Transfers;
 using LinkGallery.Infrastructure.Media;
+using LinkGallery.Infrastructure.Transfers;
+using Microsoft.Win32;
 
 namespace LinkGallery.Desktop;
 
@@ -25,6 +30,10 @@ public partial class MainWindow : Window, IDisposable
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
     private readonly LocalCopyCatalog _localCopies;
     private readonly ThumbnailCacheReader _thumbnailCache;
+    private readonly JsonTransferJobStore _transferStore;
+    private readonly CurrentTransferMediaSourceResolver _transferSourceResolver = new();
+    private readonly PersistentTransferCoordinator _transferCoordinator;
+    private readonly DispatcherTimer _transferRefreshTimer;
     private CancellationTokenSource? _connectionCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
@@ -42,17 +51,33 @@ public partial class MainWindow : Window, IDisposable
         _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
         _thumbnailCache = new ThumbnailCacheReader(
             Path.Combine(dataDirectory, "cache", "thumbnails"));
+        _transferStore = new JsonTransferJobStore(Path.Combine(dataDirectory, "transfer-jobs.json"));
+        _transferCoordinator = new PersistentTransferCoordinator(
+            _transferStore,
+            _transferSourceResolver,
+            new TransferCoordinatorOptions { ComputeSha256 = true },
+            localCopies: _localCopies);
+        _transferRefreshTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(500),
+        };
+        _transferRefreshTimer.Tick += OnTransferRefreshTick;
         InitializeComponent();
         DataContext = this;
     }
 
     public ObservableCollection<MediaRow> TimelineRows { get; } = [];
 
+    public ObservableCollection<TransferRow> TransferRows { get; } = [];
+
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         UpdateAddressHint();
         try
         {
+            await _transferCoordinator.StartAsync();
+            RefreshTransferRows();
+            _transferRefreshTimer.Start();
             await LoadIndexedPageAsync(
                 reset: true,
                 "本地缓存中还没有媒体",
@@ -119,6 +144,7 @@ public partial class MainWindow : Window, IDisposable
             var sync = await _synchronizer.SynchronizeAsync(_source, cancellationToken);
             var device = sync.Device;
             _activeDeviceId = device.Id;
+            _transferSourceResolver.SetSource(device.Id, _source);
 
             DeviceNameText.Text = device.Name;
             DeviceModelText.Text = string.IsNullOrWhiteSpace(device.Model)
@@ -369,6 +395,151 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
+    private async void OnImportSelectedClick(object sender, RoutedEventArgs e)
+    {
+        var selected = TimelineList.SelectedItems
+            .OfType<MediaRow>()
+            .Select(row => row.Item)
+            .ToArray();
+        if (selected.Length == 0)
+        {
+            StatusText.Text = "请先选择一项或多项媒体（可按 Ctrl 或 Shift 多选）";
+            return;
+        }
+
+        if (_source is null || _source.IsOffline)
+        {
+            StatusText.Text = "设备离线，连接手机后再开始新的导入";
+            return;
+        }
+
+        var picker = new OpenFolderDialog
+        {
+            Title = "选择导入目录",
+            Multiselect = false,
+        };
+        if (picker.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        ImportSelectedButton.IsEnabled = false;
+        try
+        {
+            foreach (var item in selected)
+            {
+                await _transferCoordinator.EnqueueAsync(item, picker.FolderName);
+            }
+
+            RefreshTransferRows();
+            StatusText.Text = $"已将 {selected.Length:N0} 项加入导入中心";
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"无法加入导入队列：{exception.Message}";
+        }
+        finally
+        {
+            ImportSelectedButton.IsEnabled = true;
+        }
+    }
+
+    private async void OnPauseAllClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await _transferCoordinator.PauseAllAsync();
+            RefreshTransferRows();
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"暂停失败：{exception.Message}";
+        }
+    }
+
+    private async void OnResumeAllClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await _transferCoordinator.ResumeAllAsync();
+            RefreshTransferRows();
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"恢复失败：{exception.Message}";
+        }
+    }
+
+    private async void OnClearCompletedClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await _transferCoordinator.ClearCompletedAsync();
+            RefreshTransferRows();
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"清理失败：{exception.Message}";
+        }
+    }
+
+    private async void OnRetryClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: Guid jobId })
+        {
+            return;
+        }
+
+        try
+        {
+            await _transferCoordinator.RetryAsync(jobId);
+            RefreshTransferRows();
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"重试失败：{exception.Message}";
+        }
+    }
+
+    private void OnTransferRefreshTick(object? sender, EventArgs e) => RefreshTransferRows();
+
+    private void RefreshTransferRows()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var jobs = _transferCoordinator.GetJobs();
+        var activeIds = jobs.Select(job => job.Id).ToHashSet();
+        for (var index = TransferRows.Count - 1; index >= 0; index--)
+        {
+            if (!activeIds.Contains(TransferRows[index].Id))
+            {
+                TransferRows.RemoveAt(index);
+            }
+        }
+
+        foreach (var job in jobs)
+        {
+            var row = TransferRows.FirstOrDefault(candidate => candidate.Id == job.Id);
+            if (row is null)
+            {
+                row = new TransferRow(job, now);
+                TransferRows.Add(row);
+            }
+            else
+            {
+                row.Update(job, now);
+            }
+        }
+
+        var completed = jobs.Count(job => job.Status == TransferStatus.Completed);
+        var failed = jobs.Count(job => job.Status == TransferStatus.Failed);
+        var remainingBytes = jobs
+            .Where(job => !job.IsTerminal)
+            .Sum(job => job.TotalBytes - job.BytesTransferred);
+        ImportSummaryText.Text = jobs.Count == 0
+            ? "暂无任务"
+            : $"{completed:N0}/{jobs.Count:N0} 完成 · {failed:N0} 失败 · 剩余 {FormatSize(remainingBytes)}";
+    }
+
     private async void OnDisconnectClick(object sender, RoutedEventArgs e)
     {
         Disconnect(clearTimeline: true);
@@ -396,6 +567,9 @@ public partial class MainWindow : Window, IDisposable
         }
 
         Disconnect(clearTimeline: true);
+        _transferRefreshTimer.Stop();
+        _transferCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _transferStore.Dispose();
         _thumbnailConcurrency.Dispose();
         _httpClient.Dispose();
         _localCopies.Dispose();
@@ -406,6 +580,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void Disconnect(bool clearTimeline)
     {
+        _transferSourceResolver.Clear();
         _connectionCancellation?.Cancel();
         _connectionCancellation?.Dispose();
         _connectionCancellation = null;
@@ -550,5 +725,107 @@ public partial class MainWindow : Window, IDisposable
 
             return $"{value:0.#} {units[unit]}";
         }
+    }
+
+    public sealed class TransferRow : INotifyPropertyChanged
+    {
+        private long _previousBytes;
+        private DateTimeOffset _previousUpdate;
+        private double _bytesPerSecond;
+
+        public TransferRow(TransferJob job, DateTimeOffset now)
+        {
+            Id = job.Id;
+            FileName = Path.GetFileName(job.DestinationPath);
+            _previousBytes = job.BytesTransferred;
+            _previousUpdate = now;
+            Apply(job);
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public Guid Id { get; }
+
+        public string FileName { get; }
+
+        public string StatusText { get; private set; } = "";
+
+        public double ProgressPercent { get; private set; }
+
+        public string ProgressText { get; private set; } = "";
+
+        public string RemainingText { get; private set; } = "";
+
+        public bool CanRetry { get; private set; }
+
+        public void Update(TransferJob job, DateTimeOffset now)
+        {
+            var seconds = (now - _previousUpdate).TotalSeconds;
+            if (job.Status == TransferStatus.Running && seconds > 0)
+            {
+                var currentSpeed = Math.Max(0, job.BytesTransferred - _previousBytes) / seconds;
+                _bytesPerSecond = _bytesPerSecond == 0
+                    ? currentSpeed
+                    : (_bytesPerSecond * 0.65) + (currentSpeed * 0.35);
+            }
+            else if (job.Status != TransferStatus.Running)
+            {
+                _bytesPerSecond = 0;
+            }
+
+            _previousBytes = job.BytesTransferred;
+            _previousUpdate = now;
+            Apply(job);
+        }
+
+        private void Apply(TransferJob job)
+        {
+            StatusText = job.Status switch
+            {
+                TransferStatus.Pending => "等待",
+                TransferStatus.Running => "复制中",
+                TransferStatus.Paused => "已暂停",
+                TransferStatus.Retrying => "等待重试",
+                TransferStatus.Completed => "已完成",
+                TransferStatus.Failed => $"失败 · {job.FailureReason}",
+                TransferStatus.Cancelled => "已取消",
+                _ => job.Status.ToString(),
+            };
+            ProgressPercent = job.TotalBytes == 0
+                ? 100
+                : (double)job.BytesTransferred / job.TotalBytes * 100;
+            ProgressText =
+                $"{FormatSize(job.BytesTransferred)} / {FormatSize(job.TotalBytes)}";
+            var remaining = Math.Max(0, job.TotalBytes - job.BytesTransferred);
+            RemainingText = job.Status == TransferStatus.Running && _bytesPerSecond > 1
+                ? $"{FormatSize((long)_bytesPerSecond)}/s · {FormatDuration(remaining / _bytesPerSecond)}"
+                : job.Status == TransferStatus.Completed
+                    ? "完成"
+                    : $"剩余 {FormatSize(remaining)}";
+            CanRetry = job.Status == TransferStatus.Failed;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+        }
+
+        private static string FormatDuration(double seconds)
+        {
+            var duration = TimeSpan.FromSeconds(Math.Max(0, seconds));
+            return duration.TotalHours >= 1
+                ? $"{(int)duration.TotalHours}:{duration.Minutes:00}:{duration.Seconds:00}"
+                : $"{duration.Minutes}:{duration.Seconds:00}";
+        }
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var value = (double)Math.Max(0, bytes);
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return $"{value:0.#} {units[unit]}";
     }
 }

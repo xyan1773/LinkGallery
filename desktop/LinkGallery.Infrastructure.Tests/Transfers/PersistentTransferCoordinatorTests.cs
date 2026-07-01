@@ -4,6 +4,7 @@ using LinkGallery.Application.Transfers;
 using LinkGallery.Domain.Devices;
 using LinkGallery.Domain.Media;
 using LinkGallery.Domain.Transfers;
+using LinkGallery.Infrastructure.Media;
 using LinkGallery.Infrastructure.Transfers;
 
 namespace LinkGallery.Infrastructure.Tests.Transfers;
@@ -11,6 +12,219 @@ namespace LinkGallery.Infrastructure.Tests.Transfers;
 [TestClass]
 public sealed class PersistentTransferCoordinatorTests
 {
+    [TestMethod]
+    public async Task CompletedIsNotVisibleUntilTerminalSnapshotIsPersisted()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var store = new BlockingTerminalStore();
+            var source = new RecordingMediaSource(new byte[1024], TimeSpan.Zero);
+            var queue = new PersistentTransferCoordinator(
+                store,
+                new StaticSourceResolver(source),
+                new TransferCoordinatorOptions { MaxConcurrentTransfers = 1 });
+            try
+            {
+                await queue.StartAsync();
+                await queue.EnqueueAsync(CreateMedia(1024), directory);
+                await store.TerminalSaveStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+                Assert.AreEqual(TransferStatus.Running, queue.GetJobs().Single().Status);
+                var dispose = queue.DisposeAsync().AsTask();
+                await Task.Delay(50);
+                Assert.IsFalse(dispose.IsCompleted);
+
+                store.AllowTerminalSave();
+                await dispose;
+
+                Assert.AreEqual(
+                    TransferStatus.Completed,
+                    (await store.LoadAsync()).Single().Status);
+            }
+            finally
+            {
+                store.AllowTerminalSave();
+                await queue.DisposeAsync();
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RepeatedSelectionUsesOneTransferAndRegistersLocalCopy()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var data = new byte[1024 * 1024];
+            RandomNumberGenerator.Fill(data);
+            var source = new RecordingMediaSource(data, TimeSpan.FromMilliseconds(2));
+            using var copies = new LocalCopyCatalog(Path.Combine(directory, "copies.json"));
+            await using var queue = CreateQueue(
+                Path.Combine(directory, "queue.json"),
+                source,
+                localCopies: copies);
+            await queue.StartAsync();
+            var media = CreateMedia(data.Length);
+
+            var first = await queue.EnqueueAsync(media, directory);
+            var repeated = await queue.EnqueueAsync(media, directory);
+
+            Assert.AreEqual(first.Id, repeated.Id);
+            await WaitUntilAsync(
+                () => queue.GetJobs().Single().Status == TransferStatus.Completed);
+            var localCopy = await copies.FindAsync(media);
+            Assert.IsNotNull(localCopy);
+            Assert.AreEqual(first.DestinationPath, localCopy.LocalPath);
+            Assert.AreEqual(1, source.RequestedOffsets.Count);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task DifferentMediaWithSameNameAreBothKept()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var data = new byte[64 * 1024];
+            var source = new RecordingMediaSource(data, TimeSpan.Zero);
+            await using var queue = CreateQueue(Path.Combine(directory, "queue.json"), source);
+            await queue.StartAsync();
+            var firstMedia = CreateMedia(data.Length);
+            var secondMedia = new MediaItem
+            {
+                DeviceId = firstMedia.DeviceId,
+                RemoteId = "different-media",
+                FileName = firstMedia.FileName,
+                Type = firstMedia.Type,
+                FileSize = firstMedia.FileSize,
+                TakenAt = firstMedia.TakenAt,
+                ModifiedAt = firstMedia.ModifiedAt,
+            };
+
+            var first = await queue.EnqueueAsync(firstMedia, directory);
+            var second = await queue.EnqueueAsync(secondMedia, directory);
+            await WaitUntilAsync(
+                () => queue.GetJobs().All(job => job.Status == TransferStatus.Completed));
+
+            Assert.AreNotEqual(first.DestinationPath, second.DestinationPath);
+            Assert.IsTrue(File.Exists(first.DestinationPath));
+            Assert.IsTrue(File.Exists(second.DestinationPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task MetadataConflictFallsBackToSha256AndReusesIdenticalCopy()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var data = new byte[64 * 1024];
+            RandomNumberGenerator.Fill(data);
+            var existingPath = Path.Combine(directory, "existing.bin");
+            await File.WriteAllBytesAsync(existingPath, data);
+            var media = CreateMedia(data.Length);
+            using var copies = new LocalCopyCatalog(Path.Combine(directory, "copies.json"));
+            await copies.RegisterAsync(new LocalCopy(
+                media.DeviceId,
+                media.RemoteId,
+                existingPath,
+                media.FileSize,
+                DateTimeOffset.UtcNow,
+                RemoteModifiedAt: media.ModifiedAt.AddMinutes(-1)));
+            var source = new RecordingMediaSource(data, TimeSpan.Zero);
+            await using var queue = CreateQueue(
+                Path.Combine(directory, "queue.json"),
+                source,
+                localCopies: copies);
+            await queue.StartAsync();
+
+            var queued = await queue.EnqueueAsync(media, directory);
+            await WaitUntilAsync(
+                () => queue.GetJobs().Single().Status == TransferStatus.Completed);
+            var completed = queue.GetJobs().Single();
+
+            Assert.AreEqual(existingPath, completed.DestinationPath);
+            Assert.IsFalse(File.Exists(queued.PartialPath));
+            Assert.AreEqual(1, Directory.GetFiles(directory, "*.bin").Length);
+            Assert.AreEqual(media.ModifiedAt, (await copies.FindAsync(media))?.RemoteModifiedAt);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ClearingCompletedJobsAlsoRemovesPersistedQueueEntries()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var storePath = Path.Combine(directory, "queue.json");
+            var source = new RecordingMediaSource(new byte[1024], TimeSpan.Zero);
+            await using (var queue = CreateQueue(storePath, source))
+            {
+                await queue.StartAsync();
+                await queue.EnqueueAsync(CreateMedia(1024), directory);
+                await WaitUntilAsync(
+                    () => queue.GetJobs().Single().Status == TransferStatus.Completed);
+                await queue.ClearCompletedAsync();
+                Assert.IsEmpty(queue.GetJobs());
+            }
+
+            await using var restarted = CreateQueue(storePath, source);
+            await restarted.StartAsync();
+            Assert.IsEmpty(restarted.GetJobs());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task MissingCompletedFileBecomesRetryableAfterRestart()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var storePath = Path.Combine(directory, "queue.json");
+            var source = new RecordingMediaSource(new byte[1024], TimeSpan.Zero);
+            string destinationPath;
+            await using (var queue = CreateQueue(storePath, source))
+            {
+                await queue.StartAsync();
+                var job = await queue.EnqueueAsync(CreateMedia(1024), directory);
+                destinationPath = job.DestinationPath;
+                await WaitUntilAsync(
+                    () => queue.GetJobs().Single().Status == TransferStatus.Completed);
+            }
+
+            File.Delete(destinationPath);
+            await using var restarted = CreateQueue(storePath, source);
+            await restarted.StartAsync();
+
+            Assert.AreEqual(TransferStatus.Failed, restarted.GetJobs().Single().Status);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [TestMethod]
     public async Task LargeFileResumesAfterQueueRestartAndIsAtomicallyCommitted()
     {
@@ -374,7 +588,8 @@ public sealed class PersistentTransferCoordinatorTests
         string storePath,
         IReadOnlyMediaSource source,
         TimeSpan? retryDelay = null,
-        ITransferFileSystem? fileSystem = null) =>
+        ITransferFileSystem? fileSystem = null,
+        LocalCopyCatalog? localCopies = null) =>
         new(
             new JsonTransferJobStore(storePath),
             new StaticSourceResolver(source),
@@ -383,7 +598,8 @@ public sealed class PersistentTransferCoordinatorTests
                 MaxConcurrentTransfers = 1,
                 InitialRetryDelay = retryDelay ?? TimeSpan.FromMilliseconds(10),
             },
-            fileSystem: fileSystem);
+            fileSystem: fileSystem,
+            localCopies: localCopies);
 
     private static MediaItem CreateMedia(long length) =>
         new()
@@ -421,6 +637,66 @@ public sealed class PersistentTransferCoordinatorTests
             string deviceId,
             CancellationToken cancellationToken) =>
             ValueTask.FromResult(source);
+    }
+
+    private sealed class BlockingTerminalStore : ITransferJobStore
+    {
+        private readonly object _sync = new();
+        private readonly TaskCompletionSource _allowTerminalSave =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TransferJob? _saved;
+
+        public TaskCompletionSource TerminalSaveStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IReadOnlyList<TransferJob>> LoadAsync(
+            CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                IReadOnlyList<TransferJob> jobs = _saved is null
+                    ? []
+                    : [TransferJob.Restore(_saved.ToSnapshot())];
+                return Task.FromResult(jobs);
+            }
+        }
+
+        public async Task SaveAsync(
+            TransferJob job,
+            CancellationToken cancellationToken = default)
+        {
+            if (job.Status == TransferStatus.Completed)
+            {
+                TerminalSaveStarted.TrySetResult();
+                await _allowTerminalSave.Task.ConfigureAwait(false);
+            }
+            else
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            lock (_sync)
+            {
+                _saved = TransferJob.Restore(job.ToSnapshot());
+            }
+        }
+
+        public Task DeleteAsync(
+            Guid jobId,
+            CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                if (_saved?.Id == jobId)
+                {
+                    _saved = null;
+                }
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public void AllowTerminalSave() => _allowTerminalSave.TrySetResult();
     }
 
     private sealed class RecordingMediaSource(
@@ -718,6 +994,8 @@ public sealed class PersistentTransferCoordinatorTests
 
         public void Move(string sourcePath, string destinationPath) =>
             File.Move(sourcePath, destinationPath);
+
+        public void Delete(string path) => File.Delete(path);
     }
 
     private sealed class DiskFullIOException : IOException

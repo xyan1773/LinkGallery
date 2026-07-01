@@ -79,6 +79,21 @@ public sealed class TransferJobTests
         Assert.Throws<InvalidOperationException>(job.Start);
     }
 
+    [TestMethod]
+    public void FailedTransferCanBeRetriedWithoutLosingProgress()
+    {
+        var job = CreateJob(totalBytes: 100);
+        job.Start();
+        job.ReportProgress(40);
+        job.Fail("offline");
+
+        job.Retry();
+
+        Assert.AreEqual(TransferStatus.Pending, job.Status);
+        Assert.AreEqual(40, job.BytesTransferred);
+        Assert.IsNull(job.FailureReason);
+    }
+
     private static TransferJob CreateJob(long totalBytes) =>
         new(
             Guid.NewGuid(),

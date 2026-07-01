@@ -60,6 +60,23 @@ public sealed class JsonTransferJobStore : ITransferJobStore, IDisposable
         }
     }
 
+    public async Task DeleteAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var snapshots = await ReadSnapshotsAsync(cancellationToken).ConfigureAwait(false);
+            if (snapshots.RemoveAll(candidate => candidate.Id == jobId) > 0)
+            {
+                await WriteSnapshotsAsync(snapshots, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public void Dispose() => _gate.Dispose();
 
     private async Task<List<TransferJobSnapshot>> ReadSnapshotsAsync(CancellationToken cancellationToken)
