@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,7 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun PermissionScreen() {
+fun PermissionScreen(connectionGuide: ConnectionGuide) {
     var permissionGranted by remember { mutableStateOf(false) }
     val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         arrayOf(
@@ -40,6 +42,7 @@ fun PermissionScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -60,6 +63,20 @@ fun PermissionScreen() {
                 Text("授予读取权限")
             }
         }
+        Text(
+            modifier = Modifier.padding(top = 32.dp),
+            text = connectionGuide.title,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            modifier = Modifier.padding(top = 8.dp),
+            text = connectionGuide.address,
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        Text(
+            modifier = Modifier.padding(top = 8.dp),
+            text = connectionGuide.detail,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }
-

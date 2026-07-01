@@ -32,6 +32,15 @@ Android SDK:    E:\tools\android-sdk
 - Android：Android Studio 打开 `android/`。
 - Android Studio 的 SDK Location 应指向 `E:\tools\android-sdk`。
 
+## Android 连接测试
+
+模拟器必须先执行 `adb forward tcp:39570 tcp:39570`，然后由 Windows 连接
+`127.0.0.1:39570`；不要使用模拟器内部的 `10.0.2.x` NAT 地址。真实手机则必须和
+Windows 位于同一 Wi-Fi，并使用 Android 页面显示的 LAN IP。
+
+完整的真机回归、防火墙和 Wi-Fi AP 客户端隔离排查步骤见
+[Android 连接与回归测试](connectivity-testing.md)。
+
 ## 协议变更
 
 `protocol/openapi.yaml` 是两端通信的唯一规范源。破坏兼容性的修改需要：
@@ -39,4 +48,3 @@ Android SDK:    E:\tools\android-sdk
 1. 新增 ADR；
 2. 提升 API 主版本；
 3. 说明旧客户端和旧手机端的行为。
-

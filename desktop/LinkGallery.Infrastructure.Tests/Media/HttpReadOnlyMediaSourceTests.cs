@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using LinkGallery.Application.Media;
 using LinkGallery.Domain.Media;
@@ -15,6 +16,23 @@ public sealed class HttpReadOnlyMediaSourceTests
         var result = HttpReadOnlyMediaSource.NormalizeApiAddress("192.168.1.8");
 
         Assert.AreEqual("http://192.168.1.8:39570/api/v1/", result.AbsoluteUri);
+    }
+
+    [TestMethod]
+    public void EmulatorNatAddressIsAcceptedButIdentifiedForGuidance()
+    {
+        var result = HttpReadOnlyMediaSource.NormalizeApiAddress("10.0.2.15:39570");
+
+        Assert.AreEqual("http://10.0.2.15:39570/api/v1/", result.AbsoluteUri);
+        Assert.IsTrue(HttpReadOnlyMediaSource.IsPotentialAndroidEmulatorNatAddress(result));
+    }
+
+    [TestMethod]
+    public void RegularLanAddressIsNotIdentifiedAsEmulatorNat()
+    {
+        var result = HttpReadOnlyMediaSource.NormalizeApiAddress("192.168.1.42:39570");
+
+        Assert.IsFalse(HttpReadOnlyMediaSource.IsPotentialAndroidEmulatorNatAddress(result));
     }
 
     [TestMethod]
@@ -128,6 +146,21 @@ public sealed class HttpReadOnlyMediaSourceTests
 
         await Assert.ThrowsAsync<MediaSourceTimeoutException>(
             () => source.GetDeviceInfoAsync(CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task RefusedConnectionThrowsTypedConnectionFailure()
+    {
+        var handler = new StubHandler((_, _) => throw new HttpRequestException(
+            "refused",
+            new SocketException((int)SocketError.ConnectionRefused)));
+        using var client = new HttpClient(handler);
+        var source = new HttpReadOnlyMediaSource(client, new Uri("http://phone/api/v1/"));
+
+        var exception = await Assert.ThrowsAsync<MediaSourceConnectionException>(
+            () => source.GetDeviceInfoAsync(CancellationToken.None));
+
+        Assert.AreEqual(MediaSourceConnectionFailure.ConnectionRefused, exception.Failure);
     }
 
     private static HttpResponseMessage Json(string body, HttpStatusCode statusCode = HttpStatusCode.OK) =>
