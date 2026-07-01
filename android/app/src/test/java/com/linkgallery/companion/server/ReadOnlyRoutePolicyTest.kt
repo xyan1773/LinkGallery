@@ -9,6 +9,7 @@ class ReadOnlyRoutePolicyTest {
     fun mediaReadsAreAllowed() {
         assertTrue(ReadOnlyRoutePolicy.permits("GET", "/api/v1/media"))
         assertTrue(ReadOnlyRoutePolicy.permits("GET", "/api/v1/device"))
+        assertTrue(ReadOnlyRoutePolicy.permits("GET", "/api/v1/media/media-1/content"))
     }
 
     @Test
@@ -17,6 +18,6 @@ class ReadOnlyRoutePolicyTest {
         assertFalse(ReadOnlyRoutePolicy.permits("PATCH", "/api/v1/media"))
         assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/media"))
         assertFalse(ReadOnlyRoutePolicy.permits("POST", "/api/v1/media/upload"))
-        assertFalse(ReadOnlyRoutePolicy.permits("GET", "/api/v1/media/{mediaId}/content"))
+        assertFalse(ReadOnlyRoutePolicy.permits("DELETE", "/api/v1/media/media-1/content"))
     }
 }

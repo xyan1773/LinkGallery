@@ -1,5 +1,7 @@
 package com.linkgallery.companion.media
 
+import java.io.InputStream
+
 data class MediaStoreCursor(
     val sortTimestampEpochMillis: Long,
     val mediaStoreId: Long,
@@ -40,6 +42,10 @@ interface MediaStoreDataSource {
     fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow?
 
     fun loadThumbnail(mediaStoreId: Long, type: MediaType, width: Int, height: Int): ByteArray? = null
+
+    fun openContent(mediaStoreId: Long, type: MediaType, offset: Long): InputStream? = null
+
+    fun getContentType(mediaStoreId: Long, type: MediaType): String? = null
 }
 
 interface MediaPermissionGateway {

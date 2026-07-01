@@ -7,6 +7,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -104,6 +105,7 @@ class LinkGalleryHttpServer(
                 method = parts[0]
                 target = parts[1]
                 var headerBytes = requestLine.length
+                val headers = mutableMapOf<String, String>()
                 while (true) {
                     val line = reader.readLine() ?: break
                     headerBytes += line.length
@@ -113,9 +115,17 @@ class LinkGalleryHttpServer(
                         return
                     }
                     if (line.isEmpty()) break
+                    val separator = line.indexOf(':')
+                    if (separator <= 0) {
+                        write(socket, ApiResponse(400, Json.problem("bad_request", "Malformed request header.")))
+                        status = 400
+                        return
+                    }
+                    headers[line.substring(0, separator).trim().lowercase(Locale.ROOT)] =
+                        line.substring(separator + 1).trim()
                 }
 
-                val response = executeController(method, target)
+                val response = executeController(method, target, headers)
                 status = response.status
                 write(socket, response)
             } catch (_: TimeoutException) {
@@ -135,9 +145,13 @@ class LinkGalleryHttpServer(
         }
     }
 
-    private fun executeController(method: String, target: String): ApiResponse {
+    private fun executeController(
+        method: String,
+        target: String,
+        headers: Map<String, String>,
+    ): ApiResponse {
         val task = handlerExecutor.submit<ApiResponse> {
-            runSuspending { controller.handle(method, target) }
+            runSuspending { controller.handle(method, target, headers) }
         }
         return try {
             task.get(config.requestTimeoutMilliseconds, TimeUnit.MILLISECONDS)
@@ -149,22 +163,37 @@ class LinkGalleryHttpServer(
 
     private fun write(socket: Socket, response: ApiResponse) {
         val body = response.binaryBody ?: response.body.toByteArray(StandardCharsets.UTF_8)
+        val contentLength = response.contentLength ?: body.size.toLong()
+        val input = response.binaryStream
         val reason = when (response.status) {
             200 -> "OK"
+            206 -> "Partial Content"
             400 -> "Bad Request"
             403 -> "Forbidden"
             404 -> "Not Found"
+            416 -> "Range Not Satisfiable"
             500 -> "Internal Server Error"
             504 -> "Gateway Timeout"
             else -> "Response"
         }
-        socket.getOutputStream().buffered().use { output ->
-            output.write("HTTP/1.1 ${response.status} $reason\r\n".toByteArray())
-            output.write("Content-Type: ${response.contentType}\r\n".toByteArray())
-            output.write("Content-Length: ${body.size}\r\n".toByteArray())
-            output.write("Connection: close\r\n\r\n".toByteArray())
-            output.write(body)
-            output.flush()
+        try {
+            socket.getOutputStream().buffered().use { output ->
+                output.write("HTTP/1.1 ${response.status} $reason\r\n".toByteArray())
+                output.write("Content-Type: ${response.contentType}\r\n".toByteArray())
+                output.write("Content-Length: $contentLength\r\n".toByteArray())
+                response.headers.forEach { (name, value) ->
+                    output.write("$name: $value\r\n".toByteArray())
+                }
+                output.write("Connection: close\r\n\r\n".toByteArray())
+                if (input != null) {
+                    input.copyTo(output)
+                } else {
+                    output.write(body)
+                }
+                output.flush()
+            }
+        } finally {
+            input?.close()
         }
     }
 

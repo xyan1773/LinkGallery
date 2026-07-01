@@ -37,6 +37,24 @@ public sealed class ThumbnailDiskCacheTests
     }
 
     [TestMethod]
+    public async Task ContainsReportsOnlyCompletedEntries()
+    {
+        using var directory = new TemporaryDirectory();
+        using var cache = new ThumbnailDiskCache(directory.Path, 1024);
+        var key = new ThumbnailCacheKey("phone", "photo", 10, 320, 240);
+
+        Assert.IsFalse(cache.Contains(key));
+        await using (await cache.GetOrCreateAsync(
+            key,
+            _ => Task.FromResult<Stream>(new MemoryStream("jpeg"u8.ToArray())),
+            CancellationToken.None))
+        {
+        }
+
+        Assert.IsTrue(cache.Contains(key));
+    }
+
+    [TestMethod]
     public async Task LeastRecentlyUsedFilesAreRemovedAtCapacity()
     {
         using var directory = new TemporaryDirectory();

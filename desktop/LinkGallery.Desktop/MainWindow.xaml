@@ -110,6 +110,8 @@
                          ItemsSource="{Binding TimelineRows}"
                          BorderThickness="0"
                          Background="Transparent"
+                         KeyDown="OnTimelineKeyDown"
+                         MouseDoubleClick="OnTimelineDoubleClick"
                          ScrollViewer.ScrollChanged="OnTimelineScrollChanged"
                          ScrollViewer.CanContentScroll="True"
                          VirtualizingPanel.IsVirtualizing="True"

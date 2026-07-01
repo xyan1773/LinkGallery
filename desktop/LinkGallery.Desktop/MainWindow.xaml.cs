@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using LinkGallery.Application.Media;
@@ -22,6 +23,8 @@ public partial class MainWindow : Window, IDisposable
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
     private readonly SqliteMediaIndex _mediaIndex;
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
+    private readonly LocalCopyCatalog _localCopies;
+    private readonly ThumbnailCacheReader _thumbnailCache;
     private CancellationTokenSource? _connectionCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
@@ -36,6 +39,9 @@ public partial class MainWindow : Window, IDisposable
             "LinkGallery");
         _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
         _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
+        _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
+        _thumbnailCache = new ThumbnailCacheReader(
+            Path.Combine(dataDirectory, "cache", "thumbnails"));
         InitializeComponent();
         DataContext = this;
     }
@@ -225,6 +231,44 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
+    private void OnTimelineDoubleClick(object sender, MouseButtonEventArgs e) =>
+        OpenSelectedMedia();
+
+    private void OnTimelineKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+        {
+            return;
+        }
+
+        OpenSelectedMedia();
+        e.Handled = true;
+    }
+
+    private void OpenSelectedMedia()
+    {
+        if (TimelineList.SelectedItem is not MediaRow selected)
+        {
+            return;
+        }
+
+        var items = TimelineRows.Select(static row => row.Item).ToArray();
+        var selectedIndex = Array.FindIndex(
+            items,
+            item => item.DeviceId == selected.Item.DeviceId &&
+                item.RemoteId == selected.Item.RemoteId);
+        var detail = new MediaDetailWindow(
+            items,
+            selectedIndex,
+            _source,
+            _localCopies,
+            _thumbnailCache)
+        {
+            Owner = this,
+        };
+        detail.Show();
+    }
+
     private async void OnTimelineScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (e.VerticalChange <= 0 ||
@@ -322,6 +366,7 @@ public partial class MainWindow : Window, IDisposable
         Disconnect(clearTimeline: true);
         _thumbnailConcurrency.Dispose();
         _httpClient.Dispose();
+        _localCopies.Dispose();
         _mediaIndex.Dispose();
         _disposed = true;
         GC.SuppressFinalize(this);

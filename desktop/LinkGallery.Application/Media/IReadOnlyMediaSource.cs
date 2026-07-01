@@ -22,6 +22,21 @@ public interface IReadOnlyMediaSource
         CancellationToken cancellationToken);
 }
 
+public interface IMediaPlaybackUriSource
+{
+    Uri GetOriginalUri(string remoteId);
+}
+
+public interface IMediaThumbnailCache
+{
+    bool IsThumbnailCached(MediaItem item, ThumbnailSize size);
+
+    Task<Stream?> OpenCachedThumbnailAsync(
+        MediaItem item,
+        ThumbnailSize size,
+        CancellationToken cancellationToken);
+}
+
 public sealed record MediaQuery(
     string? Cursor = null,
     int Limit = 100,
@@ -48,4 +63,3 @@ public readonly record struct ThumbnailSize
 
     public int Height { get; }
 }
-

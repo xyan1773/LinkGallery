@@ -29,6 +29,12 @@ public sealed class ThumbnailDiskCache : IDisposable
 
     public long MaximumBytes => _maximumBytes;
 
+    public bool Contains(ThumbnailCacheKey key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return File.Exists(GetPath(key));
+    }
+
     public async Task<Stream> GetOrCreateAsync(
         ThumbnailCacheKey key,
         Func<CancellationToken, Task<Stream>> fetch,
@@ -140,10 +146,13 @@ public sealed class ThumbnailDiskCache : IDisposable
     }
 
     private string GetPath(ThumbnailCacheKey key)
+        => GetPath(_directory, key);
+
+    internal static string GetPath(string directory, ThumbnailCacheKey key)
     {
         var value = $"{key.DeviceId}\n{key.RemoteId}\n{key.ModifiedAtUtcTicks}\n{key.Width}x{key.Height}";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
-        return Path.Combine(_directory, $"{hash}.jpg");
+        return Path.Combine(directory, $"{hash}.jpg");
     }
 
     private static FileStream OpenRead(string path) =>
