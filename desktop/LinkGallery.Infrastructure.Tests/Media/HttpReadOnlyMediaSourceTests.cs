@@ -140,7 +140,7 @@ public sealed class HttpReadOnlyMediaSourceTests
                     """),
                 "/api/v1/media" => Json(
                     """
-                    {"items":[{"id":"m1","fileName":"IMG.jpg","type":"image","fileSize":2048,"width":100,"height":80,"durationMilliseconds":null,"takenAt":"2026-06-30T01:00:00Z","modifiedAt":"2026-06-30T01:01:00Z","albumName":"Camera","relativePath":"DCIM/Camera","sourceDevice":null,"sourceApplication":null,"isEditedExport":false}],"nextCursor":null}
+                    {"items":[{"id":"m1","fileName":"IMG.jpg","type":"image","fileSize":2048,"width":100,"height":80,"durationMilliseconds":null,"takenAt":"2026-06-30T01:00:00Z","modifiedAt":"2026-06-30T01:01:00Z","albumName":"Camera","relativePath":"DCIM/Camera","sourceDevice":null,"sourceApplication":null,"isEditedExport":false}],"nextCursor":"cursor-2","hasMore":true,"total":42}
                     """),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
@@ -157,6 +157,9 @@ public sealed class HttpReadOnlyMediaSourceTests
         Assert.AreEqual(72, device.BatteryPercent);
         Assert.AreEqual(1, device.MediaCount);
         Assert.HasCount(1, page.Items);
+        Assert.IsTrue(page.HasMore);
+        Assert.AreEqual("cursor-2", page.NextCursor);
+        Assert.AreEqual(42, page.Total);
         Assert.AreEqual("phone-1", page.Items[0].DeviceId);
         Assert.AreEqual(MediaType.Image, page.Items[0].Type);
         StringAssert.Contains(handler.LastRequestUri?.Query, "limit=50");

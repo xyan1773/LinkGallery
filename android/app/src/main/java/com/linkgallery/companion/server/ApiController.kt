@@ -5,6 +5,7 @@ import com.linkgallery.companion.media.MediaContentResult
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRepository
+import com.linkgallery.companion.media.MediaStoreCursor
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
 import java.io.FilterInputStream
@@ -216,6 +217,24 @@ class ApiController(
 
         val cursor = parameters["cursor"]?.singleOrNull()
             ?: if ("cursor" in parameters) return invalidParameter("cursor") else null
+        val beforeSortTime = parameters["beforeSortTime"]?.singleOrNull()
+            ?: if ("beforeSortTime" in parameters) return invalidParameter("beforeSortTime") else null
+        val beforeId = parameters["beforeId"]?.singleOrNull()
+            ?: if ("beforeId" in parameters) return invalidParameter("beforeId") else null
+        if (cursor != null && (beforeSortTime != null || beforeId != null)) {
+            return invalidParameter("cursor")
+        }
+
+        val before = if (beforeSortTime != null || beforeId != null) {
+            val sortTime = beforeSortTime?.toLongOrNull()?.takeIf { it >= 0 }
+                ?: return invalidParameter("beforeSortTime")
+            val id = beforeId?.toLongOrNull()?.takeIf { it >= 0 }
+                ?: return invalidParameter("beforeId")
+            MediaStoreCursor(sortTime, id)
+        } else {
+            null
+        }
+
         val typeValues = parameters["type"].orEmpty()
             .flatMap { it.split(',') }
             .filter(String::isNotBlank)
@@ -235,7 +254,7 @@ class ApiController(
         return try {
             when (
                 val result = mediaRepository.getPage(
-                    MediaQuery(cursor = cursor, limit = limit, types = types),
+                    MediaQuery(cursor = cursor, before = before, limit = limit, types = types),
                 )
             ) {
                 is MediaPageResult.Success -> ApiResponse(200, Json.mediaPage(result.page))

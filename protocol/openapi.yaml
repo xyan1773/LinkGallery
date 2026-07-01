@@ -77,10 +77,27 @@ paths:
           in: query
           description: >
             Opaque keyset cursor returned by the preceding page. Media is ordered by
-            modified time descending and stable media ID descending. Clients must not
-            parse or construct this value.
+            sort time descending and stable media ID descending. Clients must not
+            parse or construct this value. Use either cursor or beforeSortTime/beforeId,
+            not both.
           schema:
             type: string
+        - name: beforeSortTime
+          in: query
+          description: >
+            Explicit keyset cursor timestamp in epoch milliseconds. When provided,
+            beforeId is also required.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: beforeId
+          in: query
+          description: Explicit keyset cursor media ID paired with beforeSortTime.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
         - name: limit
           in: query
           schema:
@@ -360,7 +377,7 @@ components:
           default: false
     MediaPage:
       type: object
-      required: [items]
+      required: [items, hasMore, total]
       properties:
         items:
           type: array
@@ -370,3 +387,10 @@ components:
           type: string
           description: Opaque cursor for the next page; null when the snapshot tail is reached.
           nullable: true
+        hasMore:
+          type: boolean
+          description: True when another page can be requested.
+        total:
+          type: integer
+          minimum: 0
+          description: Total media count matching the current type filter.

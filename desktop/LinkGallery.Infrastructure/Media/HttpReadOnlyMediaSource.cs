@@ -131,7 +131,11 @@ public sealed class HttpReadOnlyMediaSource :
         }
 
         var deviceId = _deviceId ?? throw new InvalidOperationException("请先加载设备信息，再加载媒体列表。");
-        return new MediaPage(dto.Items.Select(item => ToDomain(item, deviceId)).ToArray(), dto.NextCursor);
+        return new MediaPage(
+            dto.Items.Select(item => ToDomain(item, deviceId)).ToArray(),
+            dto.NextCursor,
+            dto.HasMore,
+            dto.Total);
     }
 
     public Task<Stream> OpenThumbnailAsync(
@@ -391,7 +395,11 @@ public sealed class HttpReadOnlyMediaSource :
         int? Battery,
         int MediaCount);
 
-    private sealed record MediaPageDto(IReadOnlyList<MediaItemDto>? Items, string? NextCursor);
+    private sealed record MediaPageDto(
+        IReadOnlyList<MediaItemDto>? Items,
+        string? NextCursor,
+        bool HasMore,
+        int? Total);
 
     private sealed record MediaItemDto(
         string Id,

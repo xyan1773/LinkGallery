@@ -62,7 +62,9 @@ public sealed record MediaQuery(
 
 public sealed record MediaPage(
     IReadOnlyList<MediaItem> Items,
-    string? NextCursor);
+    string? NextCursor,
+    bool HasMore = false,
+    int? Total = null);
 
 public readonly record struct ThumbnailSize
 {

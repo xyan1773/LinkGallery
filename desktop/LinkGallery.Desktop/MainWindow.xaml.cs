@@ -38,8 +38,11 @@ public partial class MainWindow : Window, IDisposable
     private CancellationTokenSource? _backgroundSyncCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
+    private string? _remoteNextCursor;
+    private bool _hasMoreRemoteItems;
     private bool _hasMoreIndexedItems;
     private bool _isLoadingPage;
+    private readonly HashSet<string> _loadedRemoteIds = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public MainWindow()
@@ -204,8 +207,12 @@ public partial class MainWindow : Window, IDisposable
                 timeout.Token);
 
             TimelineRows.Clear();
-            AppendTimelineItems(page.Items);
+            _loadedRemoteIds.Clear();
+            AppendTimelineItems(DeduplicateRemoteItems(page.Items));
+            _remoteNextCursor = page.NextCursor;
+            _hasMoreRemoteItems = page.HasMore || page.NextCursor is not null;
             _hasMoreIndexedItems = false;
+            UpdateTimelineFooter();
             TimelineList.Visibility = TimelineRows.Count == 0
                 ? Visibility.Collapsed
                 : Visibility.Visible;
@@ -230,6 +237,10 @@ public partial class MainWindow : Window, IDisposable
 
     private async Task ShowInitialPageDegradedAsync(string message)
     {
+        _remoteNextCursor = null;
+        _hasMoreRemoteItems = false;
+        _loadedRemoteIds.Clear();
+        UpdateTimelineFooter();
         StatusText.Text = message;
         await LoadIndexedPageAsync(
             reset: true,
@@ -256,10 +267,6 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             var sync = await _synchronizer.SynchronizeAsync(source, progress, cancellationToken);
-            await LoadIndexedPageAsync(
-                reset: true,
-                "手机中没有可显示的照片或视频",
-                cancellationToken);
             var syncMode = sync.WasFullScan ? "完整索引" : "增量更新";
             StatusText.Text =
                 $"已连接 · {syncMode} {sync.ItemsReceived:N0} 项（{sync.PagesFetched:N0} 页）" +
@@ -366,6 +373,7 @@ public partial class MainWindow : Window, IDisposable
                 cancellationToken);
             AppendTimelineItems(items);
             _hasMoreIndexedItems = items.Count == PageSize;
+            UpdateTimelineFooter();
             TimelineList.Visibility = TimelineRows.Count == 0
                 ? Visibility.Collapsed
                 : Visibility.Visible;
@@ -392,6 +400,20 @@ public partial class MainWindow : Window, IDisposable
             TimelineRows.Add(new MediaRow(item, dateHeader));
             previousDate = date;
         }
+    }
+
+    private List<MediaItem> DeduplicateRemoteItems(IReadOnlyList<MediaItem> items)
+    {
+        var unique = new List<MediaItem>(items.Count);
+        foreach (var item in items)
+        {
+            if (_loadedRemoteIds.Add(item.RemoteId))
+            {
+                unique.Add(item);
+            }
+        }
+
+        return unique;
     }
 
     private async void OnTimelineItemLoaded(object sender, RoutedEventArgs e)
@@ -485,8 +507,7 @@ public partial class MainWindow : Window, IDisposable
     private async void OnTimelineScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         if (e.VerticalChange <= 0 ||
-            e.VerticalOffset < e.ExtentHeight - e.ViewportHeight - 600 ||
-            !_hasMoreIndexedItems)
+            e.VerticalOffset < e.ExtentHeight - e.ViewportHeight - (e.ViewportHeight * 1.5))
         {
             return;
         }
@@ -494,6 +515,20 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             var cancellationToken = _connectionCancellation?.Token ?? CancellationToken.None;
+            if (_source is not null &&
+                !_source.IsOffline &&
+                string.IsNullOrWhiteSpace(SearchTextBox.Text))
+            {
+                await LoadRemoteNextPageAsync(_source, cancellationToken);
+                return;
+            }
+
+            if (!_hasMoreIndexedItems)
+            {
+                UpdateTimelineFooter();
+                return;
+            }
+
             await LoadIndexedPageAsync(
                 reset: false,
                 "本地索引中没有可显示的媒体",
@@ -507,6 +542,72 @@ public partial class MainWindow : Window, IDisposable
         {
             StatusText.Text = $"无法继续加载：{exception.Message}";
         }
+    }
+
+    private async Task LoadRemoteNextPageAsync(
+        CachingReadOnlyMediaSource source,
+        CancellationToken cancellationToken)
+    {
+        if (_isLoadingPage || !_hasMoreRemoteItems || _remoteNextCursor is null)
+        {
+            UpdateTimelineFooter();
+            return;
+        }
+
+        _isLoadingPage = true;
+        SetTimelineFooter("Loading more...");
+        try
+        {
+            var page = await source.GetMediaPageAsync(
+                new MediaQuery(Cursor: _remoteNextCursor, Limit: PageSize),
+                cancellationToken);
+            AppendTimelineItems(DeduplicateRemoteItems(page.Items));
+            _remoteNextCursor = page.NextCursor;
+            _hasMoreRemoteItems = page.HasMore || page.NextCursor is not null;
+            TimelineList.Visibility = TimelineRows.Count == 0
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            EmptyText.Visibility = TimelineRows.Count == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            StatusText.Text = page.Total.HasValue
+                ? $"Connected | Showing {TimelineRows.Count:N0}/{page.Total.Value:N0} items"
+                : $"Connected | Showing {TimelineRows.Count:N0} items";
+            UpdateTimelineFooter();
+        }
+        catch
+        {
+            SetTimelineFooter("Load failed");
+            throw;
+        }
+        finally
+        {
+            _isLoadingPage = false;
+        }
+    }
+
+    private void UpdateTimelineFooter()
+    {
+        if (_source is not null && !_source.IsOffline && TimelineRows.Count > 0)
+        {
+            SetTimelineFooter(_hasMoreRemoteItems ? null : "No more media");
+        }
+        else if (_source is null && TimelineRows.Count > 0)
+        {
+            SetTimelineFooter(_hasMoreIndexedItems ? null : "No more cached media");
+        }
+        else
+        {
+            SetTimelineFooter(null);
+        }
+    }
+
+    private void SetTimelineFooter(string? message)
+    {
+        TimelineFooterText.Text = message ?? "";
+        TimelineFooterText.Visibility = string.IsNullOrEmpty(message)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private async void OnSearchClick(object sender, RoutedEventArgs e)
@@ -745,10 +846,14 @@ public partial class MainWindow : Window, IDisposable
         _source?.Dispose();
         _source = null;
         _activeDeviceId = null;
+        _remoteNextCursor = null;
+        _hasMoreRemoteItems = false;
         _hasMoreIndexedItems = false;
         _isLoadingPage = false;
+        _loadedRemoteIds.Clear();
         DevicePanel.Visibility = Visibility.Collapsed;
         TimelineList.Visibility = Visibility.Collapsed;
+        SetTimelineFooter(null);
         if (clearTimeline)
         {
             TimelineRows.Clear();

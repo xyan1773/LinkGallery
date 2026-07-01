@@ -19,6 +19,8 @@ internal object Json {
             mediaItem(it)
         },
         "nextCursor" to nullableString(value.nextCursor),
+        "hasMore" to value.hasMore.toString(),
+        "total" to value.total.toString(),
     )
 
     fun problem(code: String, message: String): String = objectOf(

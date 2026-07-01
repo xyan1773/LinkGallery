@@ -15,15 +15,10 @@ class AndroidMediaStoreDataSource(
     private val contentResolver: ContentResolver,
 ) : MediaStoreDataSource {
     override fun query(request: MediaStoreRequest): List<MediaStoreRow> {
-        val (selection, arguments) = selectionFor(request.types, request.after)
+        val (selection, arguments) = selectionFor(request.types)
         val queryArguments = Bundle().apply {
             putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
             putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arguments.toTypedArray())
-            putString(
-                ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
-                "$SORT_TIMESTAMP DESC, $ID DESC",
-            )
-            putInt(ContentResolver.QUERY_ARG_LIMIT, request.limit)
         }
 
         return contentResolver.query(
@@ -38,6 +33,20 @@ class AndroidMediaStoreDataSource(
                 }
             }
         }.orEmpty()
+            .keysetPage(request.after, request.limit)
+    }
+
+    override fun count(types: Set<MediaType>): Int {
+        val (selection, arguments) = selectionFor(types)
+        return contentResolver.query(
+            COLLECTION,
+            arrayOf(ID),
+            selection,
+            arguments.toTypedArray(),
+            null,
+        )?.use { cursor ->
+            cursor.count
+        } ?: 0
     }
 
     override fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow? {
@@ -111,21 +120,13 @@ class AndroidMediaStoreDataSource(
 
     private fun selectionFor(
         types: Set<MediaType>,
-        after: MediaStoreCursor?,
     ): Pair<String, List<String>> {
         val arguments = mutableListOf<String>()
         val mediaTypePlaceholders = types.joinToString(",") { type ->
             arguments += type.mediaStoreValue.toString()
             "?"
         }
-        val clauses = mutableListOf("$MEDIA_TYPE IN ($mediaTypePlaceholders)")
-        if (after != null) {
-            clauses += "($SORT_TIMESTAMP < ? OR ($SORT_TIMESTAMP = ? AND $ID < ?))"
-            arguments += after.sortTimestampEpochMillis.toString()
-            arguments += after.sortTimestampEpochMillis.toString()
-            arguments += after.mediaStoreId.toString()
-        }
-        return clauses.joinToString(" AND ") to arguments
+        return "$MEDIA_TYPE IN ($mediaTypePlaceholders)" to arguments
     }
 
     private fun Cursor.toRow(): MediaStoreRow {
@@ -181,8 +182,6 @@ class AndroidMediaStoreDataSource(
         const val BUCKET_DISPLAY_NAME = MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME
         const val RELATIVE_PATH = MediaStore.MediaColumns.RELATIVE_PATH
         const val MEDIA_TYPE = MediaStore.Files.FileColumns.MEDIA_TYPE
-        const val SORT_TIMESTAMP = "COALESCE(NULLIF($DATE_TAKEN, 0), $DATE_MODIFIED * 1000)"
-
         val PROJECTION = arrayOf(
             ID,
             DISPLAY_NAME,

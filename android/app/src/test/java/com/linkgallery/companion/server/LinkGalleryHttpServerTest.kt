@@ -39,7 +39,7 @@ class LinkGalleryHttpServerTest {
         val release = CountDownLatch(1)
         val repository = object : MediaRepository {
             override suspend fun getPage(query: MediaQuery): MediaPageResult =
-                MediaPageResult.Success(MediaPage(emptyList(), null))
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0))
 
             override suspend fun getById(id: String): MediaItemResult =
                 MediaItemResult.NotFound
@@ -177,7 +177,7 @@ class LinkGalleryHttpServerTest {
     fun streamsRequestedByteRangeWithHttpHeaders() {
         val repository = object : MediaRepository {
             override suspend fun getPage(query: MediaQuery): MediaPageResult =
-                MediaPageResult.Success(MediaPage(emptyList(), null))
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0))
 
             override suspend fun getById(id: String): MediaItemResult =
                 MediaItemResult.NotFound
@@ -230,7 +230,7 @@ class LinkGalleryHttpServerTest {
     fun closesACommittedResponseWhenMediaDisappearsDuringStreaming() {
         val repository = object : MediaRepository {
             override suspend fun getPage(query: MediaQuery): MediaPageResult =
-                MediaPageResult.Success(MediaPage(emptyList(), null))
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0))
 
             override suspend fun getById(id: String): MediaItemResult =
                 MediaItemResult.NotFound
@@ -292,7 +292,7 @@ class LinkGalleryHttpServerTest {
 
     private object EmptyMediaRepository : MediaRepository {
         override suspend fun getPage(query: MediaQuery): MediaPageResult =
-            MediaPageResult.Success(MediaPage(emptyList(), null))
+            MediaPageResult.Success(MediaPage(emptyList(), null, false, 0))
 
         override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
     }

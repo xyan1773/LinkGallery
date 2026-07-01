@@ -14,11 +14,12 @@ class DefaultMediaRepository(
             return MediaPageResult.PermissionDenied(missingPermissions)
         }
 
-        val cursor = query.cursor?.let(tokenCodec::decodeCursor)
+        val cursor = query.before ?: query.cursor?.let(tokenCodec::decodeCursor)
         if (query.cursor != null && cursor == null) {
             return MediaPageResult.InvalidCursor
         }
 
+        val total = dataSource.count(query.types)
         val rows = dataSource.query(
             MediaStoreRequest(
                 after = cursor,
@@ -36,6 +37,8 @@ class DefaultMediaRepository(
                 } else {
                     null
                 },
+                hasMore = hasNextPage,
+                total = total,
             ),
         )
     }

@@ -78,7 +78,7 @@ public sealed class CachingReadOnlyMediaSource :
             var page = await _inner.GetMediaPageAsync(query, cancellationToken).ConfigureAwait(false);
             IsOffline = false;
             Remember(page.Items);
-            _snapshot.Pages[key] = new CachedPage([.. page.Items], page.NextCursor);
+            _snapshot.Pages[key] = new CachedPage([.. page.Items], page.NextCursor, page.HasMore, page.Total);
             await SaveSnapshotAsync(cancellationToken).ConfigureAwait(false);
             return page;
         }
@@ -91,7 +91,7 @@ public sealed class CachingReadOnlyMediaSource :
 
             IsOffline = true;
             Remember(cached.Items);
-            return new MediaPage(cached.Items, cached.NextCursor);
+            return new MediaPage(cached.Items, cached.NextCursor, cached.HasMore, cached.Total);
         }
     }
 
@@ -225,5 +225,5 @@ public sealed class CachingReadOnlyMediaSource :
         public Dictionary<string, CachedPage> Pages { get; set; } = new(StringComparer.Ordinal);
     }
 
-    public sealed record CachedPage(List<MediaItem> Items, string? NextCursor);
+    public sealed record CachedPage(List<MediaItem> Items, string? NextCursor, bool HasMore, int? Total);
 }

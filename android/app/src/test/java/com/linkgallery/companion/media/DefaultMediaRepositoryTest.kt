@@ -35,10 +35,45 @@ class DefaultMediaRepositoryTest {
         assertEquals("Camera", page.items[0].albumName)
         assertFalse(page.items[0].id.contains("DCIM"))
         assertTrue(page.nextCursor?.startsWith("lgc2_") == true)
+        assertTrue(page.hasMore)
+        assertEquals(3, page.total)
         assertEquals(3, source.lastRequest?.limit)
 
         repository.getPage(MediaQuery(cursor = page.nextCursor, limit = 2))
         assertEquals(MediaStoreCursor(30_500, 2), source.lastRequest?.after)
+    }
+
+    @Test
+    fun `cursor and explicit before parameters load stable non overlapping pages`() = runSuspend {
+        val rows = (1L..15L).map { id ->
+            row(id = id, modified = id, taken = 1_000L * id)
+        }
+        val repository = DefaultMediaRepository(FakeDataSource(rows), FakePermissionGateway())
+
+        val first = (repository.getPage(MediaQuery(limit = 5)) as MediaPageResult.Success).page
+        val secondByCursor = (
+            repository.getPage(MediaQuery(cursor = first.nextCursor, limit = 5)) as
+                MediaPageResult.Success
+            ).page
+        val secondByBefore = (
+            repository.getPage(
+                MediaQuery(before = MediaStoreCursor(11_000, 11), limit = 5),
+            ) as MediaPageResult.Success
+            ).page
+        val third = (
+            repository.getPage(MediaQuery(cursor = secondByCursor.nextCursor, limit = 5)) as
+                MediaPageResult.Success
+            ).page
+
+        assertEquals(listOf(15L, 14L, 13L, 12L, 11L), first.items.map(::decodeTestMediaId))
+        assertEquals(listOf(10L, 9L, 8L, 7L, 6L), secondByCursor.items.map(::decodeTestMediaId))
+        assertEquals(secondByCursor.items.map(::decodeTestMediaId), secondByBefore.items.map(::decodeTestMediaId))
+        assertFalse(first.items.map { it.id }.any { id -> id in secondByCursor.items.map { it.id } })
+        assertTrue(first.hasMore)
+        assertTrue(secondByCursor.hasMore)
+        assertEquals(listOf(5L, 4L, 3L, 2L, 1L), third.items.map(::decodeTestMediaId))
+        assertFalse(third.hasMore)
+        assertNull(third.nextCursor)
     }
 
     @Test
@@ -50,6 +85,8 @@ class DefaultMediaRepositoryTest {
         val page = (result as MediaPageResult.Success).page
         assertTrue(page.items.isEmpty())
         assertNull(page.nextCursor)
+        assertFalse(page.hasMore)
+        assertEquals(0, page.total)
     }
 
     @Test
@@ -156,20 +193,11 @@ class DefaultMediaRepositoryTest {
             lastRequest = request
             return rows
                 .filter { it.type in request.types }
-                .filter {
-                    request.after == null ||
-                        it.sortTimestampEpochMillis < request.after.sortTimestampEpochMillis ||
-                        (
-                            it.sortTimestampEpochMillis == request.after.sortTimestampEpochMillis &&
-                                it.mediaStoreId < request.after.mediaStoreId
-                            )
-                }
-                .sortedWith(
-                    compareByDescending<MediaStoreRow> { it.sortTimestampEpochMillis }
-                        .thenByDescending { it.mediaStoreId },
-                )
-                .take(request.limit)
+                .keysetPage(request.after, request.limit)
         }
+
+        override fun count(types: Set<MediaType>): Int =
+            rows.count { it.type in types }
 
         override fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow? =
             rows.find { it.mediaStoreId == mediaStoreId && it.type == type }
@@ -208,6 +236,13 @@ class DefaultMediaRepositoryTest {
             albumName = "Camera",
             relativePath = "DCIM/Camera/",
         )
+
+        fun decodeTestMediaId(item: MediaRecord): Long =
+            requireNotNull(
+                item.fileName.removePrefix("photo-").removeSuffix(".jpg").toLongOrNull(),
+            ) {
+                "Unexpected test media file name: ${item.fileName}"
+            }
 
         fun runSuspend(block: suspend () -> Unit) {
             var failure: Throwable? = null

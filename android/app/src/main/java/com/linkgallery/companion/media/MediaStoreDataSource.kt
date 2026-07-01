@@ -30,6 +30,26 @@ data class MediaStoreRow(
         get() = dateTakenEpochMillis?.takeIf { it > 0 } ?: dateModifiedEpochSeconds * 1000
 }
 
+internal fun Iterable<MediaStoreRow>.keysetPage(
+    after: MediaStoreCursor?,
+    limit: Int,
+): List<MediaStoreRow> =
+    asSequence()
+        .filter { row -> after == null || row.isBefore(after) }
+        .sortedWith(
+            compareByDescending<MediaStoreRow> { it.sortTimestampEpochMillis }
+                .thenByDescending { it.mediaStoreId },
+        )
+        .take(limit)
+        .toList()
+
+private fun MediaStoreRow.isBefore(cursor: MediaStoreCursor): Boolean =
+    sortTimestampEpochMillis < cursor.sortTimestampEpochMillis ||
+        (
+            sortTimestampEpochMillis == cursor.sortTimestampEpochMillis &&
+                mediaStoreId < cursor.mediaStoreId
+            )
+
 /**
  * Injectable, read-only boundary around Android's MediaStore.
  *
@@ -38,6 +58,8 @@ data class MediaStoreRow(
  */
 interface MediaStoreDataSource {
     fun query(request: MediaStoreRequest): List<MediaStoreRow>
+
+    fun count(types: Set<MediaType>): Int
 
     fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow?
 

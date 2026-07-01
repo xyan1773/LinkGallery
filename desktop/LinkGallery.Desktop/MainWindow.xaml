@@ -120,6 +120,14 @@
                            FontSize="22"
                            Foreground="#6B7280"
                            Text="输入手机地址开始连接" />
+                <TextBlock x:Name="TimelineFooterText"
+                           Margin="0,0,0,8"
+                           Padding="10,5"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Bottom"
+                           Background="#E5E7EB"
+                           Foreground="#4B5563"
+                           Visibility="Collapsed" />
                 <ListBox x:Name="TimelineList"
                          ItemsSource="{Binding TimelineRows}"
                          SelectionMode="Extended"

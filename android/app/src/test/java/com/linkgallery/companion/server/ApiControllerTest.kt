@@ -46,6 +46,24 @@ class ApiControllerTest {
         assertTrue(response.body.contains(""""type":"image""""))
         assertTrue(response.body.contains(""""takenAt":"2026-06-30T00:00:00Z""""))
         assertTrue(response.body.contains(""""nextCursor":"next-page""""))
+        assertTrue(response.body.contains(""""hasMore":true"""))
+        assertTrue(response.body.contains(""""total":2"""))
+    }
+
+    @Test
+    fun mediaResponseAcceptsExplicitBeforeCursor() {
+        val repository = RecordingMediaRepository(
+            MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
+        )
+
+        val response = runSuspend {
+            controller(repository = repository)
+                .handle("GET", "/api/v1/media?beforeSortTime=1234&beforeId=42")
+        }
+
+        assertEquals(200, response.status)
+        assertEquals(1234L, repository.lastQuery?.before?.sortTimestampEpochMillis)
+        assertEquals(42L, repository.lastQuery?.before?.mediaStoreId)
     }
 
     @Test
@@ -93,7 +111,7 @@ class ApiControllerTest {
         val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2)
         val controller = controller(
             repository = FakeMediaRepository(
-                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
                 MediaThumbnailResult.Found(jpeg),
             ),
         )
@@ -117,7 +135,7 @@ class ApiControllerTest {
         val offsets = mutableListOf<Long>()
         val controller = controller(
             repository = FakeMediaRepository(
-                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
                 contentResult = MediaContentResult.Found(
                     MediaContent(bytes.size.toLong(), "video/mp4", "\"entity-v1\"") { offset ->
                         offsets += offset
@@ -165,7 +183,7 @@ class ApiControllerTest {
         var opened = false
         val controller = controller(
             repository = FakeMediaRepository(
-                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
                 contentResult = MediaContentResult.Found(
                     MediaContent(10, "video/mp4") {
                         opened = true
@@ -204,7 +222,7 @@ class ApiControllerTest {
         var openedAt: Long? = null
         val controller = controller(
             repository = FakeMediaRepository(
-                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
                 contentResult = MediaContentResult.Found(
                     MediaContent(contentLength, "video/mp4") { offset ->
                         openedAt = offset
@@ -236,7 +254,7 @@ class ApiControllerTest {
     fun contentRemovedBeforeStreamOpenReturns404() {
         val controller = controller(
             repository = FakeMediaRepository(
-                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
                 contentResult = MediaContentResult.Found(
                     MediaContent(10, "video/mp4") { null },
                 ),
@@ -256,7 +274,7 @@ class ApiControllerTest {
         val bytes = "0123456789".toByteArray()
         val controller = controller(
             repository = FakeMediaRepository(
-                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
                 contentResult = MediaContentResult.Found(
                     MediaContent(bytes.size.toLong(), "video/mp4") { offset ->
                         ByteArrayInputStream(bytes, offset.toInt(), bytes.size - offset.toInt())
@@ -283,7 +301,7 @@ class ApiControllerTest {
         val denied = runSuspend {
             controller(
                 repository = FakeMediaRepository(
-                    MediaPageResult.Success(MediaPage(emptyList(), null)),
+                    MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
                     contentResult = MediaContentResult.PermissionDenied(setOf("READ_MEDIA_VIDEO")),
                 ),
             ).handle("GET", "/api/v1/media/media-1/content")
@@ -310,7 +328,7 @@ class ApiControllerTest {
 
     private fun controller(
         repository: MediaRepository = FakeMediaRepository(
-            MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page")),
+            MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),
         ),
     ): ApiController = ApiController(
         deviceInfoProvider = DeviceInfoProvider {
@@ -343,6 +361,19 @@ class ApiControllerTest {
         ): MediaThumbnailResult = thumbnailResult
 
         override suspend fun getContent(id: String): MediaContentResult = contentResult
+    }
+
+    private class RecordingMediaRepository(
+        private val pageResult: MediaPageResult,
+    ) : MediaRepository {
+        var lastQuery: MediaQuery? = null
+
+        override suspend fun getPage(query: MediaQuery): MediaPageResult {
+            lastQuery = query
+            return pageResult
+        }
+
+        override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
     }
 
     private companion object {
