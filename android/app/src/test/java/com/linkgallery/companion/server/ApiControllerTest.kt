@@ -119,7 +119,7 @@ class ApiControllerTest {
             repository = FakeMediaRepository(
                 MediaPageResult.Success(MediaPage(emptyList(), null)),
                 contentResult = MediaContentResult.Found(
-                    MediaContent(bytes.size.toLong(), "video/mp4") { offset ->
+                    MediaContent(bytes.size.toLong(), "video/mp4", "\"entity-v1\"") { offset ->
                         offsets += offset
                         ByteArrayInputStream(bytes, offset.toInt(), bytes.size - offset.toInt())
                     },
@@ -134,7 +134,14 @@ class ApiControllerTest {
             controller.handle(
                 "GET",
                 "/api/v1/media/media-1/content",
-                mapOf("Range" to "bytes=3-6"),
+                mapOf("Range" to "bytes=3-6", "If-Range" to "\"entity-v1\""),
+            )
+        }
+        val changed = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/media/media-1/content",
+                mapOf("Range" to "bytes=3-6", "If-Range" to "\"stale\""),
             )
         }
 
@@ -142,12 +149,15 @@ class ApiControllerTest {
         assertEquals("video/mp4", full.contentType)
         assertEquals(10L, full.contentLength)
         assertEquals("bytes", full.headers["Accept-Ranges"])
+        assertEquals("\"entity-v1\"", full.headers["ETag"])
         assertEquals("0123456789", full.binaryStream!!.use { String(it.readBytes()) })
         assertEquals(206, partial.status)
         assertEquals(4L, partial.contentLength)
         assertEquals("bytes 3-6/10", partial.headers["Content-Range"])
         assertEquals("3456", partial.binaryStream!!.use { String(it.readBytes()) })
-        assertEquals(listOf(0L, 3L), offsets)
+        assertEquals(200, changed.status)
+        assertEquals("0123456789", changed.binaryStream!!.use { String(it.readBytes()) })
+        assertEquals(listOf(0L, 3L, 0L), offsets)
     }
 
     @Test

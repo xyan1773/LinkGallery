@@ -1,6 +1,7 @@
 package com.linkgallery.companion.media
 
 import java.time.Instant
+import java.security.MessageDigest
 
 class DefaultMediaRepository(
     private val dataSource: MediaStoreDataSource,
@@ -79,11 +80,31 @@ class DefaultMediaRepository(
                 MediaType.IMAGE -> "image/*"
                 MediaType.VIDEO -> "video/*"
             }
+        val entity = dataSource.openContent(locator.mediaStoreId, locator.type, 0)
+            ?.use(::computeEntity)
+            ?: return MediaContentResult.NotFound
+        if (entity.length != row.fileSize) {
+            return MediaContentResult.NotFound
+        }
         return MediaContentResult.Found(
-            MediaContent(row.fileSize, contentType) { offset ->
+            MediaContent(row.fileSize, contentType, entity.entityTag) { offset ->
                 dataSource.openContent(locator.mediaStoreId, locator.type, offset)
             },
         )
+    }
+
+    private fun computeEntity(input: java.io.InputStream): ContentEntity {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var length = 0L
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+            length += read
+        }
+        val hash = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        return ContentEntity(length, "\"sha256-$hash\"")
     }
 
     private fun toRecord(row: MediaStoreRow): MediaRecord {
@@ -105,4 +126,9 @@ class DefaultMediaRepository(
             relativePath = row.relativePath,
         )
     }
+
+    private data class ContentEntity(
+        val length: Long,
+        val entityTag: String,
+    )
 }

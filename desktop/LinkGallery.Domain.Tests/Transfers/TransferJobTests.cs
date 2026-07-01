@@ -25,7 +25,7 @@ public sealed class TransferJobTests
         job.Start();
         job.ReportProgress(99);
 
-        Assert.Throws<InvalidOperationException>(job.Complete);
+        Assert.Throws<InvalidOperationException>(() => job.Complete());
     }
 
     [TestMethod]
@@ -46,12 +46,37 @@ public sealed class TransferJobTests
         job.ReportProgress(40);
         job.Pause();
 
+        job.Resume();
         job.Start();
         job.ReportProgress(100);
         job.Complete();
 
         Assert.AreEqual(100, job.BytesTransferred);
         Assert.AreEqual(TransferStatus.Completed, job.Status);
+    }
+
+    [TestMethod]
+    public void RunningSnapshotRecoversToPendingWithoutLosingProgress()
+    {
+        var job = CreateJob(totalBytes: 100);
+        job.Start();
+        job.ReportProgress(40);
+        var restored = TransferJob.Restore(job.ToSnapshot());
+
+        restored.RecoverAfterRestart();
+
+        Assert.AreEqual(TransferStatus.Pending, restored.Status);
+        Assert.AreEqual(40, restored.BytesTransferred);
+    }
+
+    [TestMethod]
+    public void CancelledTransferRejectsFurtherTransitions()
+    {
+        var job = CreateJob(totalBytes: 100);
+        job.Cancel();
+
+        Assert.AreEqual(TransferStatus.Cancelled, job.Status);
+        Assert.Throws<InvalidOperationException>(job.Start);
     }
 
     private static TransferJob CreateJob(long totalBytes) =>

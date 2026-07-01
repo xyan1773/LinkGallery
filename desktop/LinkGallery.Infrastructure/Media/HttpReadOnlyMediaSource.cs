@@ -11,7 +11,10 @@ using LinkGallery.Domain.Media;
 
 namespace LinkGallery.Infrastructure.Media;
 
-public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlaybackUriSource
+public sealed class HttpReadOnlyMediaSource :
+    IReadOnlyMediaSource,
+    IMediaPlaybackUriSource,
+    IEntityAwareMediaSource
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -138,12 +141,27 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlayba
         OpenStreamAsync(
             $"media/{Uri.EscapeDataString(remoteId)}/thumbnail?width={size.Width}&height={size.Height}",
             offset: null,
+            entityTag: null,
             cancellationToken);
 
     public Task<Stream> OpenOriginalAsync(string remoteId, long offset, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
-        return OpenStreamAsync($"media/{Uri.EscapeDataString(remoteId)}/content", offset, cancellationToken);
+        return OpenOriginalAsync(remoteId, offset, entityTag: null, cancellationToken);
+    }
+
+    public Task<Stream> OpenOriginalAsync(
+        string remoteId,
+        long offset,
+        string? entityTag,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        return OpenStreamAsync(
+            $"media/{Uri.EscapeDataString(remoteId)}/content",
+            offset,
+            entityTag,
+            cancellationToken);
     }
 
     public Uri GetOriginalUri(string remoteId)
@@ -156,7 +174,11 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlayba
 
     private async Task<T> GetJsonAsync<T>(string relativePath, CancellationToken cancellationToken)
     {
-        using var response = await SendAsync(relativePath, offset: null, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(
+            relativePath,
+            offset: null,
+            entityTag: null,
+            cancellationToken).ConfigureAwait(false);
         try
         {
             return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken).ConfigureAwait(false)
@@ -171,9 +193,10 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlayba
     private async Task<Stream> OpenStreamAsync(
         string relativePath,
         long? offset,
+        string? entityTag,
         CancellationToken cancellationToken)
     {
-        var response = await SendAsync(relativePath, offset, cancellationToken).ConfigureAwait(false);
+        var response = await SendAsync(relativePath, offset, entityTag, cancellationToken).ConfigureAwait(false);
         try
         {
             var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -189,6 +212,7 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlayba
     private async Task<HttpResponseMessage> SendAsync(
         string relativePath,
         long? offset,
+        string? entityTag,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -197,6 +221,17 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlayba
         if (offset.HasValue)
         {
             request.Headers.Range = new RangeHeaderValue(offset.Value, null);
+        }
+
+        if (entityTag is not null)
+        {
+            if (!EntityTagHeaderValue.TryParse(entityTag, out var parsedEntityTag) ||
+                parsedEntityTag.IsWeak)
+            {
+                throw new ArgumentException("A strong ETag is required for If-Range.", nameof(entityTag));
+            }
+
+            request.Headers.IfRange = new RangeConditionHeaderValue(parsedEntityTag);
         }
 
         HttpResponseMessage response;
@@ -223,6 +258,19 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlayba
 
         if (response.IsSuccessStatusCode)
         {
+            if (offset > 0)
+            {
+                var range = response.Content.Headers.ContentRange;
+                if (response.StatusCode != HttpStatusCode.PartialContent ||
+                    range?.Unit != "bytes" ||
+                    range.From != offset)
+                {
+                    response.Dispose();
+                    throw new MediaSourceProtocolException(
+                        "The phone did not honor the requested resume offset.");
+                }
+            }
+
             return response;
         }
 
@@ -363,8 +411,17 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource, IMediaPlayba
 
     private sealed record ProblemDto(string Code, string Message);
 
-    private sealed class ResponseOwnedStream(Stream inner, HttpResponseMessage response) : Stream
+    private sealed class ResponseOwnedStream(Stream inner, HttpResponseMessage response)
+        : Stream, IRemoteMediaStreamMetadata
     {
+        public long? TotalLength =>
+            response.Content.Headers.ContentRange?.Length ??
+            response.Content.Headers.ContentLength;
+
+        public DateTimeOffset? LastModified => response.Content.Headers.LastModified;
+
+        public string? EntityTag => response.Headers.ETag?.ToString();
+
         public override bool CanRead => inner.CanRead;
         public override bool CanSeek => inner.CanSeek;
         public override bool CanWrite => inner.CanWrite;

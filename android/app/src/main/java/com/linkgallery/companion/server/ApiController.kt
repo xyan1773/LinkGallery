@@ -51,19 +51,26 @@ class ApiController(
                 } catch (_: IllegalArgumentException) {
                     return problem(400, "invalid_parameter", "The media ID is invalid.")
                 }
-                getContent(mediaId, headers.entries.firstOrNull {
-                    it.key.equals("Range", ignoreCase = true)
-                }?.value)
+                getContent(
+                    mediaId,
+                    rangeHeader = header(headers, "Range"),
+                    ifRangeHeader = header(headers, "If-Range"),
+                )
             } else {
                 problem(404, "not_found", "The requested route does not exist.")
             }
         }
     }
 
-    private suspend fun getContent(mediaId: String, rangeHeader: String?): ApiResponse {
+    private suspend fun getContent(
+        mediaId: String,
+        rangeHeader: String?,
+        ifRangeHeader: String?,
+    ): ApiResponse {
         return try {
             when (val result = mediaRepository.getContent(mediaId)) {
-                is MediaContentResult.Found -> contentResponse(result.content, rangeHeader)
+                is MediaContentResult.Found ->
+                    contentResponse(result.content, rangeHeader, ifRangeHeader)
                 is MediaContentResult.PermissionDenied ->
                     permissionDenied(result.requiredPermissions)
                 MediaContentResult.NotFound ->
@@ -74,8 +81,20 @@ class ApiController(
         }
     }
 
-    private fun contentResponse(content: MediaContent, rangeHeader: String?): ApiResponse {
-        val range = parseRange(rangeHeader, content.length)
+    private fun contentResponse(
+        content: MediaContent,
+        rangeHeader: String?,
+        ifRangeHeader: String?,
+    ): ApiResponse {
+        val effectiveRange = if (
+            ifRangeHeader == null ||
+            content.entityTag != null && ifRangeHeader == content.entityTag
+        ) {
+            rangeHeader
+        } else {
+            null
+        }
+        val range = parseRange(effectiveRange, content.length)
             ?: return ApiResponse(
                 status = 416,
                 body = "",
@@ -83,7 +102,7 @@ class ApiController(
                 headers = mapOf(
                     "Accept-Ranges" to "bytes",
                     "Content-Range" to "bytes */${content.length}",
-                ),
+                ) + listOfNotNull(content.entityTag?.let { "ETag" to it }),
             )
         val stream = content.open(range.start)
             ?: return problem(404, "not_found", "The requested media item does not exist.")
@@ -95,6 +114,7 @@ class ApiController(
             contentLength = range.length,
             headers = buildMap {
                 put("Accept-Ranges", "bytes")
+                content.entityTag?.let { put("ETag", it) }
                 if (range.isPartial) {
                     put(
                         "Content-Range",
@@ -104,6 +124,9 @@ class ApiController(
             },
         )
     }
+
+    private fun header(headers: Map<String, String>, name: String): String? =
+        headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
 
     private fun parseRange(header: String?, length: Long): ContentRange? {
         if (header == null) return ContentRange(0, length, isPartial = false)
