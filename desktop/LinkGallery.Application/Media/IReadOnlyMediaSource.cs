@@ -27,6 +27,24 @@ public interface IMediaPlaybackUriSource
     Uri GetOriginalUri(string remoteId);
 }
 
+public interface IEntityAwareMediaSource
+{
+    Task<Stream> OpenOriginalAsync(
+        string remoteId,
+        long offset,
+        string? entityTag,
+        CancellationToken cancellationToken);
+}
+
+public interface IRemoteMediaStreamMetadata
+{
+    long? TotalLength { get; }
+
+    DateTimeOffset? LastModified { get; }
+
+    string? EntityTag { get; }
+}
+
 public interface IMediaThumbnailCache
 {
     bool IsThumbnailCached(MediaItem item, ThumbnailSize size);

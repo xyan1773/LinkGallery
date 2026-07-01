@@ -60,7 +60,7 @@ public sealed class HttpReadOnlyMediaSourceTests
             range = request.Headers.Range?.ToString();
             return new HttpResponseMessage(HttpStatusCode.PartialContent)
             {
-                Content = new ByteArrayContent([1, 2, 3]),
+                Content = CreateRangeContent([1, 2, 3], 1_048_576, 1_048_578, 2_000_000),
             };
         });
         using var client = new HttpClient(handler);
@@ -75,6 +75,55 @@ public sealed class HttpReadOnlyMediaSourceTests
 
         Assert.AreEqual("bytes=1048576-", range);
         Assert.AreEqual(3, stream.Length);
+        Assert.AreEqual(
+            2_000_000,
+            ((IRemoteMediaStreamMetadata)stream).TotalLength);
+    }
+
+    [TestMethod]
+    public async Task OriginalStreamRejectsServerThatIgnoresResumeOffset()
+    {
+        using var client = new HttpClient(new StubHandler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([1, 2, 3]),
+            }));
+        var source = new HttpReadOnlyMediaSource(
+            client,
+            new Uri("http://phone:39570/api/v1/"));
+
+        await Assert.ThrowsAsync<MediaSourceProtocolException>(
+            () => source.OpenOriginalAsync("video-1", 10, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task ResumeSendsIfRangeAndExposesReturnedEntityTag()
+    {
+        const string entityTag =
+            "\"sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"";
+        string? ifRange = null;
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            ifRange = request.Headers.IfRange?.ToString();
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
+            {
+                Content = CreateRangeContent([2, 3], 1, 2, 3),
+            };
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue(entityTag);
+            return response;
+        }));
+        var source = new HttpReadOnlyMediaSource(
+            client,
+            new Uri("http://phone:39570/api/v1/"));
+
+        await using var stream = await source.OpenOriginalAsync(
+            "video-1",
+            1,
+            entityTag,
+            CancellationToken.None);
+
+        Assert.AreEqual(entityTag, ifRange);
+        Assert.AreEqual(entityTag, ((IRemoteMediaStreamMetadata)stream).EntityTag);
     }
 
     [TestMethod]
@@ -168,6 +217,16 @@ public sealed class HttpReadOnlyMediaSourceTests
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+
+    private static ByteArrayContent CreateRangeContent(byte[] bytes, long from, long to, long length)
+    {
+        var content = new ByteArrayContent(bytes);
+        content.Headers.ContentRange = new System.Net.Http.Headers.ContentRangeHeaderValue(
+            from,
+            to,
+            length);
+        return content;
+    }
 
     private sealed class StubHandler : HttpMessageHandler
     {

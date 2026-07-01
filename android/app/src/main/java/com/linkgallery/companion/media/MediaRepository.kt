@@ -57,6 +57,7 @@ sealed interface MediaThumbnailResult {
 class MediaContent(
     val length: Long,
     val contentType: String,
+    val entityTag: String? = null,
     private val openAt: (Long) -> InputStream?,
 ) {
     init {

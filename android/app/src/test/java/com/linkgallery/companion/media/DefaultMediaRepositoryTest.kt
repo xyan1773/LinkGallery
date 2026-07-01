@@ -107,7 +107,7 @@ class DefaultMediaRepositoryTest {
 
     @Test
     fun `opens original content at requested offset after permission check`() = runSuspend {
-        val source = FakeDataSource(rows = listOf(row(id = 7, type = MediaType.VIDEO)))
+        val source = FakeDataSource(rows = listOf(row(id = 7, type = MediaType.VIDEO, size = 10)))
         val repository = DefaultMediaRepository(source, FakePermissionGateway())
         val id = (
             repository.getPage(MediaQuery(types = setOf(MediaType.VIDEO))) as
@@ -117,8 +117,9 @@ class DefaultMediaRepositoryTest {
         val result = repository.getContent(id) as MediaContentResult.Found
         val bytes = result.content.open(3)!!.use { it.readBytes() }
 
-        assertEquals(4_096L, result.content.length)
+        assertEquals(10L, result.content.length)
         assertEquals("video/mp4", result.content.contentType)
+        assertTrue(result.content.entityTag!!.startsWith("\"sha256-"))
         assertEquals(3L, source.lastContentOffset)
         assertEquals("3456789", String(bytes))
     }
@@ -193,11 +194,12 @@ class DefaultMediaRepositoryTest {
             modified: Long = 10,
             taken: Long? = 30_500,
             type: MediaType = MediaType.IMAGE,
+            size: Long = 4_096,
         ) = MediaStoreRow(
             mediaStoreId = id,
             fileName = "photo-$id.jpg",
             type = type,
-            fileSize = 4_096,
+            fileSize = size,
             dateTakenEpochMillis = taken,
             dateModifiedEpochSeconds = modified,
             width = 1920,
