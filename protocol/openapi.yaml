@@ -156,6 +156,11 @@ paths:
       responses:
         "200":
           description: Complete media content
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                enum: [bytes]
           content:
             application/octet-stream:
               schema:
@@ -164,6 +169,10 @@ paths:
         "206":
           description: Partial media content
           headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                enum: [bytes]
             Content-Range:
               schema:
                 type: string
@@ -176,6 +185,16 @@ paths:
           $ref: "#/components/responses/NotFound"
         "416":
           description: Requested byte range is not satisfiable
+          headers:
+            Accept-Ranges:
+              schema:
+                type: string
+                enum: [bytes]
+            Content-Range:
+              required: true
+              schema:
+                type: string
+                example: bytes */123456
 components:
   securitySchemes:
     bearerAuth:

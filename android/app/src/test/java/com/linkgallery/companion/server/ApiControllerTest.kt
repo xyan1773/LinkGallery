@@ -181,9 +181,91 @@ class ApiControllerTest {
         }
 
         assertEquals(416, malformed.status)
+        assertEquals("bytes", malformed.headers["Accept-Ranges"])
         assertEquals("bytes */10", malformed.headers["Content-Range"])
         assertEquals(416, pastEnd.status)
         assertFalse(opened)
+    }
+
+    @Test
+    fun rangeBeyondTwoGigabytesIsOpenedAtOffsetWithoutBufferingWholeContent() {
+        val contentLength = 3L * 1024 * 1024 * 1024
+        val requestedOffset = contentLength - 4
+        var openedAt: Long? = null
+        val controller = controller(
+            repository = FakeMediaRepository(
+                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                contentResult = MediaContentResult.Found(
+                    MediaContent(contentLength, "video/mp4") { offset ->
+                        openedAt = offset
+                        ByteArrayInputStream("tail".toByteArray())
+                    },
+                ),
+            ),
+        )
+
+        val response = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/media/media-1/content",
+                mapOf("Range" to "bytes=$requestedOffset-"),
+            )
+        }
+
+        assertEquals(206, response.status)
+        assertEquals(requestedOffset, openedAt)
+        assertEquals(4L, response.contentLength)
+        assertEquals(
+            "bytes $requestedOffset-${contentLength - 1}/$contentLength",
+            response.headers["Content-Range"],
+        )
+        assertEquals("tail", response.binaryStream!!.use { String(it.readBytes()) })
+    }
+
+    @Test
+    fun contentRemovedBeforeStreamOpenReturns404() {
+        val controller = controller(
+            repository = FakeMediaRepository(
+                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                contentResult = MediaContentResult.Found(
+                    MediaContent(10, "video/mp4") { null },
+                ),
+            ),
+        )
+
+        val response = runSuspend {
+            controller.handle("GET", "/api/v1/media/media-1/content")
+        }
+
+        assertEquals(404, response.status)
+        assertEquals(null, response.binaryStream)
+    }
+
+    @Test
+    fun suffixRangeUsesOnlyTheRequestedTail() {
+        val bytes = "0123456789".toByteArray()
+        val controller = controller(
+            repository = FakeMediaRepository(
+                MediaPageResult.Success(MediaPage(emptyList(), null)),
+                contentResult = MediaContentResult.Found(
+                    MediaContent(bytes.size.toLong(), "video/mp4") { offset ->
+                        ByteArrayInputStream(bytes, offset.toInt(), bytes.size - offset.toInt())
+                    },
+                ),
+            ),
+        )
+
+        val response = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/media/media-1/content",
+                mapOf("Range" to "bytes=-3"),
+            )
+        }
+
+        assertEquals(206, response.status)
+        assertEquals("bytes 7-9/10", response.headers["Content-Range"])
+        assertEquals("789", response.binaryStream!!.use { String(it.readBytes()) })
     }
 
     @Test

@@ -79,23 +79,26 @@ class ApiController(
             ?: return ApiResponse(
                 status = 416,
                 body = "",
-                headers = mapOf("Content-Range" to "bytes */${content.length}"),
+                contentType = "application/octet-stream",
+                headers = mapOf(
+                    "Accept-Ranges" to "bytes",
+                    "Content-Range" to "bytes */${content.length}",
+                ),
             )
         val stream = content.open(range.start)
             ?: return problem(404, "not_found", "The requested media item does not exist.")
-        val length = range.endExclusive - range.start
         return ApiResponse(
             status = if (range.isPartial) 206 else 200,
             body = "",
             contentType = content.contentType,
-            binaryStream = LimitedInputStream(stream, length),
-            contentLength = length,
+            binaryStream = LimitedInputStream(stream, range.length),
+            contentLength = range.length,
             headers = buildMap {
                 put("Accept-Ranges", "bytes")
                 if (range.isPartial) {
                     put(
                         "Content-Range",
-                        "bytes ${range.start}-${range.endExclusive - 1}/${content.length}",
+                        "bytes ${range.start}-${range.start + range.length - 1}/${content.length}",
                     )
                 }
             },
@@ -112,8 +115,12 @@ class ApiController(
         if (startText.isEmpty()) {
             val suffixLength = endText.toLongOrNull()?.takeIf { it > 0 } ?: return null
             if (length == 0L) return null
-            val start = (length - suffixLength).coerceAtLeast(0)
-            return ContentRange(start, length, isPartial = true)
+            val selectedLength = minOf(suffixLength, length)
+            return ContentRange(
+                start = length - selectedLength,
+                length = selectedLength,
+                isPartial = true,
+            )
         }
 
         val start = startText.toLongOrNull()?.takeIf { it >= 0 } ?: return null
@@ -124,8 +131,12 @@ class ApiController(
             endText.toLongOrNull() ?: return null
         }
         if (requestedEnd < start) return null
-        val endExclusive = minOf(requestedEnd, length - 1) + 1
-        return ContentRange(start, endExclusive, isPartial = true)
+        val endInclusive = minOf(requestedEnd, length - 1)
+        return ContentRange(
+            start = start,
+            length = endInclusive - start + 1,
+            isPartial = true,
+        )
     }
 
     private suspend fun getThumbnail(
@@ -250,7 +261,7 @@ class ApiController(
 
     private data class ContentRange(
         val start: Long,
-        val endExclusive: Long,
+        val length: Long,
         val isPartial: Boolean,
     )
 
