@@ -35,13 +35,23 @@ $env:ANDROID_HOME = 'E:\tools\android-sdk'
 ## Development HTTP API
 
 While the companion activity is visible, the development server listens on port
-`39570`. Grant photo/video read permission first, find the phone's LAN address,
-then verify the first read-only endpoints from Windows:
+`39570`. The emulator and a physical phone use different connection paths:
+
+- Emulator: run `adb forward tcp:39570 tcp:39570`, then connect Windows to
+  `127.0.0.1:39570`. Do not use the emulator's `10.0.2.x` NAT address.
+- Physical phone: keep the phone and Windows computer on the same Wi-Fi and use
+  the LAN address displayed by the Android app.
+
+Grant photo/video read permission first, then verify the read-only endpoints:
 
 ```powershell
 curl.exe http://PHONE_IP:39570/api/v1/device
 curl.exe "http://PHONE_IP:39570/api/v1/media?limit=20&type=image,video"
 ```
+
+See [Android connection and regression testing](../docs/connectivity-testing.md)
+for emulator commands, physical-device validation, firewall troubleshooting, and
+Wi-Fi client isolation checks.
 
 The server stops when the activity leaves the foreground. This development slice
 uses HTTP without authentication; pairing and HTTPS are added by later issues.

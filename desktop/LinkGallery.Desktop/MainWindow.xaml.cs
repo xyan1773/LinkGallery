@@ -33,7 +33,39 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
+        UpdateAddressHint();
         await ShowCachedMediaAsync(null, "本地缓存中还没有媒体");
+    }
+
+    private void OnAddressTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (AddressHintText is not null)
+        {
+            UpdateAddressHint();
+        }
+    }
+
+    private void UpdateAddressHint()
+    {
+        const string defaultHint =
+            "模拟器：先执行 adb forward，再输入 127.0.0.1:39570；不要输入模拟器显示的 10.0.2.x。";
+        try
+        {
+            var address = HttpReadOnlyMediaSource.NormalizeApiAddress(AddressTextBox.Text);
+            var couldBeEmulatorNat =
+                HttpReadOnlyMediaSource.IsPotentialAndroidEmulatorNatAddress(address);
+            AddressHintText.Text = couldBeEmulatorNat
+                ? "提示：10.0.2.x 常见于模拟器内部 NAT，模拟器应使用 adb forward 和 127.0.0.1；若这是真实手机的 Wi-Fi 地址，仍可直接连接。"
+                : defaultHint;
+            AddressHintText.Foreground = couldBeEmulatorNat
+                ? System.Windows.Media.Brushes.DarkOrange
+                : System.Windows.Media.Brushes.DimGray;
+        }
+        catch (FormatException)
+        {
+            AddressHintText.Text = defaultHint;
+            AddressHintText.Foreground = System.Windows.Media.Brushes.DimGray;
+        }
     }
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
@@ -181,6 +213,14 @@ public partial class MainWindow : Window, IDisposable
             FormatException => exception.Message,
             MediaSourceTimeoutException =>
                 "连接超时。请确认手机在线、地址正确，且两台设备在同一 Wi-Fi。",
+            MediaSourceConnectionException
+                { Failure: MediaSourceConnectionFailure.ConnectionRefused } =>
+                "连接被拒绝。地址可以到达，但手机服务未监听；请保持 Android 页面在前台后重试。",
+            MediaSourceConnectionException
+                { Failure: MediaSourceConnectionFailure.NetworkUnreachable } =>
+                "网络不可达。真机请检查同一 Wi-Fi、Windows 防火墙和 Wi-Fi AP 客户端隔离；模拟器请使用 ADB forward 和 127.0.0.1。",
+            MediaSourceConnectionException =>
+                "无法连接手机。真机请检查 IP、端口和 Wi-Fi；模拟器请使用 ADB forward 和 127.0.0.1。",
             MediaSourceProtocolException => $"协议错误：{exception.Message}",
             MediaSourceHttpException { StatusCode: HttpStatusCode.Forbidden } =>
                 "手机未授予照片和视频读取权限，请在手机端授权后重试。",

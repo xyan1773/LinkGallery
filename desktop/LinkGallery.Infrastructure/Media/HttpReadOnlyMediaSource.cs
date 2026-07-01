@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LinkGallery.Application.Media;
@@ -68,6 +69,13 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource
             ? $"{path}/"
             : $"{path}/api/v1/";
         return builder.Uri;
+    }
+
+    public static bool IsPotentialAndroidEmulatorNatAddress(Uri apiAddress)
+    {
+        ArgumentNullException.ThrowIfNull(apiAddress);
+        return IPAddress.TryParse(apiAddress.Host, out var parsedAddress) &&
+            IsAndroidEmulatorNatAddress(parsedAddress);
     }
 
     public async Task<Device> GetDeviceInfoAsync(CancellationToken cancellationToken)
@@ -197,6 +205,13 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource
                 $"连接手机超过 {_requestTimeout.TotalSeconds:0} 秒，已停止等待。",
                 exception);
         }
+        catch (HttpRequestException exception)
+        {
+            throw new MediaSourceConnectionException(
+                ClassifyConnectionFailure(exception),
+                "无法连接手机。",
+                exception);
+        }
 
         if (response.IsSuccessStatusCode)
         {
@@ -285,6 +300,33 @@ public sealed class HttpReadOnlyMediaSource : IReadOnlyMediaSource
     private static Uri EnsureTrailingSlash(Uri address) =>
         address.AbsoluteUri.EndsWith('/') ? address : new Uri($"{address.AbsoluteUri}/");
 
+    private static bool IsAndroidEmulatorNatAddress(IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes.Length == 4 && bytes[0] == 10 && bytes[1] == 0 && bytes[2] == 2;
+    }
+
+    private static MediaSourceConnectionFailure ClassifyConnectionFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is not SocketException socketException)
+            {
+                continue;
+            }
+
+            return socketException.SocketErrorCode switch
+            {
+                SocketError.ConnectionRefused => MediaSourceConnectionFailure.ConnectionRefused,
+                SocketError.HostUnreachable or SocketError.NetworkUnreachable =>
+                    MediaSourceConnectionFailure.NetworkUnreachable,
+                _ => MediaSourceConnectionFailure.Unknown,
+            };
+        }
+
+        return MediaSourceConnectionFailure.Unknown;
+    }
+
     private sealed record DeviceDto(
         string Id,
         string Name,
@@ -365,6 +407,27 @@ public sealed class MediaSourceTimeoutException : TimeoutException
         : base(message, innerException)
     {
     }
+}
+
+public enum MediaSourceConnectionFailure
+{
+    Unknown,
+    ConnectionRefused,
+    NetworkUnreachable,
+}
+
+public sealed class MediaSourceConnectionException : HttpRequestException
+{
+    public MediaSourceConnectionException(
+        MediaSourceConnectionFailure failure,
+        string message,
+        Exception innerException)
+        : base(message, innerException)
+    {
+        Failure = failure;
+    }
+
+    public MediaSourceConnectionFailure Failure { get; }
 }
 
 public sealed class MediaSourceHttpException : HttpRequestException

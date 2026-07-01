@@ -13,7 +13,9 @@ import com.linkgallery.companion.media.DefaultMediaRepository
 import com.linkgallery.companion.server.AndroidDeviceInfoProvider
 import com.linkgallery.companion.server.ApiController
 import com.linkgallery.companion.server.LinkGalleryHttpServer
+import com.linkgallery.companion.ui.AndroidConnectionEnvironment
 import com.linkgallery.companion.ui.PermissionScreen
+import com.linkgallery.companion.ui.createConnectionGuide
 
 class MainActivity : ComponentActivity() {
     private lateinit var httpServer: LinkGalleryHttpServer
@@ -34,7 +36,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    PermissionScreen()
+                    PermissionScreen(
+                        connectionGuide = createConnectionGuide(
+                            AndroidConnectionEnvironment.isEmulator(),
+                            AndroidConnectionEnvironment.lanIpv4Addresses(),
+                        ),
+                    )
                 }
             }
         }
