@@ -18,7 +18,15 @@ public interface ITransferCoordinator : IAsyncDisposable
 
     Task ResumeAsync(Guid jobId, CancellationToken cancellationToken = default);
 
+    Task RetryAsync(Guid jobId, CancellationToken cancellationToken = default);
+
     Task CancelAsync(Guid jobId, CancellationToken cancellationToken = default);
+
+    Task PauseAllAsync(CancellationToken cancellationToken = default);
+
+    Task ResumeAllAsync(CancellationToken cancellationToken = default);
+
+    Task ClearCompletedAsync(CancellationToken cancellationToken = default);
 
     IReadOnlyList<TransferJob> GetJobs();
 }

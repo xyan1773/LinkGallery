@@ -28,8 +28,14 @@ public sealed class LocalCopyCatalog : IDisposable
             var copy = copies.FirstOrDefault(candidate =>
                 candidate.DeviceId == item.DeviceId &&
                 candidate.RemoteId == item.RemoteId &&
-                candidate.FileSize == item.FileSize);
-            return copy is not null && File.Exists(copy.LocalPath) ? copy : null;
+                candidate.FileSize == item.FileSize &&
+                (candidate.RemoteModifiedAt is null ||
+                 SameInstant(candidate.RemoteModifiedAt.Value, item.ModifiedAt)));
+            return copy is not null &&
+                   File.Exists(copy.LocalPath) &&
+                   new FileInfo(copy.LocalPath).Length == copy.FileSize
+                ? copy
+                : null;
         }
         finally
         {
@@ -87,7 +93,36 @@ public sealed class LocalCopyCatalog : IDisposable
         }
     }
 
+    public async Task<LocalCopy?> FindByIdentityAsync(
+        string deviceId,
+        string remoteId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var copies = await LoadAsync(cancellationToken).ConfigureAwait(false);
+            var copy = copies.FirstOrDefault(candidate =>
+                candidate.DeviceId == deviceId &&
+                candidate.RemoteId == remoteId);
+            return copy is not null &&
+                   File.Exists(copy.LocalPath) &&
+                   new FileInfo(copy.LocalPath).Length == copy.FileSize
+                ? copy
+                : null;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public void Dispose() => _gate.Dispose();
+
+    private static bool SameInstant(DateTimeOffset left, DateTimeOffset right) =>
+        Math.Abs((left - right).TotalSeconds) < 1;
 
     private async Task<List<LocalCopy>> LoadAsync(CancellationToken cancellationToken)
     {

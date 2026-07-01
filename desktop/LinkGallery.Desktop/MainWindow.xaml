@@ -51,6 +51,11 @@
                         Padding="8"
                         Click="OnClearCacheClick"
                         Content="清理缩略图缓存" />
+                <Button x:Name="ImportSelectedButton"
+                        Margin="0,8,0,0"
+                        Padding="8"
+                        Click="OnImportSelectedClick"
+                        Content="导入选中项" />
                 <ProgressBar x:Name="LoadingProgress"
                              Margin="0,18,0,0"
                              Height="4"
@@ -79,6 +84,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
+                <RowDefinition Height="230" />
             </Grid.RowDefinitions>
 
             <Border x:Name="DevicePanel"
@@ -115,6 +121,7 @@
                            Text="输入手机地址开始连接" />
                 <ListBox x:Name="TimelineList"
                          ItemsSource="{Binding TimelineRows}"
+                         SelectionMode="Extended"
                          BorderThickness="0"
                          Background="Transparent"
                          KeyDown="OnTimelineKeyDown"
@@ -202,6 +209,97 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
             </Grid>
+
+            <Border Grid.Row="2"
+                    Margin="0,18,0,0"
+                    Padding="14"
+                    Background="#F9FAFB"
+                    CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontSize="17"
+                                       FontWeight="SemiBold"
+                                       Text="导入中心" />
+                            <TextBlock x:Name="ImportSummaryText"
+                                       Margin="12,3,0,0"
+                                       Foreground="#6B7280"
+                                       Text="暂无任务" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Button Padding="10,4"
+                                    Click="OnPauseAllClick"
+                                    Content="暂停全部" />
+                            <Button Margin="8,0,0,0"
+                                    Padding="10,4"
+                                    Click="OnResumeAllClick"
+                                    Content="恢复全部" />
+                            <Button Margin="8,0,0,0"
+                                    Padding="10,4"
+                                    Click="OnClearCompletedClick"
+                                    Content="清除已完成" />
+                        </StackPanel>
+                    </Grid>
+                    <ListBox Grid.Row="1"
+                             Margin="0,10,0,0"
+                             ItemsSource="{Binding TransferRows}"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="180" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="125" />
+                                        <ColumnDefinition Width="70" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="{Binding FileName}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock FontSize="11"
+                                                   Foreground="#6B7280"
+                                                   Text="{Binding StatusText}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"
+                                                Margin="12,0"
+                                                VerticalAlignment="Center">
+                                        <ProgressBar Height="7"
+                                                     Maximum="100"
+                                                     Value="{Binding ProgressPercent}" />
+                                        <TextBlock Margin="0,3,0,0"
+                                                   FontSize="11"
+                                                   Foreground="#6B7280"
+                                                   Text="{Binding ProgressText}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2"
+                                               VerticalAlignment="Center"
+                                               Foreground="#4B5563"
+                                               Text="{Binding RemainingText}" />
+                                    <Button Grid.Column="3"
+                                            Margin="8,0,0,0"
+                                            Padding="7,3"
+                                            VerticalAlignment="Center"
+                                            IsEnabled="{Binding CanRetry}"
+                                            Tag="{Binding Id}"
+                                            Click="OnRetryClick"
+                                            Content="重试" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
         </Grid>
     </Grid>
 </Window>

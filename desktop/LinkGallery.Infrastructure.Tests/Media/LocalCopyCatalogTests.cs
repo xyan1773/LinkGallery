@@ -62,6 +62,33 @@ public sealed class LocalCopyCatalogTests
         }
     }
 
+    [TestMethod]
+    public async Task ChangedRemoteModificationTimeIsNotConsideredAnExactCopy()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"LinkGallery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var mediaPath = Path.Combine(root, "photo.jpg");
+            await File.WriteAllBytesAsync(mediaPath, [1, 2, 3]);
+            using var catalog = new LocalCopyCatalog(Path.Combine(root, "copies.json"));
+            var item = Item(fileSize: 3);
+            await catalog.RegisterAsync(new LocalCopy(
+                item.DeviceId,
+                item.RemoteId,
+                mediaPath,
+                item.FileSize,
+                DateTimeOffset.UtcNow,
+                RemoteModifiedAt: item.ModifiedAt.AddMinutes(-1)));
+
+            Assert.IsNull(await catalog.FindAsync(item));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private static MediaItem Item(long fileSize) => new()
     {
         DeviceId = "phone-1",

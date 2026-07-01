@@ -6,7 +6,8 @@ public sealed record LocalCopy(
     string LocalPath,
     long FileSize,
     DateTimeOffset CopiedAt,
-    string? Sha256 = null)
+    string? Sha256 = null,
+    DateTimeOffset? RemoteModifiedAt = null)
 {
     public string DeviceId { get; init; } =
         !string.IsNullOrWhiteSpace(DeviceId)

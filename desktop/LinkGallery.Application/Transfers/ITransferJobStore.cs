@@ -7,4 +7,6 @@ public interface ITransferJobStore
     Task<IReadOnlyList<TransferJob>> LoadAsync(CancellationToken cancellationToken = default);
 
     Task SaveAsync(TransferJob job, CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(Guid jobId, CancellationToken cancellationToken = default);
 }

@@ -37,7 +37,7 @@ public sealed class TransferJob
 
     public string RemoteId { get; }
 
-    public string DestinationPath { get; }
+    public string DestinationPath { get; private set; }
 
     public string PartialPath => $"{DestinationPath}.partial";
 
@@ -120,6 +120,14 @@ public sealed class TransferJob
         FailureReason = null;
     }
 
+    public void Retry()
+    {
+        EnsureStatus(TransferStatus.Failed);
+        Status = TransferStatus.Pending;
+        RetryAfter = null;
+        FailureReason = null;
+    }
+
     public void Cancel()
     {
         if (IsTerminal)
@@ -178,6 +186,24 @@ public sealed class TransferJob
             Status = TransferStatus.Pending;
             FailureReason = "Interrupted while the application was not running.";
         }
+    }
+
+    public void MarkCompletedFileMissing()
+    {
+        EnsureStatus(TransferStatus.Completed);
+        Status = TransferStatus.Failed;
+        FailureReason = "The completed destination file is missing.";
+        RetryAfter = null;
+    }
+
+    public void CompleteUsingExistingCopy(string localPath, string verifiedSha256)
+    {
+        EnsureStatus(TransferStatus.Running);
+        ArgumentException.ThrowIfNullOrWhiteSpace(localPath);
+        ValidateSha256(verifiedSha256, nameof(verifiedSha256));
+        DestinationPath = Path.GetFullPath(localPath);
+        BytesTransferred = TotalBytes;
+        Complete(verifiedSha256);
     }
 
     public static TransferJob Restore(TransferJobSnapshot snapshot)

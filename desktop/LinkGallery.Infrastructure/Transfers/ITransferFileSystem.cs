@@ -13,6 +13,8 @@ public interface ITransferFileSystem
     Stream OpenRead(string path);
 
     void Move(string sourcePath, string destinationPath);
+
+    void Delete(string path);
 }
 
 internal sealed class PhysicalTransferFileSystem : ITransferFileSystem
@@ -48,4 +50,6 @@ internal sealed class PhysicalTransferFileSystem : ITransferFileSystem
 
     public void Move(string sourcePath, string destinationPath) =>
         File.Move(sourcePath, destinationPath);
+
+    public void Delete(string path) => File.Delete(path);
 }
