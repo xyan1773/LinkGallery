@@ -2,14 +2,18 @@ package com.linkgallery.companion.server
 
 import android.util.Log
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlin.coroutines.Continuation
@@ -19,7 +23,14 @@ import kotlin.coroutines.startCoroutine
 data class HttpServerConfig(
     val port: Int = 39570,
     val requestTimeoutMilliseconds: Long = 10_000,
-)
+    val maxConcurrentRequests: Int = 4,
+) {
+    init {
+        require(port in 0..65535) { "Port must be between 0 and 65535." }
+        require(requestTimeoutMilliseconds > 0) { "Request timeout must be positive." }
+        require(maxConcurrentRequests > 0) { "Concurrent request limit must be positive." }
+    }
+}
 
 fun interface RequestLogger {
     fun log(method: String, target: String, status: Int, elapsedMilliseconds: Long)
@@ -39,8 +50,8 @@ class LinkGalleryHttpServer(
     private val lock = Any()
     private var serverSocket: ServerSocket? = null
     private var acceptExecutor = Executors.newSingleThreadExecutor()
-    private var requestExecutor = Executors.newCachedThreadPool()
-    private var handlerExecutor = Executors.newCachedThreadPool()
+    private var requestExecutor = newRequestExecutor()
+    private var handlerExecutor = Executors.newFixedThreadPool(config.maxConcurrentRequests)
 
     val isRunning: Boolean
         get() = synchronized(lock) { serverSocket?.isClosed == false }
@@ -52,8 +63,12 @@ class LinkGalleryHttpServer(
         synchronized(lock) {
             if (serverSocket?.isClosed == false) return
             if (acceptExecutor.isShutdown) acceptExecutor = Executors.newSingleThreadExecutor()
-            if (requestExecutor.isShutdown) requestExecutor = Executors.newCachedThreadPool()
-            if (handlerExecutor.isShutdown) handlerExecutor = Executors.newCachedThreadPool()
+            if (requestExecutor.isShutdown) {
+                requestExecutor = newRequestExecutor()
+            }
+            if (handlerExecutor.isShutdown) {
+                handlerExecutor = Executors.newFixedThreadPool(config.maxConcurrentRequests)
+            }
             val socket = ServerSocket().apply {
                 reuseAddress = true
                 bind(InetSocketAddress(config.port))
@@ -77,12 +92,24 @@ class LinkGalleryHttpServer(
         while (!socket.isClosed) {
             try {
                 val client = socket.accept()
-                requestExecutor.execute { handleClient(client) }
+                try {
+                    requestExecutor.execute { handleClient(client) }
+                } catch (_: RejectedExecutionException) {
+                    runCatching { client.close() }
+                }
             } catch (_: Exception) {
                 if (!socket.isClosed) Log.w("LinkGalleryHttp", "Accept failed")
             }
         }
     }
+
+    private fun newRequestExecutor() = ThreadPoolExecutor(
+        config.maxConcurrentRequests,
+        config.maxConcurrentRequests,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(config.maxConcurrentRequests),
+    )
 
     private fun handleClient(client: Socket) {
         client.use { socket ->
@@ -176,6 +203,7 @@ class LinkGalleryHttpServer(
             504 -> "Gateway Timeout"
             else -> "Response"
         }
+        var committed = false
         try {
             socket.getOutputStream().buffered().use { output ->
                 output.write("HTTP/1.1 ${response.status} $reason\r\n".toByteArray())
@@ -185,6 +213,8 @@ class LinkGalleryHttpServer(
                     output.write("$name: $value\r\n".toByteArray())
                 }
                 output.write("Connection: close\r\n\r\n".toByteArray())
+                output.flush()
+                committed = true
                 if (input != null) {
                     input.copyTo(output)
                 } else {
@@ -192,8 +222,10 @@ class LinkGalleryHttpServer(
                 }
                 output.flush()
             }
+        } catch (exception: IOException) {
+            if (!committed) throw exception
         } finally {
-            input?.close()
+            runCatching { input?.close() }
         }
     }
 

@@ -123,6 +123,17 @@ class DefaultMediaRepositoryTest {
         assertEquals("3456789", String(bytes))
     }
 
+    @Test
+    fun `rejects file paths instead of treating them as media IDs`() = runSuspend {
+        val source = FakeDataSource(rows = listOf(row(id = 7, type = MediaType.VIDEO)))
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+
+        val result = repository.getContent("../../DCIM/Camera/private.mp4")
+
+        assertEquals(MediaContentResult.NotFound, result)
+        assertNull(source.lastContentOffset)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `rejects page sizes above protocol maximum`() {
         MediaQuery(limit = 201)
