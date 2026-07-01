@@ -14,6 +14,7 @@ data class MediaRecord(
     val durationMilliseconds: Long? = null,
     val albumName: String? = null,
     val relativePath: String? = null,
+    val thumbnailUrl: String? = null,
     val sourceDevice: String? = null,
     val sourceApplication: String? = null,
     val isEditedExport: Boolean = false,
@@ -23,4 +24,3 @@ enum class MediaType {
     IMAGE,
     VIDEO,
 }
-

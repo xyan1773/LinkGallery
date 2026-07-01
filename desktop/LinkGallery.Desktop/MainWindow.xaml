@@ -148,6 +148,7 @@
                             <Setter Property="Padding" Value="0" />
                             <Setter Property="Margin" Value="0" />
                             <EventSetter Event="Loaded" Handler="OnTimelineItemLoaded" />
+                            <EventSetter Event="Unloaded" Handler="OnTimelineItemUnloaded" />
                         </Style>
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>

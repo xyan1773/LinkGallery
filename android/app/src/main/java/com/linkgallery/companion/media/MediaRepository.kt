@@ -51,7 +51,10 @@ sealed interface MediaItemResult {
 }
 
 sealed interface MediaThumbnailResult {
-    data class Found(val jpeg: ByteArray) : MediaThumbnailResult
+    data class Found(
+        val jpeg: ByteArray,
+        val entityTag: String,
+    ) : MediaThumbnailResult
 
     data class PermissionDenied(val requiredPermissions: Set<String>) : MediaThumbnailResult
 

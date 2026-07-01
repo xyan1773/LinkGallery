@@ -14,6 +14,7 @@ public sealed class MediaItem
     public DateTimeOffset ModifiedAt { get; init; }
     public string? AlbumName { get; init; }
     public string? RelativePath { get; init; }
+    public string? ThumbnailUrl { get; init; }
     public string? SourceDevice { get; init; }
     public string? SourceApplication { get; init; }
     public bool IsEditedExport { get; init; }

@@ -45,6 +45,7 @@ internal object Json {
         "modifiedAt" to string(value.modifiedAt.toString()),
         "albumName" to nullableString(value.albumName),
         "relativePath" to nullableString(value.relativePath),
+        "thumbnailUrl" to nullableString(value.thumbnailUrl),
         "sourceDevice" to nullableString(value.sourceDevice),
         "sourceApplication" to nullableString(value.sourceApplication),
         "isEditedExport" to value.isEditedExport.toString(),

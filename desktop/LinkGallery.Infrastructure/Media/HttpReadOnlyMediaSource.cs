@@ -143,7 +143,9 @@ public sealed class HttpReadOnlyMediaSource :
         ThumbnailSize size,
         CancellationToken cancellationToken) =>
         OpenStreamAsync(
-            $"media/{Uri.EscapeDataString(remoteId)}/thumbnail?width={size.Width}&height={size.Height}",
+            size.Width == size.Height
+                ? $"media/{Uri.EscapeDataString(remoteId)}/thumbnail?size={size.Width}"
+                : $"media/{Uri.EscapeDataString(remoteId)}/thumbnail?width={size.Width}&height={size.Height}",
             offset: null,
             entityTag: null,
             cancellationToken);
@@ -344,6 +346,7 @@ public sealed class HttpReadOnlyMediaSource :
             ModifiedAt = dto.ModifiedAt,
             AlbumName = dto.AlbumName,
             RelativePath = dto.RelativePath,
+            ThumbnailUrl = dto.ThumbnailUrl,
             SourceDevice = dto.SourceDevice,
             SourceApplication = dto.SourceApplication,
             IsEditedExport = dto.IsEditedExport,
@@ -413,6 +416,7 @@ public sealed class HttpReadOnlyMediaSource :
         DateTimeOffset ModifiedAt,
         string? AlbumName,
         string? RelativePath,
+        string? ThumbnailUrl,
         string? SourceDevice,
         string? SourceApplication,
         bool IsEditedExport);

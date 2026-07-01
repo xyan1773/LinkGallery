@@ -44,7 +44,7 @@ class ApiController(
                 } catch (_: IllegalArgumentException) {
                     return problem(400, "invalid_parameter", "The query string is invalid.")
                 }
-                getThumbnail(mediaId, parameters)
+                getThumbnail(mediaId, parameters, header(headers, "If-None-Match"))
             } else if (CONTENT_PATH.matches(path)) {
                 val mediaId = try {
                     val encodedId = checkNotNull(CONTENT_PATH.matchEntire(path)).groupValues[1]
@@ -166,17 +166,32 @@ class ApiController(
     private suspend fun getThumbnail(
         mediaId: String,
         parameters: Map<String, List<String>>,
+        ifNoneMatchHeader: String?,
     ): ApiResponse {
-        val width = singleDimension(parameters, "width") ?: return invalidParameter("width")
-        val height = singleDimension(parameters, "height") ?: return invalidParameter("height")
+        val (width, height) = thumbnailDimensions(parameters)
+            ?: return invalidParameter("size")
         return try {
             when (val result = mediaRepository.getThumbnail(mediaId, width, height)) {
-                is MediaThumbnailResult.Found -> ApiResponse(
-                    status = 200,
-                    body = "",
-                    contentType = "image/jpeg",
-                    binaryBody = result.jpeg,
-                )
+                is MediaThumbnailResult.Found -> {
+                    val headers = thumbnailHeaders(result.entityTag)
+                    if (ifNoneMatchHeader == result.entityTag) {
+                        ApiResponse(
+                            status = 304,
+                            body = "",
+                            contentType = "image/jpeg",
+                            contentLength = 0,
+                            headers = headers,
+                        )
+                    } else {
+                        ApiResponse(
+                            status = 200,
+                            body = "",
+                            contentType = "image/jpeg",
+                            binaryBody = result.jpeg,
+                            headers = headers,
+                        )
+                    }
+                }
                 is MediaThumbnailResult.PermissionDenied ->
                     permissionDenied(result.requiredPermissions)
                 MediaThumbnailResult.NotFound ->
@@ -186,6 +201,24 @@ class ApiController(
             permissionDenied(emptySet())
         }
     }
+
+    private fun thumbnailDimensions(parameters: Map<String, List<String>>): Pair<Int, Int>? {
+        val size = parameters["size"]?.singleOrNull()
+            ?: if ("size" in parameters) return null else null
+        if (size != null) {
+            val value = size.toIntOrNull()?.takeIf { it in 1..2048 } ?: return null
+            return value to value
+        }
+
+        val width = singleDimension(parameters, "width") ?: return null
+        val height = singleDimension(parameters, "height") ?: return null
+        return width to height
+    }
+
+    private fun thumbnailHeaders(entityTag: String): Map<String, String> = mapOf(
+        "Cache-Control" to "public, max-age=86400",
+        "ETag" to entityTag,
+    )
 
     private fun singleDimension(parameters: Map<String, List<String>>, name: String): Int? {
         val raw = parameters[name]?.singleOrNull() ?: return null

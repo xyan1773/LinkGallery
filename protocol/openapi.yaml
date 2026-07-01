@@ -131,7 +131,7 @@ paths:
         - $ref: "#/components/parameters/MediaId"
         - name: width
           in: query
-          required: true
+          required: false
           description: Requested bounding-box width. The response preserves aspect ratio.
           schema:
             type: integer
@@ -139,20 +139,48 @@ paths:
             maximum: 2048
         - name: height
           in: query
-          required: true
+          required: false
           description: Requested bounding-box height. The response preserves aspect ratio.
           schema:
             type: integer
             minimum: 1
             maximum: 2048
+        - name: size
+          in: query
+          required: false
+          description: Preferred square thumbnail size. When supplied, width and height are both set to this value.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2048
+        - name: If-None-Match
+          in: header
+          schema:
+            type: string
       responses:
         "200":
           description: Encoded thumbnail
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            ETag:
+              schema:
+                type: string
           content:
             image/jpeg:
               schema:
                 type: string
                 format: binary
+        "304":
+          description: Cached thumbnail is still current
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            ETag:
+              schema:
+                type: string
         "404":
           $ref: "#/components/responses/NotFound"
         "400":
@@ -364,6 +392,9 @@ components:
           type: string
           nullable: true
         relativePath:
+          type: string
+          nullable: true
+        thumbnailUrl:
           type: string
           nullable: true
         sourceDevice:

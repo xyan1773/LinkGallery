@@ -195,6 +195,7 @@ class LinkGalleryHttpServer(
         val reason = when (response.status) {
             200 -> "OK"
             206 -> "Partial Content"
+            304 -> "Not Modified"
             400 -> "Bad Request"
             403 -> "Forbidden"
             404 -> "Not Found"

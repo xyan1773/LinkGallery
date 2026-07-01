@@ -64,9 +64,11 @@ class DefaultMediaRepository(
         if (missingPermissions.isNotEmpty()) {
             return MediaThumbnailResult.PermissionDenied(missingPermissions)
         }
+        val row = dataSource.find(locator.mediaStoreId, locator.type)
+            ?: return MediaThumbnailResult.NotFound
         val bytes = dataSource.loadThumbnail(locator.mediaStoreId, locator.type, width, height)
             ?: return MediaThumbnailResult.NotFound
-        return MediaThumbnailResult.Found(bytes)
+        return MediaThumbnailResult.Found(bytes, thumbnailEntityTag(row, width, height))
     }
 
     override suspend fun getContent(id: String): MediaContentResult {
@@ -127,8 +129,12 @@ class DefaultMediaRepository(
             durationMilliseconds = row.durationMilliseconds,
             albumName = row.albumName,
             relativePath = row.relativePath,
+            thumbnailUrl = "/api/v1/media/${tokenCodec.encodeId(row)}/thumbnail?size=256",
         )
     }
+
+    private fun thumbnailEntityTag(row: MediaStoreRow, width: Int, height: Int): String =
+        "\"thumb-${row.type.name.lowercase()}-${row.mediaStoreId}-${row.dateModifiedEpochSeconds}-${row.fileSize}-${width}x$height\""
 
     private data class ContentEntity(
         val length: Long,

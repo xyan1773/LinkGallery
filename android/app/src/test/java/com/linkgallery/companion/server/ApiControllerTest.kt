@@ -45,6 +45,7 @@ class ApiControllerTest {
         assertTrue(response.body.contains(""""fileName":"photo \"one\".jpg""""))
         assertTrue(response.body.contains(""""type":"image""""))
         assertTrue(response.body.contains(""""takenAt":"2026-06-30T00:00:00Z""""))
+        assertTrue(response.body.contains(""""thumbnailUrl":"/api/v1/media/media-1/thumbnail?size=256""""))
         assertTrue(response.body.contains(""""nextCursor":"next-page""""))
         assertTrue(response.body.contains(""""hasMore":true"""))
         assertTrue(response.body.contains(""""total":2"""))
@@ -109,15 +110,23 @@ class ApiControllerTest {
     @Test
     fun thumbnailResponseReturnsJpegBytesAndValidatesDimensions() {
         val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2)
+        val repository = FakeMediaRepository(
+            MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
+            MediaThumbnailResult.Found(jpeg, "\"thumb-v1\""),
+        )
         val controller = controller(
-            repository = FakeMediaRepository(
-                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
-                MediaThumbnailResult.Found(jpeg),
-            ),
+            repository = repository,
         )
 
         val response = runSuspend {
-            controller.handle("GET", "/api/v1/media/media-1/thumbnail?width=320&height=240")
+            controller.handle("GET", "/api/v1/media/media-1/thumbnail?size=256")
+        }
+        val notModified = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/media/media-1/thumbnail?size=256",
+                mapOf("If-None-Match" to "\"thumb-v1\""),
+            )
         }
         val invalid = runSuspend {
             controller.handle("GET", "/api/v1/media/media-1/thumbnail?width=4096&height=240")
@@ -125,7 +134,12 @@ class ApiControllerTest {
 
         assertEquals(200, response.status)
         assertEquals("image/jpeg", response.contentType)
+        assertEquals(256 to 256, repository.lastThumbnailSize)
         assertTrue(jpeg.contentEquals(response.binaryBody))
+        assertEquals("\"thumb-v1\"", response.headers["ETag"])
+        assertEquals("public, max-age=86400", response.headers["Cache-Control"])
+        assertEquals(304, notModified.status)
+        assertEquals(0L, notModified.contentLength)
         assertEquals(400, invalid.status)
     }
 
@@ -350,6 +364,8 @@ class ApiControllerTest {
         private val thumbnailResult: MediaThumbnailResult = MediaThumbnailResult.NotFound,
         private val contentResult: MediaContentResult = MediaContentResult.NotFound,
     ) : MediaRepository {
+        var lastThumbnailSize: Pair<Int, Int>? = null
+
         override suspend fun getPage(query: MediaQuery): MediaPageResult = pageResult
 
         override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
@@ -358,7 +374,10 @@ class ApiControllerTest {
             id: String,
             width: Int,
             height: Int,
-        ): MediaThumbnailResult = thumbnailResult
+        ): MediaThumbnailResult {
+            lastThumbnailSize = width to height
+            return thumbnailResult
+        }
 
         override suspend fun getContent(id: String): MediaContentResult = contentResult
     }
@@ -386,6 +405,7 @@ class ApiControllerTest {
             height = 600,
             takenAt = Instant.parse("2026-06-30T00:00:00Z"),
             modifiedAt = Instant.parse("2026-06-30T01:00:00Z"),
+            thumbnailUrl = "/api/v1/media/media-1/thumbnail?size=256",
         )
 
         fun <T> runSuspend(block: suspend () -> T): T {

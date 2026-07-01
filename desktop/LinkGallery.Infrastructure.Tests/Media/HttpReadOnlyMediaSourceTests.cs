@@ -52,6 +52,33 @@ public sealed class HttpReadOnlyMediaSourceTests
     }
 
     [TestMethod]
+    public async Task ThumbnailStreamUsesSquareSizeParameter()
+    {
+        Uri? requestUri = null;
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            requestUri = request.RequestUri;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([1, 2, 3]),
+            };
+        }));
+        var source = new HttpReadOnlyMediaSource(
+            client,
+            new Uri("http://phone:39570/api/v1/"));
+
+        await using var stream = await source.OpenThumbnailAsync(
+            "photo 1",
+            new ThumbnailSize(256, 256),
+            CancellationToken.None);
+
+        Assert.AreEqual(
+            "http://phone:39570/api/v1/media/photo%201/thumbnail?size=256",
+            requestUri?.AbsoluteUri);
+        Assert.AreEqual(3, stream.Length);
+    }
+
+    [TestMethod]
     public async Task OriginalStreamUsesRangeForNonzeroOffset()
     {
         string? range = null;
@@ -140,7 +167,7 @@ public sealed class HttpReadOnlyMediaSourceTests
                     """),
                 "/api/v1/media" => Json(
                     """
-                    {"items":[{"id":"m1","fileName":"IMG.jpg","type":"image","fileSize":2048,"width":100,"height":80,"durationMilliseconds":null,"takenAt":"2026-06-30T01:00:00Z","modifiedAt":"2026-06-30T01:01:00Z","albumName":"Camera","relativePath":"DCIM/Camera","sourceDevice":null,"sourceApplication":null,"isEditedExport":false}],"nextCursor":"cursor-2","hasMore":true,"total":42}
+                    {"items":[{"id":"m1","fileName":"IMG.jpg","type":"image","fileSize":2048,"width":100,"height":80,"durationMilliseconds":null,"takenAt":"2026-06-30T01:00:00Z","modifiedAt":"2026-06-30T01:01:00Z","albumName":"Camera","relativePath":"DCIM/Camera","thumbnailUrl":"/api/v1/media/m1/thumbnail?size=256","sourceDevice":null,"sourceApplication":null,"isEditedExport":false}],"nextCursor":"cursor-2","hasMore":true,"total":42}
                     """),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
@@ -162,6 +189,7 @@ public sealed class HttpReadOnlyMediaSourceTests
         Assert.AreEqual(42, page.Total);
         Assert.AreEqual("phone-1", page.Items[0].DeviceId);
         Assert.AreEqual(MediaType.Image, page.Items[0].Type);
+        Assert.AreEqual("/api/v1/media/m1/thumbnail?size=256", page.Items[0].ThumbnailUrl);
         StringAssert.Contains(handler.LastRequestUri?.Query, "limit=50");
         StringAssert.Contains(handler.LastRequestUri?.Query, "type=image");
     }

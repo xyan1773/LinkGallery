@@ -22,8 +22,8 @@ namespace LinkGallery.Desktop;
 
 public partial class MainWindow : Window, IDisposable
 {
-    private const int PageSize = 50;
-    private static readonly ThumbnailSize TimelineThumbnailSize = new(320, 240);
+    private const int PageSize = 100;
+    private static readonly ThumbnailSize TimelineThumbnailSize = new(256, 256);
     private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
     private readonly SqliteMediaIndex _mediaIndex;
@@ -419,21 +419,34 @@ public partial class MainWindow : Window, IDisposable
     private async void OnTimelineItemLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not ListBoxItem { DataContext: MediaRow row } ||
-            _source is null ||
-            row.Thumbnail is not null ||
-            row.IsThumbnailLoading)
+            _source is not { } source ||
+            row.Thumbnail is not null)
         {
             return;
         }
 
+        if (row.IsThumbnailLoading)
+        {
+            if (row.ThumbnailLoadCancellation?.IsCancellationRequested != true)
+            {
+                return;
+            }
+
+            row.IsThumbnailLoading = false;
+        }
+
         row.IsThumbnailLoading = true;
-        var cancellationToken = _connectionCancellation?.Token ?? CancellationToken.None;
+        row.ThumbnailLoadCancellation?.Dispose();
+        var loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _connectionCancellation?.Token ?? CancellationToken.None);
+        row.ThumbnailLoadCancellation = loadCancellation;
+        var cancellationToken = loadCancellation.Token;
         try
         {
             await _thumbnailConcurrency.WaitAsync(cancellationToken);
             try
             {
-                await using var stream = await _source.OpenThumbnailAsync(
+                await using var stream = await source.OpenThumbnailAsync(
                     row.Item.RemoteId,
                     TimelineThumbnailSize,
                     cancellationToken);
@@ -462,7 +475,23 @@ public partial class MainWindow : Window, IDisposable
         }
         finally
         {
-            row.IsThumbnailLoading = false;
+            if (ReferenceEquals(row.ThumbnailLoadCancellation, loadCancellation))
+            {
+                row.ThumbnailLoadCancellation = null;
+                row.IsThumbnailLoading = false;
+            }
+
+            loadCancellation.Dispose();
+        }
+    }
+
+    private void OnTimelineItemUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ListBoxItem { DataContext: MediaRow row } &&
+            row.Thumbnail is null &&
+            row.IsThumbnailLoading)
+        {
+            row.ThumbnailLoadCancellation?.Cancel();
         }
     }
 
@@ -952,6 +981,8 @@ public partial class MainWindow : Window, IDisposable
         public string AlbumName { get; }
 
         public bool IsThumbnailLoading { get; set; }
+
+        public CancellationTokenSource? ThumbnailLoadCancellation { get; set; }
 
         public ImageSource? Thumbnail
         {

@@ -143,6 +143,21 @@ class DefaultMediaRepositoryTest {
     }
 
     @Test
+    fun `thumbnail entity tag uses modified time as generation`() = runSuspend {
+        val repository = DefaultMediaRepository(
+            FakeDataSource(rows = listOf(row(id = 7, taken = 30_500, modified = 123))),
+            FakePermissionGateway(),
+        )
+        val id = (
+            repository.getPage(MediaQuery()) as MediaPageResult.Success
+            ).page.items.single().id
+
+        val result = repository.getThumbnail(id, 256, 256) as MediaThumbnailResult.Found
+
+        assertEquals("\"thumb-image-7-123-4096-256x256\"", result.entityTag)
+    }
+
+    @Test
     fun `opens original content at requested offset after permission check`() = runSuspend {
         val source = FakeDataSource(rows = listOf(row(id = 7, type = MediaType.VIDEO, size = 10)))
         val repository = DefaultMediaRepository(source, FakePermissionGateway())
@@ -201,6 +216,13 @@ class DefaultMediaRepositoryTest {
 
         override fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow? =
             rows.find { it.mediaStoreId == mediaStoreId && it.type == type }
+
+        override fun loadThumbnail(
+            mediaStoreId: Long,
+            type: MediaType,
+            width: Int,
+            height: Int,
+        ): ByteArray = byteArrayOf(1, 2, 3)
 
         override fun openContent(
             mediaStoreId: Long,
