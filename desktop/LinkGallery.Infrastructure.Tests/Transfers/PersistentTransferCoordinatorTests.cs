@@ -55,6 +55,51 @@ public sealed class PersistentTransferCoordinatorTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task MoveStageCannotBePausedOrCancelled(bool cancel)
+    {
+        var directory = CreateTemporaryDirectory();
+        var fileSystem = new BlockingMoveFileSystem();
+        var source = new RecordingMediaSource(new byte[1024], TimeSpan.Zero);
+        await using var queue = CreateQueue(
+            Path.Combine(directory, "queue.json"),
+            source,
+            fileSystem: fileSystem);
+        try
+        {
+            await queue.StartAsync();
+            var job = await queue.EnqueueAsync(CreateMedia(1024), directory);
+            await fileSystem.MoveStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            if (cancel)
+            {
+                await queue.CancelAsync(job.Id);
+            }
+            else
+            {
+                await queue.PauseAllAsync();
+            }
+
+            Assert.AreEqual(TransferStatus.Running, queue.GetJobs().Single().Status);
+            Assert.IsFalse(File.Exists(job.DestinationPath));
+
+            fileSystem.AllowMove();
+            await WaitUntilAsync(
+                () => queue.GetJobs().Single().Status == TransferStatus.Completed);
+
+            Assert.IsTrue(File.Exists(job.DestinationPath));
+            Assert.IsFalse(File.Exists(job.PartialPath));
+        }
+        finally
+        {
+            fileSystem.AllowMove();
+            await queue.DisposeAsync();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task RepeatedSelectionUsesOneTransferAndRegistersLocalCopy()
     {
         var directory = CreateTemporaryDirectory();
@@ -697,6 +742,48 @@ public sealed class PersistentTransferCoordinatorTests
         }
 
         public void AllowTerminalSave() => _allowTerminalSave.TrySetResult();
+    }
+
+    private sealed class BlockingMoveFileSystem : ITransferFileSystem
+    {
+        private readonly TaskCompletionSource _allowMove =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource MoveStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool FileExists(string path) => File.Exists(path);
+
+        public long GetFileLength(string path) => new FileInfo(path).Length;
+
+        public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+
+        public Stream OpenPartialWrite(string path, long length)
+        {
+            var stream = new FileStream(
+                path,
+                FileMode.OpenOrCreate,
+                FileAccess.Write,
+                FileShare.Read,
+                128 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            stream.SetLength(length);
+            stream.Position = length;
+            return stream;
+        }
+
+        public Stream OpenRead(string path) => File.OpenRead(path);
+
+        public void Move(string sourcePath, string destinationPath)
+        {
+            MoveStarted.TrySetResult();
+            _allowMove.Task.GetAwaiter().GetResult();
+            File.Move(sourcePath, destinationPath);
+        }
+
+        public void Delete(string path) => File.Delete(path);
+
+        public void AllowMove() => _allowMove.TrySetResult();
     }
 
     private sealed class RecordingMediaSource(

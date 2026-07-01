@@ -552,8 +552,11 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
             return;
         }
 
-        _fileSystem.Move(job.PartialPath, job.DestinationPath);
-        await CommitCompletionAsync(job, sha256).ConfigureAwait(false);
+        await CommitCompletionAsync(
+            job,
+            sha256,
+            publishFinalFile: () => _fileSystem.Move(job.PartialPath, job.DestinationPath))
+            .ConfigureAwait(false);
     }
 
     private async Task CompleteExistingDestinationAsync(
@@ -680,15 +683,19 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
             return false;
         }
 
-        _fileSystem.Delete(job.PartialPath);
-        await CommitCompletionAsync(job, sha256, existing.LocalPath).ConfigureAwait(false);
+        await CommitCompletionAsync(
+            job,
+            sha256,
+            existing.LocalPath,
+            () => _fileSystem.Delete(job.PartialPath)).ConfigureAwait(false);
         return true;
     }
 
     private async Task CommitCompletionAsync(
         TransferJob job,
         string? sha256,
-        string? existingDestinationPath = null)
+        string? existingDestinationPath = null,
+        Action? publishFinalFile = null)
     {
         TransferJob completed;
         lock (_sync)
@@ -708,6 +715,7 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
 
         try
         {
+            publishFinalFile?.Invoke();
             await RegisterLocalCopyAsync(completed, sha256, CancellationToken.None)
                 .ConfigureAwait(false);
             await _store.SaveAsync(completed, CancellationToken.None).ConfigureAwait(false);
