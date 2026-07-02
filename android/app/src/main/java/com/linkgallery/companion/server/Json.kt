@@ -52,6 +52,8 @@ internal object Json {
 
     fun pairConfirm(value: PairConfirmResponse): String = objectOf(
         "paired" to value.paired.toString(),
+        "accessToken" to string(value.accessToken),
+        "tokenType" to string(value.tokenType),
     )
 
     fun ok(): String = objectOf(

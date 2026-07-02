@@ -13,6 +13,7 @@ import com.linkgallery.companion.identity.AndroidKeystoreDeviceIdentityProvider
 import com.linkgallery.companion.media.AndroidMediaPermissionGateway
 import com.linkgallery.companion.media.AndroidMediaStoreDataSource
 import com.linkgallery.companion.media.DefaultMediaRepository
+import com.linkgallery.companion.pairing.AndroidPairingCredentialStore
 import com.linkgallery.companion.pairing.PairingManager
 import com.linkgallery.companion.server.AndroidDeviceInfoProvider
 import com.linkgallery.companion.server.AndroidPublicDeviceInfoProvider
@@ -32,7 +33,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val permissionGateway = AndroidMediaPermissionGateway(applicationContext)
-        pairingManager = PairingManager()
+        pairingManager = PairingManager(credentialStore = AndroidPairingCredentialStore(applicationContext))
         publicDeviceInfoProvider = AndroidPublicDeviceInfoProvider(
             applicationContext,
             AndroidKeystoreDeviceIdentityProvider(),
@@ -49,6 +50,7 @@ class MainActivity : ComponentActivity() {
                 publicDeviceInfoProvider,
                 AndroidDeviceInfoProvider(applicationContext, permissionGateway),
                 mediaRepository,
+                pairingManager,
                 pairingManager,
             ),
         )

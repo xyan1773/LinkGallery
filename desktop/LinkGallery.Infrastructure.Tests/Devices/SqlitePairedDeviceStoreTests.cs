@@ -71,6 +71,31 @@ public sealed class SqlitePairedDeviceStoreTests
     }
 
     [TestMethod]
+    public async Task StoresOnlyCredentialKeyNotPlainAccessToken()
+    {
+        using var store = new SqlitePairedDeviceStore(_databasePath);
+        var device = Device(status: PairedDeviceStatus.Offline);
+
+        await store.UpsertPairedDeviceAsync(device, CancellationToken.None);
+
+        var stored = (await store.ListPairedDevicesAsync(CancellationToken.None)).Single();
+        await using var connection = new SqliteConnection($"Data Source={_databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM pragma_table_info('paired_devices');";
+        var columns = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            columns.Add(reader.GetString(0));
+        }
+
+        Assert.AreEqual("credential-phone-1", stored.CredentialKey);
+        CollectionAssert.Contains(columns, "credential_key");
+        CollectionAssert.DoesNotContain(columns, "access_token");
+    }
+
+    [TestMethod]
     public async Task ProbeSuccessUpdatesDeviceAndSavedAddress()
     {
         using var store = new SqlitePairedDeviceStore(_databasePath);

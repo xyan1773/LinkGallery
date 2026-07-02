@@ -7,6 +7,7 @@ import com.linkgallery.companion.media.MediaPage
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRepository
+import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -63,6 +64,7 @@ class LinkGalleryHttpServerTest {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
                 mediaRepository = repository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(
                 port = 0,
@@ -109,6 +111,7 @@ class LinkGalleryHttpServerTest {
                     )
                 },
                 mediaRepository = EmptyMediaRepository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 2_000),
             logger = RequestLogger { _, _, _, _ -> },
@@ -149,6 +152,7 @@ class LinkGalleryHttpServerTest {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 0))
                 },
                 mediaRepository = EmptyMediaRepository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 100),
             logger = RequestLogger { _, _, _, _ -> },
@@ -200,6 +204,7 @@ class LinkGalleryHttpServerTest {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
                 mediaRepository = repository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 2_000),
             logger = RequestLogger { _, _, _, _ -> },
@@ -260,6 +265,7 @@ class LinkGalleryHttpServerTest {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
                 mediaRepository = repository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 2_000),
             logger = RequestLogger { _, _, _, _ -> },

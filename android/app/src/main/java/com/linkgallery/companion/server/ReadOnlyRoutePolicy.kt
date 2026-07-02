@@ -11,16 +11,22 @@ object ReadOnlyRoutePolicy {
         "/api/v1/pair/confirm",
         "/api/v1/pair/cancel",
     )
+    private const val PAIR_REVOKE_ROUTE = "/api/v1/pair/revoke"
 
     fun permits(method: String, routeTemplate: String): Boolean =
         if (method.equals("POST", ignoreCase = true)) {
-            routeTemplate in unauthenticatedPairingRoutes
+            routeTemplate in unauthenticatedPairingRoutes || routeTemplate == PAIR_REVOKE_ROUTE
         } else {
             method.equals("GET", ignoreCase = true) &&
                 (routeTemplate in mediaReadRoutes ||
                     THUMBNAIL_ROUTE.matches(routeTemplate) ||
                     CONTENT_ROUTE.matches(routeTemplate))
         }
+
+    fun requiresAuthentication(method: String, routeTemplate: String): Boolean =
+        permits(method, routeTemplate) &&
+            routeTemplate != "/api/v1/public/info" &&
+            routeTemplate !in unauthenticatedPairingRoutes
 
     private val THUMBNAIL_ROUTE =
         Regex("^/api/v1/media/[^/]+/thumbnail$")

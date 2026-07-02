@@ -58,7 +58,8 @@ class PairingManagerTest {
 
     @Test
     fun confirmWithDisplayedCodePairsAndClearsSession() {
-        val manager = PairingManager()
+        val store = InMemoryPairingCredentialStore()
+        val manager = PairingManager(credentialStore = store)
         manager.openPairingWindow(nowMillis = 1_000)
         val start = manager.start(startRequest(), nowMillis = 2_000) as PairingResult.Success
         val code = manager.activeVerificationCode(nowMillis = 2_001)
@@ -69,8 +70,31 @@ class PairingManagerTest {
         )
 
         assertTrue(result is PairingResult.Success)
-        assertEquals(true, (result as PairingResult.Success).value.paired)
+        val response = (result as PairingResult.Success).value
+        assertEquals(true, response.paired)
+        assertEquals("Bearer", response.tokenType)
+        assertTrue(response.accessToken.length >= 32)
+        assertTrue(store.containsTokenHash(TokenHashing.sha256Base64Url(response.accessToken)))
+        assertEquals("desktop-1", manager.authenticate(response.accessToken)?.desktopId)
         assertNull(manager.activeVerificationCode(nowMillis = 2_003))
+    }
+
+    @Test
+    fun revokeRemovesStoredTokenHash() {
+        val store = InMemoryPairingCredentialStore()
+        val manager = PairingManager(credentialStore = store)
+        manager.openPairingWindow(nowMillis = 1_000)
+        val start = manager.start(startRequest(), nowMillis = 2_000) as PairingResult.Success
+        val code = checkNotNull(manager.activeVerificationCode(nowMillis = 2_001))
+        val confirm = manager.confirm(
+            PairConfirmRequest(start.value.pairingSessionId, code),
+            nowMillis = 2_002,
+        ) as PairingResult.Success
+
+        assertTrue(manager.revoke(confirm.value.accessToken))
+
+        assertNull(manager.authenticate(confirm.value.accessToken))
+        assertEquals(false, store.containsTokenHash(TokenHashing.sha256Base64Url(confirm.value.accessToken)))
     }
 
     @Test

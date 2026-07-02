@@ -35,6 +35,8 @@ data class PairStartResponse(
 
 data class PairConfirmResponse(
     val paired: Boolean,
+    val accessToken: String,
+    val tokenType: String = "Bearer",
 )
 
 sealed interface PairingResult<out T> {
@@ -49,6 +51,28 @@ interface PairingCoordinator {
     fun start(request: PairStartRequest, nowMillis: Long = System.currentTimeMillis()): PairingResult<PairStartResponse>
     fun confirm(request: PairConfirmRequest, nowMillis: Long = System.currentTimeMillis()): PairingResult<PairConfirmResponse>
     fun cancel(request: PairCancelRequest): PairingResult<Unit>
+}
+
+data class AuthenticatedPairing(
+    val desktopId: String,
+    val desktopName: String,
+)
+
+interface AccessTokenAuthenticator {
+    fun authenticate(accessToken: String): AuthenticatedPairing?
+    fun revoke(accessToken: String): Boolean
+}
+
+object AllowAllAccessTokenAuthenticator : AccessTokenAuthenticator {
+    override fun authenticate(accessToken: String): AuthenticatedPairing =
+        AuthenticatedPairing("test-desktop", "Test desktop")
+
+    override fun revoke(accessToken: String): Boolean = true
+}
+
+object RejectingAccessTokenAuthenticator : AccessTokenAuthenticator {
+    override fun authenticate(accessToken: String): AuthenticatedPairing? = null
+    override fun revoke(accessToken: String): Boolean = false
 }
 
 object DisabledPairingCoordinator : PairingCoordinator {
@@ -84,7 +108,8 @@ data class PairingWindow(
 class PairingManager(
     private val random: SecureRandom = SecureRandom(),
     private val windowDurationMillis: Long = WINDOW_DURATION_MILLIS,
-) : PairingCoordinator {
+    private val credentialStore: PairingCredentialStore = InMemoryPairingCredentialStore(),
+) : PairingCoordinator, AccessTokenAuthenticator {
     private val lock = Any()
     private val secret = ByteArray(32).also(random::nextBytes)
     private var window: PairingWindow? = null
@@ -138,6 +163,7 @@ class PairingManager(
         val session = PairingSession(
             id = UUID.randomUUID().toString(),
             desktopId = request.desktopId,
+            desktopName = request.desktopName,
             phoneNonce = phoneNonce,
             verificationCode = code,
             expiresAtEpochMillis = expiresAt,
@@ -198,8 +224,17 @@ class PairingManager(
             )
         }
 
+        val accessToken = randomBase64(32)
+        credentialStore.save(
+            PairedCredential(
+                desktopId = session.desktopId,
+                desktopName = session.desktopName,
+                tokenHash = TokenHashing.sha256Base64Url(accessToken),
+                createdAtEpochMillis = nowMillis,
+            ),
+        )
         activeSession = null
-        PairingResult.Success(PairConfirmResponse(paired = true))
+        PairingResult.Success(PairConfirmResponse(paired = true, accessToken = accessToken))
     }
 
     override fun cancel(request: PairCancelRequest): PairingResult<Unit> = synchronized(lock) {
@@ -207,6 +242,17 @@ class PairingManager(
             activeSession = null
         }
         PairingResult.Success(Unit)
+    }
+
+    override fun authenticate(accessToken: String): AuthenticatedPairing? {
+        if (accessToken.isBlank()) return null
+        val credential = credentialStore.findByTokenHash(TokenHashing.sha256Base64Url(accessToken)) ?: return null
+        return AuthenticatedPairing(credential.desktopId, credential.desktopName)
+    }
+
+    override fun revoke(accessToken: String): Boolean {
+        if (accessToken.isBlank()) return false
+        return credentialStore.revokeByTokenHash(TokenHashing.sha256Base64Url(accessToken))
     }
 
     private fun cleanExpired(nowMillis: Long) {
@@ -272,6 +318,7 @@ class PairingManager(
     private data class PairingSession(
         val id: String,
         val desktopId: String,
+        val desktopName: String,
         val phoneNonce: String,
         val verificationCode: String,
         val expiresAtEpochMillis: Long,
