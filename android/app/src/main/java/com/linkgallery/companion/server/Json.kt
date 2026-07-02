@@ -5,6 +5,18 @@ import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaType
 
 internal object Json {
+    fun publicDeviceInfo(value: PublicDeviceInfo): String = objectOf(
+        "deviceId" to string(value.deviceId),
+        "deviceName" to string(value.deviceName),
+        "manufacturer" to string(value.manufacturer),
+        "model" to string(value.model),
+        "apiVersion" to value.apiVersion.toString(),
+        "serverVersion" to string(value.serverVersion),
+        "instanceId" to string(value.instanceId),
+        "pairingAvailable" to value.pairingAvailable.toString(),
+        "certificateFingerprint" to string(value.certificateFingerprint),
+    )
+
     fun device(value: DeviceInfo): String = objectOf(
         "id" to string(value.id),
         "name" to string(value.name),

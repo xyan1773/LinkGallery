@@ -14,6 +14,7 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
 class ApiController(
+    private val publicDeviceInfoProvider: PublicDeviceInfoProvider,
     private val deviceInfoProvider: DeviceInfoProvider,
     private val mediaRepository: MediaRepository,
 ) {
@@ -28,6 +29,7 @@ class ApiController(
         }
 
         return when (path) {
+            PUBLIC_INFO_PATH -> getPublicInfo()
             DEVICE_PATH -> getDevice()
             MEDIA_PATH -> {
                 val parameters = try {
@@ -327,12 +329,16 @@ class ApiController(
         ApiResponse(status, Json.problem(code, message))
 
     private companion object {
+        const val PUBLIC_INFO_PATH = "/api/v1/public/info"
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
         val THUMBNAIL_PATH = Regex("^/api/v1/media/([^/]+)/thumbnail$")
         val CONTENT_PATH = Regex("^/api/v1/media/([^/]+)/content$")
         val RANGE_PATTERN = Regex("^bytes=(\\d*)-(\\d*)$")
     }
+
+    private fun getPublicInfo(): ApiResponse =
+        ApiResponse(200, Json.publicDeviceInfo(publicDeviceInfoProvider.get()))
 
     private data class ContentRange(
         val start: Long,

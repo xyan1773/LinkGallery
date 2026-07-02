@@ -2,6 +2,7 @@ package com.linkgallery.companion.server
 
 object ReadOnlyRoutePolicy {
     private val mediaReadRoutes = setOf(
+        "/api/v1/public/info",
         "/api/v1/device",
         "/api/v1/media",
     )

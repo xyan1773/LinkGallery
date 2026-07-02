@@ -58,6 +58,7 @@ class LinkGalleryHttpServerTest {
         }
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
@@ -101,6 +102,7 @@ class LinkGalleryHttpServerTest {
     fun servesJsonOverHttpAndCanBeStopped() {
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(
                         DeviceInfo("device-1", "Test phone", "Test model", 50, 0),
@@ -141,6 +143,7 @@ class LinkGalleryHttpServerTest {
         val neverCompletes = CountDownLatch(1)
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     neverCompletes.await()
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 0))
@@ -192,6 +195,7 @@ class LinkGalleryHttpServerTest {
         }
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
@@ -251,6 +255,7 @@ class LinkGalleryHttpServerTest {
         }
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
@@ -295,5 +300,19 @@ class LinkGalleryHttpServerTest {
             MediaPageResult.Success(MediaPage(emptyList(), null, false, 0))
 
         override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
+    }
+
+    private object FakePublicDeviceInfoProvider : PublicDeviceInfoProvider {
+        override fun get(): PublicDeviceInfo = PublicDeviceInfo(
+            deviceId = "DEVICEID",
+            deviceName = "Test phone",
+            manufacturer = "Google",
+            model = "Test model",
+            apiVersion = 1,
+            serverVersion = "0.1.0",
+            instanceId = "instance-1",
+            pairingAvailable = false,
+            certificateFingerprint = "AA:BB",
+        )
     }
 }

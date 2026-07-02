@@ -23,6 +23,25 @@ import org.junit.Test
 
 class ApiControllerTest {
     @Test
+    fun publicInfoResponseIsMinimalAndDoesNotRequireMediaPermission() {
+        val response = runSuspend {
+            controller(
+                deviceInfoProvider = DeviceInfoProvider {
+                    DeviceInfoResult.PermissionDenied(setOf("android.permission.READ_MEDIA_IMAGES"))
+                },
+            ).handle("GET", "/api/v1/public/info")
+        }
+
+        assertEquals(200, response.status)
+        assertEquals(
+            """{"deviceId":"DEVICEID","deviceName":"Pixel","manufacturer":"Google","model":"Pixel 9","apiVersion":1,"serverVersion":"0.1.0","instanceId":"instance-1","pairingAvailable":false,"certificateFingerprint":"AA:BB"}""",
+            response.body,
+        )
+        assertFalse(response.body.contains("mediaCount"))
+        assertFalse(response.body.contains("token", ignoreCase = true))
+    }
+
+    @Test
     fun deviceResponseMatchesContract() {
         val response = runSuspend {
             controller().handle("GET", "/api/v1/device")
@@ -341,11 +360,7 @@ class ApiControllerTest {
     }
 
     private fun controller(
-        repository: MediaRepository = FakeMediaRepository(
-            MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),
-        ),
-    ): ApiController = ApiController(
-        deviceInfoProvider = DeviceInfoProvider {
+        deviceInfoProvider: DeviceInfoProvider = DeviceInfoProvider {
             DeviceInfoResult.Success(
                 DeviceInfo(
                     id = "device-1",
@@ -356,6 +371,24 @@ class ApiControllerTest {
                 ),
             )
         },
+        repository: MediaRepository = FakeMediaRepository(
+            MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),
+        ),
+    ): ApiController = ApiController(
+        publicDeviceInfoProvider = PublicDeviceInfoProvider {
+            PublicDeviceInfo(
+                deviceId = "DEVICEID",
+                deviceName = "Pixel",
+                manufacturer = "Google",
+                model = "Pixel 9",
+                apiVersion = 1,
+                serverVersion = "0.1.0",
+                instanceId = "instance-1",
+                pairingAvailable = false,
+                certificateFingerprint = "AA:BB",
+            )
+        },
+        deviceInfoProvider = deviceInfoProvider,
         mediaRepository = repository,
     )
 
