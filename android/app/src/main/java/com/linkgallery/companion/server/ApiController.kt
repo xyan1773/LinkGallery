@@ -8,6 +8,12 @@ import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaStoreCursor
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.DisabledPairingCoordinator
+import com.linkgallery.companion.pairing.PairCancelRequest
+import com.linkgallery.companion.pairing.PairConfirmRequest
+import com.linkgallery.companion.pairing.PairStartRequest
+import com.linkgallery.companion.pairing.PairingCoordinator
+import com.linkgallery.companion.pairing.PairingResult
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.net.URLDecoder
@@ -17,11 +23,13 @@ class ApiController(
     private val publicDeviceInfoProvider: PublicDeviceInfoProvider,
     private val deviceInfoProvider: DeviceInfoProvider,
     private val mediaRepository: MediaRepository,
+    private val pairingCoordinator: PairingCoordinator = DisabledPairingCoordinator,
 ) {
     suspend fun handle(
         method: String,
         requestTarget: String,
         headers: Map<String, String> = emptyMap(),
+        body: String = "",
     ): ApiResponse {
         val path = requestTarget.substringBefore('?')
         if (!ReadOnlyRoutePolicy.permits(method, path)) {
@@ -30,6 +38,9 @@ class ApiController(
 
         return when (path) {
             PUBLIC_INFO_PATH -> getPublicInfo()
+            PAIR_START_PATH -> postPairStart(body)
+            PAIR_CONFIRM_PATH -> postPairConfirm(body)
+            PAIR_CANCEL_PATH -> postPairCancel(body)
             DEVICE_PATH -> getDevice()
             MEDIA_PATH -> {
                 val parameters = try {
@@ -328,8 +339,65 @@ class ApiController(
     private fun problem(status: Int, code: String, message: String): ApiResponse =
         ApiResponse(status, Json.problem(code, message))
 
+    private fun pairingFailure(result: PairingResult.Failure): ApiResponse =
+        problem(result.status, result.code, result.message)
+
+    private fun postPairStart(body: String): ApiResponse {
+        val request = try {
+            val fields = JsonFields.parse(body)
+            PairStartRequest(
+                desktopId = fields.required("desktopId"),
+                desktopName = fields.required("desktopName"),
+                desktopModel = fields.optional("desktopModel"),
+                identityPublicKey = fields.required("identityPublicKey"),
+                ephemeralPublicKey = fields.required("ephemeralPublicKey"),
+                nonce = fields.required("nonce"),
+            )
+        } catch (_: IllegalArgumentException) {
+            return problem(400, "invalid_pairing_request", "The pairing request JSON is invalid.")
+        }
+        return when (val result = pairingCoordinator.start(request)) {
+            is PairingResult.Success -> ApiResponse(200, Json.pairStart(result.value))
+            is PairingResult.Failure -> pairingFailure(result)
+        }
+    }
+
+    private fun postPairConfirm(body: String): ApiResponse {
+        val request = try {
+            val fields = JsonFields.parse(body)
+            PairConfirmRequest(
+                pairingSessionId = fields.required("pairingSessionId"),
+                verificationCode = fields.optional("verificationCode")
+                    ?: fields.optional("code")
+                    ?: fields.required("confirmationMac"),
+            )
+        } catch (_: IllegalArgumentException) {
+            return problem(400, "invalid_pairing_request", "The pairing confirmation JSON is invalid.")
+        }
+        return when (val result = pairingCoordinator.confirm(request)) {
+            is PairingResult.Success -> ApiResponse(200, Json.pairConfirm(result.value))
+            is PairingResult.Failure -> pairingFailure(result)
+        }
+    }
+
+    private fun postPairCancel(body: String): ApiResponse {
+        val request = try {
+            val fields = JsonFields.parse(body)
+            PairCancelRequest(fields.required("pairingSessionId"))
+        } catch (_: IllegalArgumentException) {
+            return problem(400, "invalid_pairing_request", "The pairing cancel JSON is invalid.")
+        }
+        return when (val result = pairingCoordinator.cancel(request)) {
+            is PairingResult.Success -> ApiResponse(200, Json.ok())
+            is PairingResult.Failure -> pairingFailure(result)
+        }
+    }
+
     private companion object {
         const val PUBLIC_INFO_PATH = "/api/v1/public/info"
+        const val PAIR_START_PATH = "/api/v1/pair/start"
+        const val PAIR_CONFIRM_PATH = "/api/v1/pair/confirm"
+        const val PAIR_CANCEL_PATH = "/api/v1/pair/cancel"
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
         val THUMBNAIL_PATH = Regex("^/api/v1/media/([^/]+)/thumbnail$")
@@ -339,6 +407,64 @@ class ApiController(
 
     private fun getPublicInfo(): ApiResponse =
         ApiResponse(200, Json.publicDeviceInfo(publicDeviceInfoProvider.get()))
+
+    private class JsonFields(private val values: Map<String, String?>) {
+        fun required(name: String): String =
+            values[name]?.takeIf { it.isNotBlank() }
+                ?: throw IllegalArgumentException("Missing $name")
+
+        fun optional(name: String): String? = values[name]
+
+        companion object {
+            private val FIELD_PATTERN = Regex(
+                """"([^"\\]*(?:\\.[^"\\]*)*)"\s*:\s*("([^"\\]*(?:\\.[^"\\]*)*)"|null)""",
+            )
+
+            fun parse(body: String): JsonFields {
+                val trimmed = body.trim()
+                if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+                    throw IllegalArgumentException("Expected object")
+                }
+                val values = mutableMapOf<String, String?>()
+                FIELD_PATTERN.findAll(trimmed).forEach { match ->
+                    val key = unescape(match.groupValues[1])
+                    val rawValue = match.groupValues[2]
+                    values[key] = if (rawValue == "null") null else unescape(match.groupValues[3])
+                }
+                return JsonFields(values)
+            }
+
+            private fun unescape(value: String): String {
+                val output = StringBuilder()
+                var index = 0
+                while (index < value.length) {
+                    val character = value[index]
+                    if (character != '\\') {
+                        output.append(character)
+                        index += 1
+                    } else {
+                        if (index + 1 >= value.length) throw IllegalArgumentException("Bad escape")
+                        val escaped = value[index + 1]
+                        output.append(
+                            when (escaped) {
+                                '"' -> '"'
+                                '\\' -> '\\'
+                                '/' -> '/'
+                                'b' -> '\b'
+                                'f' -> '\u000C'
+                                'n' -> '\n'
+                                'r' -> '\r'
+                                't' -> '\t'
+                                else -> throw IllegalArgumentException("Unsupported escape")
+                            },
+                        )
+                        index += 2
+                    }
+                }
+                return output.toString()
+            }
+        }
+    }
 
     private data class ContentRange(
         val start: Long,

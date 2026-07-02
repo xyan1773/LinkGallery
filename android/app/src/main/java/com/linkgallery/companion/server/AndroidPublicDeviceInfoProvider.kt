@@ -9,6 +9,7 @@ class AndroidPublicDeviceInfoProvider(
     private val context: Context,
     private val identityProvider: DeviceIdentityProvider,
     private val apiVersion: Int = 1,
+    private val pairingAvailableProvider: () -> Boolean = { false },
 ) : PublicDeviceInfoProvider {
     private var instanceId: String = newInstanceId()
 
@@ -26,7 +27,7 @@ class AndroidPublicDeviceInfoProvider(
             apiVersion = apiVersion,
             serverVersion = serverVersion(),
             instanceId = instanceId,
-            pairingAvailable = false,
+            pairingAvailable = pairingAvailableProvider(),
             certificateFingerprint = identity.certificateFingerprint,
         )
     }

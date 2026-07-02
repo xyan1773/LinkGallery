@@ -3,6 +3,8 @@ package com.linkgallery.companion.server
 import com.linkgallery.companion.media.MediaPage
 import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.PairConfirmResponse
+import com.linkgallery.companion.pairing.PairStartResponse
 
 internal object Json {
     fun publicDeviceInfo(value: PublicDeviceInfo): String = objectOf(
@@ -38,6 +40,22 @@ internal object Json {
     fun problem(code: String, message: String): String = objectOf(
         "code" to string(code),
         "message" to string(message),
+    )
+
+    fun pairStart(value: PairStartResponse): String = objectOf(
+        "pairingSessionId" to string(value.pairingSessionId),
+        "phoneNonce" to string(value.phoneNonce),
+        "expiresAtEpochMillis" to value.expiresAtEpochMillis.toString(),
+        "attemptsRemaining" to value.attemptsRemaining.toString(),
+        "codeLength" to value.codeLength.toString(),
+    )
+
+    fun pairConfirm(value: PairConfirmResponse): String = objectOf(
+        "paired" to value.paired.toString(),
+    )
+
+    fun ok(): String = objectOf(
+        "ok" to "true",
     )
 
     private fun mediaItem(value: MediaRecord): String = objectOf(
