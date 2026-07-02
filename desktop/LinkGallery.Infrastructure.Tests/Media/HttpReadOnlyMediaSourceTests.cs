@@ -195,6 +195,29 @@ public sealed class HttpReadOnlyMediaSourceTests
     }
 
     [TestMethod]
+    public async Task SendsBearerTokenWhenConfigured()
+    {
+        string? authorization = null;
+        var handler = new StubHandler(request =>
+        {
+            authorization = request.Headers.Authorization?.ToString();
+            return Json(
+                """
+                {"id":"phone-1","name":"Pixel","platform":"android","model":"Pixel 9","battery":72,"mediaCount":0}
+                """);
+        });
+        using var client = new HttpClient(handler);
+        var source = new HttpReadOnlyMediaSource(
+            client,
+            new Uri("http://phone:39570/api/v1/"),
+            accessToken: "secret-token");
+
+        await source.GetDeviceInfoAsync(CancellationToken.None);
+
+        Assert.AreEqual("Bearer secret-token", authorization);
+    }
+
+    [TestMethod]
     public async Task ForbiddenProblemIsExposedAsTypedHttpException()
     {
         var handler = new StubHandler(_ => Json(
