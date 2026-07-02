@@ -18,6 +18,36 @@
             <StackPanel>
                 <TextBlock FontSize="24" FontWeight="SemiBold" Text="LinkGallery" />
                 <TextBlock Margin="0,28,0,0" FontWeight="SemiBold" Text="我的手机" />
+                <ListBox x:Name="PairedDevicesList"
+                         Margin="0,10,0,0"
+                         ItemsSource="{Binding PairedDeviceRows}"
+                         SelectionChanged="OnPairedDeviceSelectionChanged"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         MaxHeight="170">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,0,6"
+                                    Padding="8"
+                                    Background="#E5E7EB"
+                                    CornerRadius="6">
+                                <StackPanel>
+                                    <TextBlock FontWeight="SemiBold"
+                                               Text="{Binding DisplayName}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Margin="0,3,0,0"
+                                               FontSize="11"
+                                               Foreground="#4B5563"
+                                               Text="{Binding Detail}" />
+                                    <TextBlock Margin="0,3,0,0"
+                                               FontSize="11"
+                                               Foreground="#6B7280"
+                                               Text="{Binding StatusText}" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
                 <TextBlock Margin="0,10,0,0"
                            Foreground="#6B7280"
                            TextWrapping="Wrap"

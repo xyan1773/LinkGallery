@@ -10,10 +10,13 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using LinkGallery.Application.Devices;
 using LinkGallery.Application.Media;
 using LinkGallery.Application.Transfers;
+using LinkGallery.Domain.Devices;
 using LinkGallery.Domain.Media;
 using LinkGallery.Domain.Transfers;
+using LinkGallery.Infrastructure.Devices;
 using LinkGallery.Infrastructure.Media;
 using LinkGallery.Infrastructure.Transfers;
 using Microsoft.Win32;
@@ -27,6 +30,8 @@ public partial class MainWindow : Window, IDisposable
     private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
     private readonly SqliteMediaIndex _mediaIndex;
+    private readonly SqlitePairedDeviceStore _pairedDeviceStore;
+    private readonly SavedAddressProbe _savedAddressProbe;
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
     private readonly LocalCopyCatalog _localCopies;
     private readonly ThumbnailCacheReader _thumbnailCache;
@@ -51,6 +56,8 @@ public partial class MainWindow : Window, IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "LinkGallery");
         _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
+        _pairedDeviceStore = new SqlitePairedDeviceStore(Path.Combine(dataDirectory, "paired-devices.db"));
+        _savedAddressProbe = new SavedAddressProbe(new HttpPublicDeviceInfoClient(_httpClient));
         _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
         _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
         _thumbnailCache = new ThumbnailCacheReader(
@@ -72,6 +79,8 @@ public partial class MainWindow : Window, IDisposable
 
     public ObservableCollection<MediaRow> TimelineRows { get; } = [];
 
+    public ObservableCollection<PairedDeviceRow> PairedDeviceRows { get; } = [];
+
     public ObservableCollection<TransferRow> TransferRows { get; } = [];
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
@@ -82,6 +91,7 @@ public partial class MainWindow : Window, IDisposable
             await _transferCoordinator.StartAsync();
             RefreshTransferRows();
             _transferRefreshTimer.Start();
+            await LoadPairedDevicesAsync(CancellationToken.None);
             await LoadIndexedPageAsync(
                 reset: true,
                 "本地缓存中还没有媒体",
@@ -92,6 +102,89 @@ public partial class MainWindow : Window, IDisposable
         {
             StatusText.Text = $"无法读取本地索引：{exception.Message}";
         }
+    }
+
+    private async Task LoadPairedDevicesAsync(CancellationToken cancellationToken)
+    {
+        await _pairedDeviceStore.InitializeAsync(cancellationToken);
+        var devices = await _pairedDeviceStore.ListPairedDevicesAsync(cancellationToken);
+        PairedDeviceRows.Clear();
+        foreach (var device in devices)
+        {
+            device.Status = PairedDeviceStatus.Checking;
+            PairedDeviceRows.Add(new PairedDeviceRow(device));
+            _ = ProbeSavedAddressAsync(device);
+        }
+    }
+
+    private async Task ProbeSavedAddressAsync(PairedDevice device)
+    {
+        if (string.IsNullOrWhiteSpace(device.LastHost) || !device.LastPort.HasValue)
+        {
+            UpdatePairedDeviceRow(device.DeviceId, PairedDeviceStatus.Offline);
+            return;
+        }
+
+        var probed = await _savedAddressProbe.ProbeAsync(
+            device,
+            TimeSpan.FromMilliseconds(1200),
+            CancellationToken.None);
+        await Dispatcher.InvokeAsync(() => UpdatePairedDeviceRow(probed));
+        if (probed.Status == PairedDeviceStatus.Online)
+        {
+            await _pairedDeviceStore.UpdateProbeSuccessAsync(
+                probed,
+                probed.LastHost!,
+                probed.LastPort!.Value,
+                probed.LastInstanceId,
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
+        }
+        else
+        {
+            await _pairedDeviceStore.UpdateProbeFailureAsync(
+                probed.DeviceId,
+                device.LastHost!,
+                device.LastPort!.Value,
+                probed.Status,
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
+        }
+    }
+
+    private void UpdatePairedDeviceRow(string deviceId, PairedDeviceStatus status)
+    {
+        var row = PairedDeviceRows.FirstOrDefault(candidate => candidate.Device.DeviceId == deviceId);
+        if (row is not null)
+        {
+            row.Device.Status = status;
+            row.Refresh();
+        }
+    }
+
+    private void UpdatePairedDeviceRow(PairedDevice device)
+    {
+        var row = PairedDeviceRows.FirstOrDefault(candidate => candidate.Device.DeviceId == device.DeviceId);
+        if (row is not null)
+        {
+            row.Device = device;
+            row.Refresh();
+        }
+    }
+
+    private void OnPairedDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (PairedDevicesList.SelectedItem is not PairedDeviceRow row ||
+            string.IsNullOrWhiteSpace(row.Device.LastHost) ||
+            !row.Device.LastPort.HasValue)
+        {
+            return;
+        }
+
+        AddressTextBox.Text = $"{row.Device.LastHost}:{row.Device.LastPort.Value}";
+        StatusText.Text = row.Device.Status == PairedDeviceStatus.Online
+            ? $"Selected {row.DisplayName}; saved address is ready."
+            : $"Selected {row.DisplayName}; saved address filled for manual retry.";
     }
 
     private void OnAddressTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -859,6 +952,7 @@ public partial class MainWindow : Window, IDisposable
         _httpClient.Dispose();
         _localCopies.Dispose();
         _mediaIndex.Dispose();
+        _pairedDeviceStore.Dispose();
         _disposed = true;
         GC.SuppressFinalize(this);
     }
@@ -947,6 +1041,36 @@ public partial class MainWindow : Window, IDisposable
                 "无法连接手机。请检查 IP、端口、Wi-Fi 和手机服务状态；仍可浏览本地索引。",
             _ => $"连接失败：{exception.Message}",
         };
+    }
+
+    public sealed class PairedDeviceRow(PairedDevice device) : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        public PairedDevice Device { get; set; } = device;
+
+        public string DisplayName => Device.DisplayName;
+
+        public string Detail =>
+            string.IsNullOrWhiteSpace(Device.Model) ? Device.DeviceId : Device.Model!;
+
+        public string StatusText => Device.Status switch
+        {
+            PairedDeviceStatus.Checking => "Checking saved address",
+            PairedDeviceStatus.Online => "Online",
+            PairedDeviceStatus.Offline => LastSeenText("Offline"),
+            PairedDeviceStatus.IdentityChanged => "Identity changed",
+            PairedDeviceStatus.AuthExpired => "Authentication expired",
+            PairedDeviceStatus.Error => "Connection error",
+            _ => Device.Status.ToString(),
+        };
+
+        public void Refresh() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+
+        private string LastSeenText(string prefix) =>
+            Device.LastConnectedAt.HasValue
+                ? $"{prefix} | Last connected {Device.LastConnectedAt.Value.LocalDateTime:g}"
+                : prefix;
     }
 
     public sealed class MediaRow : INotifyPropertyChanged
