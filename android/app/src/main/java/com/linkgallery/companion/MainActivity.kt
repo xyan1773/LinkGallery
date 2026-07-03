@@ -16,6 +16,7 @@ import com.linkgallery.companion.pairing.AndroidPairingCredentialStore
 import com.linkgallery.companion.pairing.PairingManager
 import com.linkgallery.companion.server.AndroidDeviceInfoProvider
 import com.linkgallery.companion.server.AndroidPublicDeviceInfoProvider
+import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
 import com.linkgallery.companion.server.ApiController
 import com.linkgallery.companion.server.LinkGalleryHttpServer
 import com.linkgallery.companion.ui.AndroidConnectionEnvironment
@@ -51,7 +52,7 @@ class MainActivity : ComponentActivity() {
                 AndroidDeviceInfoProvider(applicationContext, permissionGateway),
                 mediaRepository,
                 pairingManager,
-                pairingManager,
+                AllowAllAccessTokenAuthenticator,
             ),
         )
         setContent {
