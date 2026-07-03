@@ -21,6 +21,12 @@ class AndroidMediaPermissionGateway(
                 buildSet {
                     if (MediaType.IMAGE in types) add(Manifest.permission.READ_MEDIA_IMAGES)
                     if (MediaType.VIDEO in types) add(Manifest.permission.READ_MEDIA_VIDEO)
+                    if (MediaType.IMAGE in types) add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                }
+            } else if (sdkInt >= Build.VERSION_CODES.Q) {
+                buildSet {
+                    add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    if (MediaType.IMAGE in types) add(Manifest.permission.ACCESS_MEDIA_LOCATION)
                 }
             } else {
                 setOf(Manifest.permission.READ_EXTERNAL_STORAGE)

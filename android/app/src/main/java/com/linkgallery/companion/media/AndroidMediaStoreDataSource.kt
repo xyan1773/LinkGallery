@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.ContentUris
 import android.database.Cursor
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Size
@@ -88,7 +89,12 @@ class AndroidMediaStoreDataSource(
         type: MediaType,
         offset: Long,
     ): InputStream? {
-        val uri = ContentUris.withAppendedId(COLLECTION, mediaStoreId)
+        val mediaUri = ContentUris.withAppendedId(COLLECTION, mediaStoreId)
+        val uri = if (type == MediaType.IMAGE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.setRequireOriginal(mediaUri)
+        } else {
+            mediaUri
+        }
         var descriptor: android.content.res.AssetFileDescriptor? = null
         return try {
             descriptor = contentResolver.openAssetFileDescriptor(uri, "r") ?: return null

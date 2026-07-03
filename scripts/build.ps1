@@ -11,16 +11,30 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 
 . (Join-Path $PSScriptRoot 'dev-env.ps1') | Out-Host
 
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$Command,
+        [Parameter(Mandatory)]
+        [string]$FailureMessage
+    )
+
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FailureMessage (exit code $LASTEXITCODE)."
+    }
+}
+
 if (-not $SkipDesktop) {
-    & (Join-Path $env:DOTNET_ROOT 'dotnet.exe') restore (Join-Path $repositoryRoot 'LinkGallery.sln')
-    & (Join-Path $env:DOTNET_ROOT 'dotnet.exe') build `
-        (Join-Path $repositoryRoot 'LinkGallery.sln') `
-        --configuration $Configuration `
-        --no-restore
-    & (Join-Path $env:DOTNET_ROOT 'dotnet.exe') test `
-        (Join-Path $repositoryRoot 'LinkGallery.sln') `
-        --configuration $Configuration `
-        --no-build
+    $dotnet = Join-Path $env:DOTNET_ROOT 'dotnet.exe'
+    $solution = Join-Path $repositoryRoot 'LinkGallery.sln'
+    Invoke-Native { & $dotnet restore $solution } 'Desktop restore failed'
+    Invoke-Native {
+        & $dotnet build $solution --configuration $Configuration --no-restore
+    } 'Desktop build failed'
+    Invoke-Native {
+        & $dotnet test $solution --configuration $Configuration --no-build
+    } 'Desktop tests failed'
 }
 
 if (-not $SkipAndroid) {
@@ -29,5 +43,7 @@ if (-not $SkipAndroid) {
         throw 'Android Gradle Wrapper is missing.'
     }
 
-    & $gradle --project-dir (Join-Path $repositoryRoot 'android') assembleDebug testDebugUnitTest
+    Invoke-Native {
+        & $gradle --project-dir (Join-Path $repositoryRoot 'android') assembleDebug testDebugUnitTest
+    } 'Android build or unit tests failed'
 }

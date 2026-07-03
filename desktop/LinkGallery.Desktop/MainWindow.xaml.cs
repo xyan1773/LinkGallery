@@ -10,13 +10,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using LinkGallery.Application.Devices;
 using LinkGallery.Application.Media;
 using LinkGallery.Application.Transfers;
-using LinkGallery.Domain.Devices;
 using LinkGallery.Domain.Media;
 using LinkGallery.Domain.Transfers;
-using LinkGallery.Infrastructure.Devices;
 using LinkGallery.Infrastructure.Media;
 using LinkGallery.Infrastructure.Transfers;
 using Microsoft.Win32;
@@ -30,8 +27,6 @@ public partial class MainWindow : Window, IDisposable
     private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
     private readonly SqliteMediaIndex _mediaIndex;
-    private readonly SqlitePairedDeviceStore _pairedDeviceStore;
-    private readonly SavedAddressProbe _savedAddressProbe;
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
     private readonly LocalCopyCatalog _localCopies;
     private readonly ThumbnailCacheReader _thumbnailCache;
@@ -47,18 +42,13 @@ public partial class MainWindow : Window, IDisposable
     private bool _hasMoreRemoteItems;
     private bool _hasMoreIndexedItems;
     private bool _isLoadingPage;
-    private bool _preserveTimelineOnNextConnect;
     private readonly HashSet<string> _loadedRemoteIds = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public MainWindow()
     {
-        var dataDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LinkGallery");
+        var dataDirectory = ResolveDataDirectory();
         _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
-        _pairedDeviceStore = new SqlitePairedDeviceStore(Path.Combine(dataDirectory, "paired-devices.db"));
-        _savedAddressProbe = new SavedAddressProbe(new HttpPublicDeviceInfoClient(_httpClient));
         _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
         _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
         _thumbnailCache = new ThumbnailCacheReader(
@@ -78,21 +68,38 @@ public partial class MainWindow : Window, IDisposable
         DataContext = this;
     }
 
+    private static string ResolveDataDirectory()
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("LINKGALLERY_E2E"),
+                "1",
+                StringComparison.Ordinal) &&
+            Environment.GetEnvironmentVariable("LINKGALLERY_E2E_DATA_DIRECTORY")
+                is { Length: > 0 } e2eDirectory)
+        {
+            return Path.GetFullPath(e2eDirectory);
+        }
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LinkGallery");
+    }
+
     public ObservableCollection<MediaRow> TimelineRows { get; } = [];
 
-    public ObservableCollection<PairedDeviceRow> PairedDeviceRows { get; } = [];
+    public ObservableCollection<AlbumRow> AlbumRows { get; } = [];
 
     public ObservableCollection<TransferRow> TransferRows { get; } = [];
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         UpdateAddressHint();
+        ShowPage("Devices");
         try
         {
             await _transferCoordinator.StartAsync();
             RefreshTransferRows();
             _transferRefreshTimer.Start();
-            await LoadPairedDevicesAsync(CancellationToken.None);
             await LoadIndexedPageAsync(
                 reset: true,
                 "本地缓存中还没有媒体",
@@ -102,101 +109,6 @@ public partial class MainWindow : Window, IDisposable
         catch (Exception exception)
         {
             StatusText.Text = $"无法读取本地索引：{exception.Message}";
-        }
-    }
-
-    private async Task LoadPairedDevicesAsync(CancellationToken cancellationToken)
-    {
-        await _pairedDeviceStore.InitializeAsync(cancellationToken);
-        var devices = await _pairedDeviceStore.ListPairedDevicesAsync(cancellationToken);
-        PairedDeviceRows.Clear();
-        foreach (var device in devices)
-        {
-            device.Status = PairedDeviceStatus.Checking;
-            PairedDeviceRows.Add(new PairedDeviceRow(device));
-            _ = ProbeSavedAddressAsync(device);
-        }
-    }
-
-    private async Task ProbeSavedAddressAsync(PairedDevice device)
-    {
-        if (string.IsNullOrWhiteSpace(device.LastHost) || !device.LastPort.HasValue)
-        {
-            UpdatePairedDeviceRow(device.DeviceId, PairedDeviceStatus.Offline);
-            return;
-        }
-
-        var probed = await _savedAddressProbe.ProbeAsync(
-            device,
-            TimeSpan.FromMilliseconds(1200),
-            CancellationToken.None);
-        await Dispatcher.InvokeAsync(() => UpdatePairedDeviceRow(probed));
-        if (probed.Status == PairedDeviceStatus.Online)
-        {
-            await _pairedDeviceStore.UpdateProbeSuccessAsync(
-                probed,
-                probed.LastHost!,
-                probed.LastPort!.Value,
-                probed.LastInstanceId,
-                DateTimeOffset.UtcNow,
-                CancellationToken.None);
-        }
-        else
-        {
-            await _pairedDeviceStore.UpdateProbeFailureAsync(
-                probed.DeviceId,
-                device.LastHost!,
-                device.LastPort!.Value,
-                probed.Status,
-                DateTimeOffset.UtcNow,
-                CancellationToken.None);
-        }
-    }
-
-    private void UpdatePairedDeviceRow(string deviceId, PairedDeviceStatus status)
-    {
-        var row = PairedDeviceRows.FirstOrDefault(candidate => candidate.Device.DeviceId == deviceId);
-        if (row is not null)
-        {
-            row.Device.Status = status;
-            row.Refresh();
-        }
-    }
-
-    private void UpdatePairedDeviceRow(PairedDevice device)
-    {
-        var row = PairedDeviceRows.FirstOrDefault(candidate => candidate.Device.DeviceId == device.DeviceId);
-        if (row is not null)
-        {
-            row.Device = device;
-            row.Refresh();
-        }
-    }
-
-    private async void OnPairedDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (PairedDevicesList.SelectedItem is not PairedDeviceRow row ||
-            string.IsNullOrWhiteSpace(row.Device.LastHost) ||
-            !row.Device.LastPort.HasValue)
-        {
-            return;
-        }
-
-        AddressTextBox.Text = $"{row.Device.LastHost}:{row.Device.LastPort.Value}";
-        StatusText.Text = row.Device.Status == PairedDeviceStatus.Online
-            ? $"Selected {row.DisplayName}; saved address is ready."
-            : $"Selected {row.DisplayName}; saved address filled for manual retry.";
-        _activeDeviceId = row.Device.DeviceId;
-        await LoadIndexedPageAsync(
-            reset: true,
-            $"No cached media for {row.DisplayName}",
-            CancellationToken.None);
-        UpdateIndexedStatus();
-
-        if (row.Device.Status == PairedDeviceStatus.Online)
-        {
-            _preserveTimelineOnNextConnect = true;
-            OnConnectClick(sender, e);
         }
     }
 
@@ -233,9 +145,7 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
-        var preserveTimeline = _preserveTimelineOnNextConnect;
-        _preserveTimelineOnNextConnect = false;
-        Disconnect(clearTimeline: !preserveTimeline);
+        Disconnect(clearTimeline: true);
 
         try
         {
@@ -245,10 +155,7 @@ public partial class MainWindow : Window, IDisposable
             SetEmptyState($"正在连接 {endpoint}…");
             _connectionCancellation = new CancellationTokenSource();
             var cancellationToken = _connectionCancellation.Token;
-            var httpSource = new HttpReadOnlyMediaSource(
-                _httpClient,
-                apiAddress,
-                accessToken: ResolveAccessToken());
+            var httpSource = new HttpReadOnlyMediaSource(_httpClient, apiAddress);
             var cacheRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LinkGallery",
@@ -269,6 +176,7 @@ public partial class MainWindow : Window, IDisposable
 
             await LoadInitialRemotePageAsync(_source, cancellationToken);
             SetLoading(false);
+            ShowPage("Gallery");
             StartBackgroundSync(_source, endpoint);
         }
         catch (OperationCanceledException)
@@ -287,12 +195,6 @@ public partial class MainWindow : Window, IDisposable
         {
             SetLoading(false);
         }
-    }
-
-    private static string? ResolveAccessToken()
-    {
-        var token = Environment.GetEnvironmentVariable("LINKGALLERY_ACCESS_TOKEN");
-        return string.IsNullOrWhiteSpace(token) ? null : token.Trim();
     }
 
     private static async Task<LinkGallery.Domain.Devices.Device> GetDeviceInfoWithTimeoutAsync(
@@ -324,6 +226,7 @@ public partial class MainWindow : Window, IDisposable
                 timeout.Token);
 
             TimelineRows.Clear();
+            RefreshAlbumRows();
             _loadedRemoteIds.Clear();
             AppendTimelineItems(DeduplicateRemoteItems(page.Items));
             _remoteNextCursor = page.NextCursor;
@@ -453,23 +356,16 @@ public partial class MainWindow : Window, IDisposable
             ? $"电量 {device.BatteryPercent}%"
             : "电量未知";
         MediaCountText.Text = $"共 {device.MediaCount:N0} 项媒体";
+        DeviceStatusText.Text = "Online";
+        SyncStateText.Text = $"{device.MediaCount:N0} media";
         DevicePanel.Visibility = Visibility.Visible;
     }
 
     private void SetEmptyState(string message)
     {
-        if (TimelineRows.Count > 0)
-        {
-            TimelineList.Visibility = Visibility.Visible;
-            EmptyText.Visibility = Visibility.Collapsed;
-            return;
-        }
-
         TimelineList.Visibility = Visibility.Collapsed;
         EmptyText.Text = message;
-        EmptyText.Visibility = TimelineRows.Count == 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        EmptyText.Visibility = Visibility.Visible;
     }
 
     private async Task LoadIndexedPageAsync(
@@ -488,6 +384,7 @@ public partial class MainWindow : Window, IDisposable
             if (reset)
             {
                 TimelineRows.Clear();
+                RefreshAlbumRows();
                 _hasMoreIndexedItems = true;
             }
 
@@ -525,6 +422,33 @@ public partial class MainWindow : Window, IDisposable
                 : null;
             TimelineRows.Add(new MediaRow(item, dateHeader));
             previousDate = date;
+        }
+
+        RefreshAlbumRows();
+    }
+
+    private void RefreshAlbumRows()
+    {
+        var albums = TimelineRows
+            .Select(static row => row.Item)
+            .GroupBy(
+                static item => string.IsNullOrWhiteSpace(item.AlbumName)
+                    ? "Unsorted"
+                    : item.AlbumName,
+                StringComparer.CurrentCultureIgnoreCase)
+            .OrderByDescending(static group => group.Count())
+            .ThenBy(static group => group.Key, StringComparer.CurrentCultureIgnoreCase)
+            .Select(static group => new AlbumRow(
+                group.Key,
+                group.Count(),
+                group.Count(static item => item.Type == MediaType.Image),
+                group.Count(static item => item.Type == MediaType.Video)))
+            .ToArray();
+
+        AlbumRows.Clear();
+        foreach (var album in albums)
+        {
+            AlbumRows.Add(album);
         }
     }
 
@@ -623,6 +547,68 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnTimelineDoubleClick(object sender, MouseButtonEventArgs e) =>
         OpenSelectedMedia();
+
+    private void OnOpenMediaClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: MediaRow row })
+        {
+            TimelineList.SelectedItem = row;
+            OpenSelectedMedia();
+        }
+    }
+
+    private void OnNavigationMouseEnter(object sender, MouseEventArgs e)
+    {
+        NavigationColumn.Width = new GridLength(216);
+        ExpandedBrandText.Visibility = Visibility.Visible;
+    }
+
+    private void OnNavigationMouseLeave(object sender, MouseEventArgs e)
+    {
+        NavigationColumn.Width = new GridLength(76);
+        ExpandedBrandText.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnNavClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string page })
+        {
+            ShowPage(page);
+        }
+    }
+
+    private void ShowPage(string page)
+    {
+        GalleryPage.Visibility = page == "Gallery" ? Visibility.Visible : Visibility.Collapsed;
+        AlbumsPage.Visibility = page == "Albums" ? Visibility.Visible : Visibility.Collapsed;
+        DevicePage.Visibility = page == "Devices" ? Visibility.Visible : Visibility.Collapsed;
+        TransfersPage.Visibility = page == "Transfers" ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPage.Visibility = page == "Settings" ? Visibility.Visible : Visibility.Collapsed;
+        PageTitleText.Text = page;
+        if (page == "Transfers")
+        {
+            TransferDrawer.Visibility = Visibility.Visible;
+            TransferDrawerContentRow.Height = new GridLength(160);
+        }
+    }
+
+    private void OnToggleTransferDrawerClick(object sender, RoutedEventArgs e)
+    {
+        var collapsed = TransferDrawerContentRow.Height.Value <= 0;
+        TransferDrawerContentRow.Height = collapsed
+            ? new GridLength(160)
+            : new GridLength(0);
+        if (sender is Button button)
+        {
+            button.Content = collapsed ? "Collapse" : "Expand";
+        }
+    }
+
+    private void OnTimelineSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var count = TimelineList.SelectedItems.Count;
+        SelectionSummaryText.Text = count == 1 ? "1 selected" : $"{count:N0} selected";
+    }
 
     private void OnTimelineKeyDown(object sender, KeyEventArgs e)
     {
@@ -824,14 +810,30 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        var picker = new OpenFolderDialog
+        string destinationDirectory;
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("LINKGALLERY_E2E"),
+                "1",
+                StringComparison.Ordinal) &&
+            Environment.GetEnvironmentVariable("LINKGALLERY_E2E_IMPORT_DIRECTORY")
+                is { Length: > 0 } e2eImportDirectory)
         {
-            Title = "选择导入目录",
-            Multiselect = false,
-        };
-        if (picker.ShowDialog(this) != true)
+            destinationDirectory = Path.GetFullPath(e2eImportDirectory);
+            Directory.CreateDirectory(destinationDirectory);
+        }
+        else
         {
-            return;
+            var picker = new OpenFolderDialog
+            {
+                Title = "选择导入目录",
+                Multiselect = false,
+            };
+            if (picker.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            destinationDirectory = picker.FolderName;
         }
 
         ImportSelectedButton.IsEnabled = false;
@@ -839,7 +841,7 @@ public partial class MainWindow : Window, IDisposable
         {
             foreach (var item in selected)
             {
-                await _transferCoordinator.EnqueueAsync(item, picker.FolderName);
+                await _transferCoordinator.EnqueueAsync(item, destinationDirectory);
             }
 
             RefreshTransferRows();
@@ -985,7 +987,6 @@ public partial class MainWindow : Window, IDisposable
         _httpClient.Dispose();
         _localCopies.Dispose();
         _mediaIndex.Dispose();
-        _pairedDeviceStore.Dispose();
         _disposed = true;
         GC.SuppressFinalize(this);
     }
@@ -1001,24 +1002,21 @@ public partial class MainWindow : Window, IDisposable
         _connectionCancellation = null;
         _source?.Dispose();
         _source = null;
-        if (clearTimeline)
-        {
-            _activeDeviceId = null;
-        }
+        _activeDeviceId = null;
         _remoteNextCursor = null;
         _hasMoreRemoteItems = false;
         _hasMoreIndexedItems = false;
         _isLoadingPage = false;
         _loadedRemoteIds.Clear();
         DevicePanel.Visibility = Visibility.Collapsed;
-        TimelineList.Visibility = clearTimeline || TimelineRows.Count == 0
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        DeviceStatusText.Text = "Offline";
+        SyncStateText.Text = "Local cache";
+        TimelineList.Visibility = Visibility.Collapsed;
         SetTimelineFooter(null);
         if (clearTimeline)
         {
             TimelineRows.Clear();
-            TimelineList.Visibility = Visibility.Collapsed;
+            RefreshAlbumRows();
         }
 
         EmptyText.Text = "输入手机地址开始连接";
@@ -1034,6 +1032,7 @@ public partial class MainWindow : Window, IDisposable
         {
             LoadingProgress.IsIndeterminate = true;
             LoadingProgress.Value = 0;
+            DeviceStatusText.Text = "Busy";
         }
 
         ConnectButton.IsEnabled = !isLoading;
@@ -1052,6 +1051,8 @@ public partial class MainWindow : Window, IDisposable
             : _source.IsOffline ? "离线缓存" : "在线";
         var suffix = _hasMoreIndexedItems ? "" : " · 已全部加载";
         StatusText.Text = $"{mode} · 已显示 {TimelineRows.Count:N0} 项{suffix}";
+        DeviceStatusText.Text = _source is null || _source.IsOffline ? "Offline" : "Online";
+        SyncStateText.Text = $"{TimelineRows.Count:N0} shown";
     }
 
     private void ShowConnectionError(Exception exception)
@@ -1082,36 +1083,6 @@ public partial class MainWindow : Window, IDisposable
         };
     }
 
-    public sealed class PairedDeviceRow(PairedDevice device) : INotifyPropertyChanged
-    {
-        public event PropertyChangedEventHandler? PropertyChanged;
-
-        public PairedDevice Device { get; set; } = device;
-
-        public string DisplayName => Device.DisplayName;
-
-        public string Detail =>
-            string.IsNullOrWhiteSpace(Device.Model) ? Device.DeviceId : Device.Model!;
-
-        public string StatusText => Device.Status switch
-        {
-            PairedDeviceStatus.Checking => "Checking saved address",
-            PairedDeviceStatus.Online => "Online",
-            PairedDeviceStatus.Offline => LastSeenText("Offline"),
-            PairedDeviceStatus.IdentityChanged => "Identity changed",
-            PairedDeviceStatus.AuthExpired => "Authentication expired",
-            PairedDeviceStatus.Error => "Connection error",
-            _ => Device.Status.ToString(),
-        };
-
-        public void Refresh() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
-
-        private string LastSeenText(string prefix) =>
-            Device.LastConnectedAt.HasValue
-                ? $"{prefix} | Last connected {Device.LastConnectedAt.Value.LocalDateTime:g}"
-                : prefix;
-    }
-
     public sealed class MediaRow : INotifyPropertyChanged
     {
         private ImageSource? _thumbnail;
@@ -1136,6 +1107,8 @@ public partial class MainWindow : Window, IDisposable
         public string TypeLabel { get; }
 
         public string FileName { get; }
+
+        public string RemoteId => Item.RemoteId;
 
         public string Details { get; }
 
@@ -1188,6 +1161,20 @@ public partial class MainWindow : Window, IDisposable
 
             return $"{value:0.#} {units[unit]}";
         }
+    }
+
+    public sealed class AlbumRow(
+        string name,
+        int count,
+        int imageCount,
+        int videoCount)
+    {
+        public string Name { get; } = name;
+
+        public string CountText { get; } = count == 1 ? "1 item" : $"{count:N0} items";
+
+        public string TypeSummary { get; } =
+            $"{imageCount:N0} photos · {videoCount:N0} videos";
     }
 
     public sealed class TransferRow : INotifyPropertyChanged

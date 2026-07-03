@@ -53,9 +53,39 @@ public sealed class CachingReadOnlyMediaSourceTests
         }
     }
 
-    private sealed class StubSource : IReadOnlyMediaSource
+    [TestMethod]
+    public async Task EntityAwareOriginalReadsAreForwardedForSafeResume()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"LinkGallery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var inner = new StubSource();
+            using var source = new CachingReadOnlyMediaSource(inner, root, "phone-address", 1024);
+
+            await using var stream = await ((IEntityAwareMediaSource)source).OpenOriginalAsync(
+                "media-1",
+                4096,
+                "\"sha256-test\"",
+                CancellationToken.None);
+
+            Assert.AreEqual(4096, inner.LastOffset);
+            Assert.AreEqual("\"sha256-test\"", inner.LastEntityTag);
+            Assert.AreEqual(4, stream.Length);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    private sealed class StubSource : IReadOnlyMediaSource, IEntityAwareMediaSource
     {
         public bool Fail { get; init; }
+
+        public long LastOffset { get; private set; }
+
+        public string? LastEntityTag { get; private set; }
 
         public Task<Device> GetDeviceInfoAsync(CancellationToken cancellationToken) =>
             Fail
@@ -102,5 +132,16 @@ public sealed class CachingReadOnlyMediaSourceTests
             long offset,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<Stream> OpenOriginalAsync(
+            string remoteId,
+            long offset,
+            string? entityTag,
+            CancellationToken cancellationToken)
+        {
+            LastOffset = offset;
+            LastEntityTag = entityTag;
+            return Task.FromResult<Stream>(new MemoryStream([1, 2, 3, 4]));
+        }
     }
 }
