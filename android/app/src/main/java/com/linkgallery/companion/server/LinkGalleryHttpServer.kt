@@ -151,8 +151,9 @@ class LinkGalleryHttpServer(
                     headers[line.substring(0, separator).trim().lowercase(Locale.ROOT)] =
                         line.substring(separator + 1).trim()
                 }
+                val body = readBody(reader, headers)
 
-                val response = executeController(method, target, headers)
+                val response = executeController(method, target, headers, body)
                 status = response.status
                 write(socket, response)
             } catch (_: TimeoutException) {
@@ -176,9 +177,10 @@ class LinkGalleryHttpServer(
         method: String,
         target: String,
         headers: Map<String, String>,
+        body: String,
     ): ApiResponse {
         val task = handlerExecutor.submit<ApiResponse> {
-            runSuspending { controller.handle(method, target, headers) }
+            runSuspending { controller.handle(method, target, headers, body) }
         }
         return try {
             task.get(config.requestTimeoutMilliseconds, TimeUnit.MILLISECONDS)
@@ -186,6 +188,23 @@ class LinkGalleryHttpServer(
             task.cancel(true)
             throw exception
         }
+    }
+
+    private fun readBody(reader: BufferedReader, headers: Map<String, String>): String {
+        val contentLength = headers["content-length"]?.toIntOrNull() ?: return ""
+        if (contentLength <= 0) return ""
+        if (contentLength > MAX_BODY_BYTES) {
+            throw IllegalArgumentException("Request body is too large.")
+        }
+
+        val buffer = CharArray(contentLength)
+        var offset = 0
+        while (offset < contentLength) {
+            val read = reader.read(buffer, offset, contentLength - offset)
+            if (read < 0) break
+            offset += read
+        }
+        return String(buffer, 0, offset)
     }
 
     private fun write(socket: Socket, response: ApiResponse) {
@@ -249,5 +268,6 @@ class LinkGalleryHttpServer(
 
     private companion object {
         const val MAX_HEADER_BYTES = 16 * 1024
+        const val MAX_BODY_BYTES = 16 * 1024
     }
 }

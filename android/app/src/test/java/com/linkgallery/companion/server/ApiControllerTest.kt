@@ -340,6 +340,34 @@ class ApiControllerTest {
         assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/media"))
     }
 
+    @Test
+    fun pairingRequestAndConfirmFollowContractShape() {
+        val controller = controller()
+        val challenge = runSuspend {
+            controller.handle("POST", "/api/v1/pair/request", body = "{}")
+        }
+
+        assertEquals(202, challenge.status)
+        val sessionId = checkNotNull(
+            Regex(""""sessionId":"([^"]+)"""").find(challenge.body)?.groupValues?.get(1),
+        )
+        val code = checkNotNull(
+            Regex(""""confirmationCode":"([0-9]{6})"""").find(challenge.body)?.groupValues?.get(1),
+        )
+
+        val result = runSuspend {
+            controller.handle(
+                "POST",
+                "/api/v1/pair/confirm",
+                body = """{"sessionId":"$sessionId","confirmationCode":"$code"}""",
+            )
+        }
+
+        assertEquals(200, result.status)
+        assertTrue(result.body.contains(""""accessToken":"""))
+        assertTrue(result.body.contains(""""devicePublicKey":"""))
+    }
+
     private fun controller(
         repository: MediaRepository = FakeMediaRepository(
             MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),

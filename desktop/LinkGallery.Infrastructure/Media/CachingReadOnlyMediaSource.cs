@@ -9,6 +9,7 @@ namespace LinkGallery.Infrastructure.Media;
 
 public sealed class CachingReadOnlyMediaSource :
     IReadOnlyMediaSource,
+    IEntityAwareMediaSource,
     IMediaPlaybackUriSource,
     IDisposable
 {
@@ -114,6 +115,20 @@ public sealed class CachingReadOnlyMediaSource :
         long offset,
         CancellationToken cancellationToken) =>
         _inner.OpenOriginalAsync(remoteId, offset, cancellationToken);
+
+    public Task<Stream> OpenOriginalAsync(
+        string remoteId,
+        long offset,
+        string? entityTag,
+        CancellationToken cancellationToken)
+    {
+        if (_inner is not IEntityAwareMediaSource source)
+        {
+            throw new NotSupportedException("The wrapped media source does not support entity-safe resume.");
+        }
+
+        return source.OpenOriginalAsync(remoteId, offset, entityTag, cancellationToken);
+    }
 
     public Uri GetOriginalUri(string remoteId)
     {

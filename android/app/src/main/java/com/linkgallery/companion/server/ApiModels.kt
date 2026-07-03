@@ -29,3 +29,22 @@ data class ApiResponse(
     val contentLength: Long? = null,
     val headers: Map<String, String> = emptyMap(),
 )
+
+data class PairingChallenge(
+    val sessionId: String,
+    val confirmationCode: String,
+    val expiresAt: String,
+)
+
+data class PairingResult(
+    val deviceId: String,
+    val devicePublicKey: String,
+    val accessToken: String,
+    val expiresAt: String,
+)
+
+interface PairingSessionManager {
+    fun requestPairing(): PairingChallenge
+
+    fun confirmPairing(sessionId: String, confirmationCode: String): PairingResult?
+}

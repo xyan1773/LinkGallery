@@ -16,11 +16,13 @@ import java.nio.charset.StandardCharsets
 class ApiController(
     private val deviceInfoProvider: DeviceInfoProvider,
     private val mediaRepository: MediaRepository,
+    private val pairingSessionManager: PairingSessionManager = InMemoryPairingSessionManager("android-device"),
 ) {
     suspend fun handle(
         method: String,
         requestTarget: String,
         headers: Map<String, String> = emptyMap(),
+        body: String = "",
     ): ApiResponse {
         val path = requestTarget.substringBefore('?')
         if (!ReadOnlyRoutePolicy.permits(method, path)) {
@@ -28,6 +30,8 @@ class ApiController(
         }
 
         return when (path) {
+            PAIR_REQUEST_PATH -> requestPairing(method)
+            PAIR_CONFIRM_PATH -> confirmPairing(method, body)
             DEVICE_PATH -> getDevice()
             MEDIA_PATH -> {
                 val parameters = try {
@@ -61,6 +65,41 @@ class ApiController(
                 problem(404, "not_found", "The requested route does not exist.")
             }
         }
+    }
+
+    private fun requestPairing(method: String): ApiResponse {
+        if (!method.equals("POST", ignoreCase = true)) {
+            return problem(404, "not_found", "The requested route does not exist.")
+        }
+
+        return ApiResponse(202, Json.pairingChallenge(pairingSessionManager.requestPairing()))
+    }
+
+    private fun confirmPairing(method: String, body: String): ApiResponse {
+        if (!method.equals("POST", ignoreCase = true)) {
+            return problem(404, "not_found", "The requested route does not exist.")
+        }
+
+        val fields = parseSimpleJsonObject(body)
+            ?: return problem(400, "invalid_parameter", "The pairing confirmation is invalid.")
+        val sessionId = fields["sessionId"]
+        val confirmationCode = fields["confirmationCode"]
+        if (sessionId.isNullOrBlank() || confirmationCode?.matches(Regex("^[0-9]{6}$")) != true) {
+            return problem(400, "invalid_parameter", "The pairing confirmation is invalid.")
+        }
+
+        val result = pairingSessionManager.confirmPairing(sessionId, confirmationCode)
+            ?: return problem(400, "invalid_parameter", "The pairing code is invalid or expired.")
+        return ApiResponse(200, Json.pairingResult(result))
+    }
+
+    private fun parseSimpleJsonObject(body: String): Map<String, String>? {
+        if (body.isBlank()) return null
+        return runCatching {
+            SIMPLE_JSON_FIELD.findAll(body).associate { match ->
+                match.groupValues[1] to match.groupValues[2]
+            }
+        }.getOrNull()
     }
 
     private suspend fun getContent(
@@ -329,9 +368,12 @@ class ApiController(
     private companion object {
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
+        const val PAIR_REQUEST_PATH = "/api/v1/pair/request"
+        const val PAIR_CONFIRM_PATH = "/api/v1/pair/confirm"
         val THUMBNAIL_PATH = Regex("^/api/v1/media/([^/]+)/thumbnail$")
         val CONTENT_PATH = Regex("^/api/v1/media/([^/]+)/content$")
         val RANGE_PATTERN = Regex("^bytes=(\\d*)-(\\d*)$")
+        val SIMPLE_JSON_FIELD = Regex("\"([A-Za-z0-9_]+)\"\\s*:\\s*\"([^\"]*)\"")
     }
 
     private data class ContentRange(

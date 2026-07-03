@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>LinkGallery.E2E</AssemblyName>
+    <RootNamespace>LinkGallery.E2E</RootNamespace>
+  </PropertyGroup>
+</Project>

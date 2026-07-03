@@ -47,9 +47,7 @@ public partial class MainWindow : Window, IDisposable
 
     public MainWindow()
     {
-        var dataDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LinkGallery");
+        var dataDirectory = ResolveDataDirectory();
         _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
         _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
         _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
@@ -70,13 +68,33 @@ public partial class MainWindow : Window, IDisposable
         DataContext = this;
     }
 
+    private static string ResolveDataDirectory()
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("LINKGALLERY_E2E"),
+                "1",
+                StringComparison.Ordinal) &&
+            Environment.GetEnvironmentVariable("LINKGALLERY_E2E_DATA_DIRECTORY")
+                is { Length: > 0 } e2eDirectory)
+        {
+            return Path.GetFullPath(e2eDirectory);
+        }
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LinkGallery");
+    }
+
     public ObservableCollection<MediaRow> TimelineRows { get; } = [];
+
+    public ObservableCollection<AlbumRow> AlbumRows { get; } = [];
 
     public ObservableCollection<TransferRow> TransferRows { get; } = [];
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         UpdateAddressHint();
+        ShowPage("Devices");
         try
         {
             await _transferCoordinator.StartAsync();
@@ -158,6 +176,7 @@ public partial class MainWindow : Window, IDisposable
 
             await LoadInitialRemotePageAsync(_source, cancellationToken);
             SetLoading(false);
+            ShowPage("Gallery");
             StartBackgroundSync(_source, endpoint);
         }
         catch (OperationCanceledException)
@@ -207,6 +226,7 @@ public partial class MainWindow : Window, IDisposable
                 timeout.Token);
 
             TimelineRows.Clear();
+            RefreshAlbumRows();
             _loadedRemoteIds.Clear();
             AppendTimelineItems(DeduplicateRemoteItems(page.Items));
             _remoteNextCursor = page.NextCursor;
@@ -336,6 +356,8 @@ public partial class MainWindow : Window, IDisposable
             ? $"电量 {device.BatteryPercent}%"
             : "电量未知";
         MediaCountText.Text = $"共 {device.MediaCount:N0} 项媒体";
+        DeviceStatusText.Text = "Online";
+        SyncStateText.Text = $"{device.MediaCount:N0} media";
         DevicePanel.Visibility = Visibility.Visible;
     }
 
@@ -362,6 +384,7 @@ public partial class MainWindow : Window, IDisposable
             if (reset)
             {
                 TimelineRows.Clear();
+                RefreshAlbumRows();
                 _hasMoreIndexedItems = true;
             }
 
@@ -399,6 +422,33 @@ public partial class MainWindow : Window, IDisposable
                 : null;
             TimelineRows.Add(new MediaRow(item, dateHeader));
             previousDate = date;
+        }
+
+        RefreshAlbumRows();
+    }
+
+    private void RefreshAlbumRows()
+    {
+        var albums = TimelineRows
+            .Select(static row => row.Item)
+            .GroupBy(
+                static item => string.IsNullOrWhiteSpace(item.AlbumName)
+                    ? "Unsorted"
+                    : item.AlbumName,
+                StringComparer.CurrentCultureIgnoreCase)
+            .OrderByDescending(static group => group.Count())
+            .ThenBy(static group => group.Key, StringComparer.CurrentCultureIgnoreCase)
+            .Select(static group => new AlbumRow(
+                group.Key,
+                group.Count(),
+                group.Count(static item => item.Type == MediaType.Image),
+                group.Count(static item => item.Type == MediaType.Video)))
+            .ToArray();
+
+        AlbumRows.Clear();
+        foreach (var album in albums)
+        {
+            AlbumRows.Add(album);
         }
     }
 
@@ -497,6 +547,68 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnTimelineDoubleClick(object sender, MouseButtonEventArgs e) =>
         OpenSelectedMedia();
+
+    private void OnOpenMediaClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: MediaRow row })
+        {
+            TimelineList.SelectedItem = row;
+            OpenSelectedMedia();
+        }
+    }
+
+    private void OnNavigationMouseEnter(object sender, MouseEventArgs e)
+    {
+        NavigationColumn.Width = new GridLength(216);
+        ExpandedBrandText.Visibility = Visibility.Visible;
+    }
+
+    private void OnNavigationMouseLeave(object sender, MouseEventArgs e)
+    {
+        NavigationColumn.Width = new GridLength(76);
+        ExpandedBrandText.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnNavClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string page })
+        {
+            ShowPage(page);
+        }
+    }
+
+    private void ShowPage(string page)
+    {
+        GalleryPage.Visibility = page == "Gallery" ? Visibility.Visible : Visibility.Collapsed;
+        AlbumsPage.Visibility = page == "Albums" ? Visibility.Visible : Visibility.Collapsed;
+        DevicePage.Visibility = page == "Devices" ? Visibility.Visible : Visibility.Collapsed;
+        TransfersPage.Visibility = page == "Transfers" ? Visibility.Visible : Visibility.Collapsed;
+        SettingsPage.Visibility = page == "Settings" ? Visibility.Visible : Visibility.Collapsed;
+        PageTitleText.Text = page;
+        if (page == "Transfers")
+        {
+            TransferDrawer.Visibility = Visibility.Visible;
+            TransferDrawerContentRow.Height = new GridLength(160);
+        }
+    }
+
+    private void OnToggleTransferDrawerClick(object sender, RoutedEventArgs e)
+    {
+        var collapsed = TransferDrawerContentRow.Height.Value <= 0;
+        TransferDrawerContentRow.Height = collapsed
+            ? new GridLength(160)
+            : new GridLength(0);
+        if (sender is Button button)
+        {
+            button.Content = collapsed ? "Collapse" : "Expand";
+        }
+    }
+
+    private void OnTimelineSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var count = TimelineList.SelectedItems.Count;
+        SelectionSummaryText.Text = count == 1 ? "1 selected" : $"{count:N0} selected";
+    }
 
     private void OnTimelineKeyDown(object sender, KeyEventArgs e)
     {
@@ -698,14 +810,30 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        var picker = new OpenFolderDialog
+        string destinationDirectory;
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("LINKGALLERY_E2E"),
+                "1",
+                StringComparison.Ordinal) &&
+            Environment.GetEnvironmentVariable("LINKGALLERY_E2E_IMPORT_DIRECTORY")
+                is { Length: > 0 } e2eImportDirectory)
         {
-            Title = "选择导入目录",
-            Multiselect = false,
-        };
-        if (picker.ShowDialog(this) != true)
+            destinationDirectory = Path.GetFullPath(e2eImportDirectory);
+            Directory.CreateDirectory(destinationDirectory);
+        }
+        else
         {
-            return;
+            var picker = new OpenFolderDialog
+            {
+                Title = "选择导入目录",
+                Multiselect = false,
+            };
+            if (picker.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            destinationDirectory = picker.FolderName;
         }
 
         ImportSelectedButton.IsEnabled = false;
@@ -713,7 +841,7 @@ public partial class MainWindow : Window, IDisposable
         {
             foreach (var item in selected)
             {
-                await _transferCoordinator.EnqueueAsync(item, picker.FolderName);
+                await _transferCoordinator.EnqueueAsync(item, destinationDirectory);
             }
 
             RefreshTransferRows();
@@ -881,11 +1009,14 @@ public partial class MainWindow : Window, IDisposable
         _isLoadingPage = false;
         _loadedRemoteIds.Clear();
         DevicePanel.Visibility = Visibility.Collapsed;
+        DeviceStatusText.Text = "Offline";
+        SyncStateText.Text = "Local cache";
         TimelineList.Visibility = Visibility.Collapsed;
         SetTimelineFooter(null);
         if (clearTimeline)
         {
             TimelineRows.Clear();
+            RefreshAlbumRows();
         }
 
         EmptyText.Text = "输入手机地址开始连接";
@@ -901,6 +1032,7 @@ public partial class MainWindow : Window, IDisposable
         {
             LoadingProgress.IsIndeterminate = true;
             LoadingProgress.Value = 0;
+            DeviceStatusText.Text = "Busy";
         }
 
         ConnectButton.IsEnabled = !isLoading;
@@ -919,6 +1051,8 @@ public partial class MainWindow : Window, IDisposable
             : _source.IsOffline ? "离线缓存" : "在线";
         var suffix = _hasMoreIndexedItems ? "" : " · 已全部加载";
         StatusText.Text = $"{mode} · 已显示 {TimelineRows.Count:N0} 项{suffix}";
+        DeviceStatusText.Text = _source is null || _source.IsOffline ? "Offline" : "Online";
+        SyncStateText.Text = $"{TimelineRows.Count:N0} shown";
     }
 
     private void ShowConnectionError(Exception exception)
@@ -974,6 +1108,8 @@ public partial class MainWindow : Window, IDisposable
 
         public string FileName { get; }
 
+        public string RemoteId => Item.RemoteId;
+
         public string Details { get; }
 
         public string TakenAt { get; }
@@ -1025,6 +1161,20 @@ public partial class MainWindow : Window, IDisposable
 
             return $"{value:0.#} {units[unit]}";
         }
+    }
+
+    public sealed class AlbumRow(
+        string name,
+        int count,
+        int imageCount,
+        int videoCount)
+    {
+        public string Name { get; } = name;
+
+        public string CountText { get; } = count == 1 ? "1 item" : $"{count:N0} items";
+
+        public string TypeSummary { get; } =
+            $"{imageCount:N0} photos · {videoCount:N0} videos";
     }
 
     public sealed class TransferRow : INotifyPropertyChanged

@@ -20,4 +20,11 @@ class ReadOnlyRoutePolicyTest {
         assertFalse(ReadOnlyRoutePolicy.permits("POST", "/api/v1/media/upload"))
         assertFalse(ReadOnlyRoutePolicy.permits("DELETE", "/api/v1/media/media-1/content"))
     }
+
+    @Test
+    fun pairingControlRoutesAreAllowedWithoutOpeningMediaWrites() {
+        assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/pair/request"))
+        assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/pair/confirm"))
+        assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/pair/request"))
+    }
 }

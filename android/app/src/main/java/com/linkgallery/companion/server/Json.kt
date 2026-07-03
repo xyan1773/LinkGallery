@@ -28,6 +28,19 @@ internal object Json {
         "message" to string(message),
     )
 
+    fun pairingChallenge(value: PairingChallenge): String = objectOf(
+        "sessionId" to string(value.sessionId),
+        "confirmationCode" to string(value.confirmationCode),
+        "expiresAt" to string(value.expiresAt),
+    )
+
+    fun pairingResult(value: PairingResult): String = objectOf(
+        "deviceId" to string(value.deviceId),
+        "devicePublicKey" to string(value.devicePublicKey),
+        "accessToken" to string(value.accessToken),
+        "expiresAt" to string(value.expiresAt),
+    )
+
     private fun mediaItem(value: MediaRecord): String = objectOf(
         "id" to string(value.id),
         "fileName" to string(value.fileName),

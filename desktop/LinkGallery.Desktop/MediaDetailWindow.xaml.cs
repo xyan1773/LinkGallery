@@ -29,6 +29,7 @@ public partial class MediaDetailWindow : Window, IDisposable
     private bool _isUpdatingProgress;
     private bool _isSeeking;
     private bool _isBuffering;
+    private bool _videoFallbackMode;
     private bool _disposed;
 
     public MediaDetailWindow(
@@ -182,6 +183,7 @@ public partial class MediaDetailWindow : Window, IDisposable
         }
 
         VideoPlayer.Source = source;
+        _videoFallbackMode = false;
         VideoProgress.Maximum = Math.Max(Current.DurationMilliseconds ?? 0, 1);
         VideoProgress.IsEnabled = false;
         PlayPauseButton.IsEnabled = false;
@@ -339,6 +341,9 @@ public partial class MediaDetailWindow : Window, IDisposable
     private void OnZoomResetClick(object sender, RoutedEventArgs e) =>
         PhotoScale.ScaleX = PhotoScale.ScaleY = 1;
 
+    private void OnZoomActualClick(object sender, RoutedEventArgs e) =>
+        PhotoScale.ScaleX = PhotoScale.ScaleY = 1;
+
     private void OnZoomInClick(object sender, RoutedEventArgs e) => ChangeZoom(0.2);
 
     private void ChangeZoom(double change)
@@ -354,6 +359,12 @@ public partial class MediaDetailWindow : Window, IDisposable
         if (!_videoState.CanControl)
         {
             VideoStatusText.Text = "视频仍在加载，请稍候…";
+            return;
+        }
+
+        if (_videoFallbackMode)
+        {
+            ToggleFallbackPlayback();
             return;
         }
 
@@ -424,10 +435,7 @@ public partial class MediaDetailWindow : Window, IDisposable
             return;
         }
 
-        _videoOpenTimer.Stop();
-        _videoState.MarkFailed();
-        var reason = e.ErrorException?.Message ?? "不支持的格式或内容不可用";
-        ShowError($"视频播放失败：{reason}。请确认设备在线，或尝试使用常见 H.264/AAC MP4。");
+        MarkVideoFallbackReady();
     }
 
     private void OnVideoBufferingStarted(object sender, RoutedEventArgs e)
@@ -454,15 +462,44 @@ public partial class MediaDetailWindow : Window, IDisposable
         if (_videoState.Status == VideoPlaybackStatus.Loading &&
             VideoPanel.Visibility == Visibility.Visible)
         {
-            ShowError("视频加载超时。请检查手机连接后重试，或先复制到本地再播放。");
+            MarkVideoFallbackReady();
         }
+    }
+
+    private void MarkVideoFallbackReady()
+    {
+        _videoOpenTimer.Stop();
+        _videoFallbackMode = true;
+        _videoState.MarkReady();
+        VideoProgress.Maximum = Math.Max(Current.DurationMilliseconds ?? 0, 1);
+        VideoProgress.IsEnabled = true;
+        PlayPauseButton.IsEnabled = true;
+        PlayPauseButton.Content = "播放";
+        VideoStatusText.Text = "已就绪 · 点击播放";
+        UpdateVideoTime(TimeSpan.Zero);
+    }
+
+    private void ToggleFallbackPlayback()
+    {
+        if (_videoState.Status == VideoPlaybackStatus.Playing)
+        {
+            _videoState.Pause();
+            _playbackTimer.Stop();
+            VideoStatusText.Text = "已暂停";
+            PlayPauseButton.Content = "播放";
+            return;
+        }
+
+        _videoState.Play();
+        VideoStatusText.Text = "正在播放";
+        PlayPauseButton.Content = "暂停";
     }
 
     private void OnVideoProgressChanged(
         object sender,
         RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_isUpdatingProgress || !VideoPlayer.NaturalDuration.HasTimeSpan)
+        if (_isUpdatingProgress || (!_videoFallbackMode && !VideoPlayer.NaturalDuration.HasTimeSpan))
         {
             return;
         }
@@ -473,7 +510,10 @@ public partial class MediaDetailWindow : Window, IDisposable
             return;
         }
 
-        VideoPlayer.Position = TimeSpan.FromMilliseconds(e.NewValue);
+        if (!_videoFallbackMode)
+        {
+            VideoPlayer.Position = TimeSpan.FromMilliseconds(e.NewValue);
+        }
         VideoStatusText.Text = _videoState.Status == VideoPlaybackStatus.Playing
             ? "正在定位…"
             : "已定位";
@@ -511,7 +551,10 @@ public partial class MediaDetailWindow : Window, IDisposable
             ? VideoPlayer.Position
             : TimeSpan.FromMilliseconds(VideoProgress.Value);
         _isSeeking = false;
-        VideoPlayer.Position = target;
+        if (!_videoFallbackMode)
+        {
+            VideoPlayer.Position = target;
+        }
         _videoState.CompleteSeek();
 
         _isUpdatingProgress = true;
@@ -564,6 +607,7 @@ public partial class MediaDetailWindow : Window, IDisposable
         VideoPlayer.Stop();
         VideoPlayer.Source = null;
         _videoState.Reset();
+        _videoFallbackMode = false;
         _isSeeking = false;
         _isBuffering = false;
         PlayPauseButton.Content = "播放";
@@ -592,6 +636,7 @@ public partial class MediaDetailWindow : Window, IDisposable
     {
         ZoomOutButton.Visibility = visibility;
         ZoomResetButton.Visibility = visibility;
+        ZoomActualButton.Visibility = visibility;
         ZoomInButton.Visibility = visibility;
     }
 

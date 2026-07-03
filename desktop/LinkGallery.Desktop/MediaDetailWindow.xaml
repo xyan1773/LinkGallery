@@ -12,7 +12,7 @@
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="300" />
+            <ColumnDefinition Width="320" />
         </Grid.ColumnDefinitions>
 
         <Grid>
@@ -24,6 +24,7 @@
 
             <Grid Margin="20,16">
                 <Button x:Name="PreviousButton"
+                        AutomationProperties.AutomationId="PreviousButton"
                         Width="88"
                         Padding="8"
                         HorizontalAlignment="Left"
@@ -34,6 +35,7 @@
                            VerticalAlignment="Center"
                            Foreground="#D1D5DB" />
                 <Button x:Name="NextButton"
+                        AutomationProperties.AutomationId="NextButton"
                         Width="88"
                         Padding="8"
                         HorizontalAlignment="Right"
@@ -43,6 +45,7 @@
 
             <Grid Grid.Row="1" Margin="20,0">
                 <Border x:Name="PhotoPanel"
+                        AutomationProperties.AutomationId="PhotoPanel"
                         Background="#030712"
                         ClipToBounds="True"
                         Visibility="Collapsed">
@@ -61,7 +64,9 @@
                     </ScrollViewer>
                 </Border>
 
-                <Grid x:Name="VideoPanel" Visibility="Collapsed">
+                <Grid x:Name="VideoPanel"
+                      AutomationProperties.AutomationId="VideoPanel"
+                      Visibility="Collapsed">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
@@ -78,6 +83,7 @@
                                   BufferingStarted="OnVideoBufferingStarted"
                                   BufferingEnded="OnVideoBufferingEnded" />
                     <TextBlock x:Name="VideoStatusText"
+                               AutomationProperties.AutomationId="VideoStatusText"
                                Grid.Row="1"
                                Margin="0,10,0,0"
                                HorizontalAlignment="Center"
@@ -90,12 +96,14 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button x:Name="PlayPauseButton"
+                                AutomationProperties.AutomationId="PlayPauseButton"
                                 Width="72"
                                 Padding="8"
                                 IsEnabled="False"
                                 Click="OnPlayPauseClick"
                                 Content="播放" />
                         <Slider x:Name="VideoProgress"
+                                AutomationProperties.AutomationId="VideoProgress"
                                 Grid.Column="1"
                                 Margin="14,0"
                                 VerticalAlignment="Center"
@@ -112,6 +120,7 @@
                 </Grid>
 
                 <StackPanel x:Name="LoadingPanel"
+                            AutomationProperties.AutomationId="LoadingPanel"
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center">
                     <ProgressBar Width="180"
@@ -125,6 +134,7 @@
                 </StackPanel>
 
                 <StackPanel x:Name="ErrorPanel"
+                            AutomationProperties.AutomationId="ErrorPanel"
                             MaxWidth="480"
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center"
@@ -147,19 +157,30 @@
                         HorizontalAlignment="Center"
                         Orientation="Horizontal">
                 <Button x:Name="ZoomOutButton"
+                        AutomationProperties.AutomationId="ZoomOutButton"
                         Width="72"
                         Padding="8"
                         Click="OnZoomOutClick"
                         Content="缩小"
                         Visibility="Collapsed" />
                 <Button x:Name="ZoomResetButton"
+                        AutomationProperties.AutomationId="ZoomResetButton"
                         Width="72"
                         Margin="8,0"
                         Padding="8"
                         Click="OnZoomResetClick"
                         Content="适合"
                         Visibility="Collapsed" />
+                <Button x:Name="ZoomActualButton"
+                        AutomationProperties.AutomationId="ZoomActualButton"
+                        Width="72"
+                        Margin="0,0,8,0"
+                        Padding="8"
+                        Click="OnZoomActualClick"
+                        Content="100%"
+                        Visibility="Collapsed" />
                 <Button x:Name="ZoomInButton"
+                        AutomationProperties.AutomationId="ZoomInButton"
                         Width="72"
                         Padding="8"
                         Click="OnZoomInClick"
@@ -174,6 +195,7 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock x:Name="FileNameText"
+                               AutomationProperties.AutomationId="FileNameText"
                                FontSize="20"
                                FontWeight="SemiBold"
                                TextWrapping="Wrap" />
