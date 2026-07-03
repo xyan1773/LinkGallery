@@ -8,6 +8,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.linkgallery.companion.discovery.AndroidNsdServiceRegistrar
+import com.linkgallery.companion.discovery.AndroidUdpDiscoveryResponder
 import com.linkgallery.companion.identity.AndroidKeystoreDeviceIdentityProvider
 import com.linkgallery.companion.media.AndroidMediaPermissionGateway
 import com.linkgallery.companion.media.AndroidMediaStoreDataSource
@@ -24,6 +25,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var httpServer: LinkGalleryHttpServer
     private lateinit var publicDeviceInfoProvider: AndroidPublicDeviceInfoProvider
     private lateinit var nsdRegistrar: AndroidNsdServiceRegistrar
+    private lateinit var udpDiscoveryResponder: AndroidUdpDiscoveryResponder
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +35,7 @@ class MainActivity : ComponentActivity() {
             AndroidKeystoreDeviceIdentityProvider(),
         )
         nsdRegistrar = AndroidNsdServiceRegistrar(applicationContext, publicDeviceInfoProvider)
+        udpDiscoveryResponder = AndroidUdpDiscoveryResponder(publicDeviceInfoProvider)
         val mediaRepository = DefaultMediaRepository(
             AndroidMediaStoreDataSource(contentResolver),
             permissionGateway,
@@ -62,10 +65,14 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         publicDeviceInfoProvider.rotateInstanceId()
         httpServer.start()
-        httpServer.localPort?.let(nsdRegistrar::register)
+        httpServer.localPort?.let {
+            nsdRegistrar.register(it)
+            udpDiscoveryResponder.start(it)
+        }
     }
 
     override fun onStop() {
+        udpDiscoveryResponder.stop()
         nsdRegistrar.unregister()
         httpServer.stop()
         super.onStop()
