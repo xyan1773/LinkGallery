@@ -47,6 +47,7 @@ public partial class MainWindow : Window, IDisposable
     private bool _hasMoreRemoteItems;
     private bool _hasMoreIndexedItems;
     private bool _isLoadingPage;
+    private bool _preserveTimelineOnNextConnect;
     private readonly HashSet<string> _loadedRemoteIds = new(StringComparer.Ordinal);
     private bool _disposed;
 
@@ -172,7 +173,7 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void OnPairedDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void OnPairedDeviceSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (PairedDevicesList.SelectedItem is not PairedDeviceRow row ||
             string.IsNullOrWhiteSpace(row.Device.LastHost) ||
@@ -185,6 +186,18 @@ public partial class MainWindow : Window, IDisposable
         StatusText.Text = row.Device.Status == PairedDeviceStatus.Online
             ? $"Selected {row.DisplayName}; saved address is ready."
             : $"Selected {row.DisplayName}; saved address filled for manual retry.";
+        _activeDeviceId = row.Device.DeviceId;
+        await LoadIndexedPageAsync(
+            reset: true,
+            $"No cached media for {row.DisplayName}",
+            CancellationToken.None);
+        UpdateIndexedStatus();
+
+        if (row.Device.Status == PairedDeviceStatus.Online)
+        {
+            _preserveTimelineOnNextConnect = true;
+            OnConnectClick(sender, e);
+        }
     }
 
     private void OnAddressTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -220,7 +233,9 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
-        Disconnect(clearTimeline: true);
+        var preserveTimeline = _preserveTimelineOnNextConnect;
+        _preserveTimelineOnNextConnect = false;
+        Disconnect(clearTimeline: !preserveTimeline);
 
         try
         {
@@ -230,7 +245,10 @@ public partial class MainWindow : Window, IDisposable
             SetEmptyState($"正在连接 {endpoint}…");
             _connectionCancellation = new CancellationTokenSource();
             var cancellationToken = _connectionCancellation.Token;
-            var httpSource = new HttpReadOnlyMediaSource(_httpClient, apiAddress);
+            var httpSource = new HttpReadOnlyMediaSource(
+                _httpClient,
+                apiAddress,
+                accessToken: ResolveAccessToken());
             var cacheRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LinkGallery",
@@ -269,6 +287,12 @@ public partial class MainWindow : Window, IDisposable
         {
             SetLoading(false);
         }
+    }
+
+    private static string? ResolveAccessToken()
+    {
+        var token = Environment.GetEnvironmentVariable("LINKGALLERY_ACCESS_TOKEN");
+        return string.IsNullOrWhiteSpace(token) ? null : token.Trim();
     }
 
     private static async Task<LinkGallery.Domain.Devices.Device> GetDeviceInfoWithTimeoutAsync(
@@ -434,9 +458,18 @@ public partial class MainWindow : Window, IDisposable
 
     private void SetEmptyState(string message)
     {
+        if (TimelineRows.Count > 0)
+        {
+            TimelineList.Visibility = Visibility.Visible;
+            EmptyText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
         TimelineList.Visibility = Visibility.Collapsed;
         EmptyText.Text = message;
-        EmptyText.Visibility = Visibility.Visible;
+        EmptyText.Visibility = TimelineRows.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private async Task LoadIndexedPageAsync(
@@ -968,18 +1001,24 @@ public partial class MainWindow : Window, IDisposable
         _connectionCancellation = null;
         _source?.Dispose();
         _source = null;
-        _activeDeviceId = null;
+        if (clearTimeline)
+        {
+            _activeDeviceId = null;
+        }
         _remoteNextCursor = null;
         _hasMoreRemoteItems = false;
         _hasMoreIndexedItems = false;
         _isLoadingPage = false;
         _loadedRemoteIds.Clear();
         DevicePanel.Visibility = Visibility.Collapsed;
-        TimelineList.Visibility = Visibility.Collapsed;
+        TimelineList.Visibility = clearTimeline || TimelineRows.Count == 0
+            ? Visibility.Collapsed
+            : Visibility.Visible;
         SetTimelineFooter(null);
         if (clearTimeline)
         {
             TimelineRows.Clear();
+            TimelineList.Visibility = Visibility.Collapsed;
         }
 
         EmptyText.Text = "输入手机地址开始连接";
