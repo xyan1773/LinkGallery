@@ -166,51 +166,54 @@ internal static class Program
                 refreshedItems);
         }
 
-        selected = refreshedItems[0];
-        Select(selected);
-        timer.Restart();
-        Invoke(FindById(mainWindow, "ImportSelectedButton"));
-        WaitUntil(
-            () => ReadName(FindById(mainWindow, "StatusText")).Contains("加入导入中心", StringComparison.Ordinal),
-            ElementTimeout,
-            "Import did not enter the queue.");
-        timer.Stop();
-        Record(
-            "import-feedback",
-            timer.Elapsed <= TimeSpan.FromMilliseconds(500),
-            $"Queue feedback after {timer.Elapsed.TotalMilliseconds:F0} ms",
-            timer.Elapsed.TotalMilliseconds,
-            "experience");
-
-        TryInvoke(mainWindow, "PauseAllButton");
-        WaitUntil(
-            () =>
-            {
-                var status = ReadName(FindById(mainWindow, "TransferStatusText"));
-                return status.Contains("已暂停", StringComparison.Ordinal) ||
-                    status.Contains("已完成", StringComparison.Ordinal);
-            },
-            ElementTimeout,
-            "Import did not settle after pause.");
-        var transferStatus = ReadName(FindById(mainWindow, "TransferStatusText"));
-        if (transferStatus.Contains("已暂停", StringComparison.Ordinal))
+        if (!options.SkipImport)
         {
-            TryInvoke(mainWindow, "ResumeAllButton");
+            selected = refreshedItems[0];
+            Select(selected);
+            timer.Restart();
+            Invoke(FindById(mainWindow, "ImportSelectedButton"));
+            WaitUntil(
+                () => ReadName(FindById(mainWindow, "StatusText")).Contains("加入导入中心", StringComparison.Ordinal),
+                ElementTimeout,
+                "Import did not enter the queue.");
+            timer.Stop();
+            Record(
+                "import-feedback",
+                timer.Elapsed <= TimeSpan.FromMilliseconds(500),
+                $"Queue feedback after {timer.Elapsed.TotalMilliseconds:F0} ms",
+                timer.Elapsed.TotalMilliseconds,
+                "experience");
+
+            TryInvoke(mainWindow, "PauseAllButton");
+            WaitUntil(
+                () =>
+                {
+                    var status = ReadName(FindById(mainWindow, "TransferStatusText"));
+                    return status.Contains("已暂停", StringComparison.Ordinal) ||
+                        status.Contains("已完成", StringComparison.Ordinal);
+                },
+                ElementTimeout,
+                "Import did not settle after pause.");
+            var transferStatus = ReadName(FindById(mainWindow, "TransferStatusText"));
+            if (transferStatus.Contains("已暂停", StringComparison.Ordinal))
+            {
+                TryInvoke(mainWindow, "ResumeAllButton");
+            }
+            timer.Restart();
+            WaitUntil(
+                () => ReadName(FindById(mainWindow, "ImportSummaryText"))
+                    .Contains("1/1 完成", StringComparison.Ordinal),
+                options.ImportTimeout,
+                "Import did not complete before the timeout.");
+            timer.Stop();
+            var importedFiles = Directory.GetFiles(options.ImportDirectory);
+            Record(
+                "import-complete",
+                importedFiles.Length == 1,
+                $"{importedFiles.Length} completed file(s) after {timer.Elapsed.TotalMilliseconds:F0} ms",
+                timer.Elapsed.TotalMilliseconds,
+                "functional");
         }
-        timer.Restart();
-        WaitUntil(
-            () => ReadName(FindById(mainWindow, "ImportSummaryText"))
-                .Contains("1/1 完成", StringComparison.Ordinal),
-            options.ImportTimeout,
-            "Import did not complete before the timeout.");
-        timer.Stop();
-        var importedFiles = Directory.GetFiles(options.ImportDirectory);
-        Record(
-            "import-complete",
-            importedFiles.Length == 1,
-            $"{importedFiles.Length} completed file(s) after {timer.Elapsed.TotalMilliseconds:F0} ms",
-            timer.Elapsed.TotalMilliseconds,
-            "functional");
 
         for (var iteration = 0; iteration < options.ConnectionIterations; iteration++)
         {
@@ -583,6 +586,7 @@ internal static class Program
         int ConnectionIterations,
         TimeSpan SoakDuration,
         bool RequireVideo,
+        bool SkipImport,
         bool ExpectConnectionFailure)
     {
         public static Options Parse(string[] args)
@@ -619,6 +623,7 @@ internal static class Program
                 ParseInt(values, "iterations", 1),
                 TimeSpan.FromMinutes(ParseInt(values, "soak-minutes", 0)),
                 ParseBool(values, "require-video", true),
+                ParseBool(values, "skip-import", false),
                 ParseBool(values, "expect-connect-failure", false));
         }
 
