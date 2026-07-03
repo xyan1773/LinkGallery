@@ -5,7 +5,6 @@ import android.content.ContentUris
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.os.Build
-import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Size
 import java.io.ByteArrayOutputStream
@@ -16,25 +15,20 @@ class AndroidMediaStoreDataSource(
     private val contentResolver: ContentResolver,
 ) : MediaStoreDataSource {
     override fun query(request: MediaStoreRequest): List<MediaStoreRow> {
-        val (selection, arguments) = selectionFor(request.types)
-        val queryArguments = Bundle().apply {
-            putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
-            putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arguments.toTypedArray())
-        }
-
+        val spec = request.toMediaStoreQuerySpec()
         return contentResolver.query(
             COLLECTION,
             PROJECTION,
-            queryArguments,
-            null,
+            spec.selection,
+            spec.arguments.toTypedArray(),
+            spec.sortOrder,
         )?.use { cursor ->
             buildList {
-                while (cursor.moveToNext()) {
+                while (size < spec.limit && cursor.moveToNext()) {
                     add(cursor.toRow())
                 }
             }
         }.orEmpty()
-            .keysetPage(request.after, request.limit)
     }
 
     override fun count(types: Set<MediaType>): Int {
@@ -202,4 +196,60 @@ class AndroidMediaStoreDataSource(
             MEDIA_TYPE,
         )
     }
+}
+
+internal data class MediaStoreQuerySpec(
+    val selection: String,
+    val arguments: List<String>,
+    val sortOrder: String,
+    val limit: Int,
+)
+
+internal fun MediaStoreRequest.toMediaStoreQuerySpec(): MediaStoreQuerySpec {
+    val arguments = types
+        .map { type ->
+            when (type) {
+                MediaType.IMAGE -> MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE
+                MediaType.VIDEO -> MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO
+            }.toString()
+        }
+        .toMutableList()
+    val typePlaceholders = types.joinToString(",") { "?" }
+    val effectiveSortTime = """
+        CASE
+            WHEN ${MediaStore.Images.ImageColumns.DATE_TAKEN} IS NOT NULL
+                 AND ${MediaStore.Images.ImageColumns.DATE_TAKEN} > 0
+            THEN ${MediaStore.Images.ImageColumns.DATE_TAKEN}
+            ELSE ${MediaStore.MediaColumns.DATE_MODIFIED} * 1000
+        END
+    """.trimIndent().replace(Regex("\\s+"), " ")
+    val selection = buildString {
+        append("${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($typePlaceholders)")
+        after?.let { cursor ->
+            append(" AND ((")
+            append("${MediaStore.Images.ImageColumns.DATE_TAKEN} IS NOT NULL")
+            append(" AND ${MediaStore.Images.ImageColumns.DATE_TAKEN} > 0")
+            append(" AND (${MediaStore.Images.ImageColumns.DATE_TAKEN} < ?")
+            append(" OR (${MediaStore.Images.ImageColumns.DATE_TAKEN} = ?")
+            append(" AND ${MediaStore.MediaColumns._ID} < ?)))")
+            append(" OR ((")
+            append("${MediaStore.Images.ImageColumns.DATE_TAKEN} IS NULL")
+            append(" OR ${MediaStore.Images.ImageColumns.DATE_TAKEN} <= 0)")
+            append(" AND (${MediaStore.MediaColumns.DATE_MODIFIED} < ?")
+            append(" OR (${MediaStore.MediaColumns.DATE_MODIFIED} = ?")
+            append(" AND ${MediaStore.MediaColumns._ID} < ?))))")
+            arguments += cursor.sortTimestampEpochMillis.toString()
+            arguments += cursor.sortTimestampEpochMillis.toString()
+            arguments += cursor.mediaStoreId.toString()
+            arguments += (cursor.sortTimestampEpochMillis / 1000).toString()
+            arguments += (cursor.sortTimestampEpochMillis / 1000).toString()
+            arguments += cursor.mediaStoreId.toString()
+        }
+    }
+    return MediaStoreQuerySpec(
+        selection = selection,
+        arguments = arguments,
+        sortOrder = "$effectiveSortTime DESC, ${MediaStore.MediaColumns._ID} DESC",
+        limit = this.limit,
+    )
 }

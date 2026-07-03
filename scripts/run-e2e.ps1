@@ -235,6 +235,24 @@ function Scan-Media {
     }
 }
 
+function New-ScaleSeed {
+    $path = Join-Path $OutputRoot 'scale-seed.jpg'
+    Add-Type -AssemblyName System.Drawing
+    $bitmap = [System.Drawing.Bitmap]::new(32, 32)
+    try {
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.Clear([System.Drawing.Color]::CornflowerBlue)
+        } finally {
+            $graphics.Dispose()
+        }
+        $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+    } finally {
+        $bitmap.Dispose()
+    }
+    Get-Item -LiteralPath $path
+}
+
 function Prepare-Media {
     if ($Profile -eq 'Physical' -or $SkipMedia) {
         return
@@ -261,14 +279,7 @@ function Prepare-Media {
             )
         }
         'Scale' {
-            @(
-                Get-ChildItem -LiteralPath $SourceMediaRoot -File -Filter '*.JPG' |
-                    Sort-Object Length |
-                    Select-Object -First 1
-                Get-ChildItem -LiteralPath $SourceMediaRoot -File -Filter '*.MP4' |
-                    Sort-Object Length |
-                    Select-Object -First 1
-            )
+            @(New-ScaleSeed)
         }
         default { Get-ExperienceFiles }
     }
@@ -311,7 +322,24 @@ function Build-TestTargets {
 
 function Start-AndroidApp {
     $apk = Join-Path $repositoryRoot 'android\app\build\outputs\apk\debug\app-debug.apk'
-    Invoke-Adb -Arguments @('install','-r',$apk) | Out-Host
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
+    $installOutput = & $adb -s $DeviceSerial install -r $apk 2>&1
+    $installExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
+    $installText = $installOutput | Out-String
+    if ($installExitCode -ne 0 -and
+        $installText -like '*INSTALL_FAILED_UPDATE_INCOMPATIBLE*') {
+        & $adb -s $DeviceSerial uninstall $packageName | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to remove the incompatible $packageName installation."
+        }
+        Invoke-Adb -Arguments @('install',$apk) | Out-Host
+    } elseif ($installExitCode -ne 0) {
+        throw "adb install failed: $installText"
+    } else {
+        $installOutput | Out-Host
+    }
     Invoke-Adb -Arguments @('shell','pm','clear',$packageName) | Out-Host
     Invoke-Adb -Arguments @(
         'shell','pm','grant',$packageName,'android.permission.READ_MEDIA_IMAGES'
@@ -375,6 +403,54 @@ function Test-ReadOnlyBoundary {
     }
 }
 
+function Test-CursorPagination {
+    param([string]$Address, [int]$ExpectedCount)
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    $cursor = $null
+    $pageCount = 0
+    $pageSizes = [System.Collections.Generic.List[int]]::new()
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        $query = "limit=100"
+        if (-not [string]::IsNullOrWhiteSpace($cursor)) {
+            $query += "&cursor=$([Uri]::EscapeDataString($cursor))"
+        }
+        $page = Invoke-RestMethod "http://$Address/api/v1/media?$query" -TimeoutSec 15
+        $pageCount++
+        $pageSizes.Add([int]$page.items.Count)
+        foreach ($item in $page.items) {
+            if (-not $seen.Add([string]$item.id)) {
+                throw "Cursor pagination returned duplicate media id: $($item.id)"
+            }
+        }
+        if ($page.hasMore -and [string]::IsNullOrWhiteSpace($page.nextCursor)) {
+            throw "Cursor pagination page $pageCount reported hasMore without nextCursor."
+        }
+        $cursor = [string]$page.nextCursor
+        if ($pageCount -gt 100) {
+            throw 'Cursor pagination did not terminate within 100 pages.'
+        }
+    } while ($page.hasMore)
+    $timer.Stop()
+
+    $result = [pscustomobject]@{
+        ExpectedCount = $ExpectedCount
+        UniqueItems = $seen.Count
+        Pages = $pageCount
+        PageSizes = $pageSizes
+        DurationMilliseconds = [math]::Round($timer.Elapsed.TotalMilliseconds, 1)
+        Passed = $seen.Count -eq $ExpectedCount
+    }
+    $result | ConvertTo-Json -Depth 4 |
+        Set-Content -LiteralPath (Join-Path $OutputRoot 'pagination.json') -Encoding UTF8
+    if (-not $result.Passed) {
+        throw "Cursor pagination returned $($seen.Count) unique items; expected $ExpectedCount."
+    }
+}
+
 if ($RecreateAvd) {
     Recreate-TestAvd
 }
@@ -408,6 +484,9 @@ try {
     $device | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $OutputRoot 'device.json') -Encoding UTF8
     Test-ReadOnlyBoundary $address
+    if ($Profile -eq 'Scale') {
+        Test-CursorPagination $address $device.mediaCount
+    }
 
     $desktop = Join-Path $repositoryRoot `
         'desktop\LinkGallery.Desktop\bin\Debug\net8.0-windows\LinkGallery.Desktop.exe'
@@ -416,6 +495,7 @@ try {
     $iterations = if ($Profile -eq 'Soak') { 10 } else { 1 }
     $minutes = if ($Profile -eq 'Soak') { $SoakMinutes } else { 0 }
     $requireVideo = $Profile -ne 'Scale'
+    $skipImport = $Profile -eq 'Scale'
     & $runner `
         --desktop $desktop `
         --address $address `
@@ -424,10 +504,11 @@ try {
         --imports $importRoot `
         --iterations $iterations `
         --soak-minutes $minutes `
-        --require-video $requireVideo
+        --require-video $requireVideo `
+        --skip-import $skipImport
     $runnerExit = $LASTEXITCODE
 
-    $integrityRequired = $Profile -ne 'Physical' -and -not $SkipMedia
+    $integrityRequired = $Profile -notin 'Physical','Scale' -and -not $SkipMedia
     $integrityPassed = -not $integrityRequired
     $integrityDetail = if ($integrityRequired) {
         'No completed import was available.'
