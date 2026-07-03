@@ -20,6 +20,22 @@ fun interface DeviceInfoProvider {
     fun get(): DeviceInfoResult
 }
 
+data class PublicDeviceInfo(
+    val deviceId: String,
+    val deviceName: String,
+    val manufacturer: String,
+    val model: String,
+    val apiVersion: Int,
+    val serverVersion: String,
+    val instanceId: String,
+    val pairingAvailable: Boolean,
+    val certificateFingerprint: String,
+)
+
+fun interface PublicDeviceInfoProvider {
+    fun get(): PublicDeviceInfo
+}
+
 data class ApiResponse(
     val status: Int,
     val body: String,
