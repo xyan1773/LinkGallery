@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import com.linkgallery.companion.discovery.AndroidNsdServiceRegistrar
 import com.linkgallery.companion.identity.AndroidKeystoreDeviceIdentityProvider
 import com.linkgallery.companion.media.AndroidMediaPermissionGateway
 import com.linkgallery.companion.media.AndroidMediaStoreDataSource
@@ -22,6 +23,7 @@ import com.linkgallery.companion.ui.createConnectionGuide
 class MainActivity : ComponentActivity() {
     private lateinit var httpServer: LinkGalleryHttpServer
     private lateinit var publicDeviceInfoProvider: AndroidPublicDeviceInfoProvider
+    private lateinit var nsdRegistrar: AndroidNsdServiceRegistrar
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,6 +32,7 @@ class MainActivity : ComponentActivity() {
             applicationContext,
             AndroidKeystoreDeviceIdentityProvider(),
         )
+        nsdRegistrar = AndroidNsdServiceRegistrar(applicationContext, publicDeviceInfoProvider)
         val mediaRepository = DefaultMediaRepository(
             AndroidMediaStoreDataSource(contentResolver),
             permissionGateway,
@@ -59,9 +62,11 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         publicDeviceInfoProvider.rotateInstanceId()
         httpServer.start()
+        httpServer.localPort?.let(nsdRegistrar::register)
     }
 
     override fun onStop() {
+        nsdRegistrar.unregister()
         httpServer.stop()
         super.onStop()
     }
