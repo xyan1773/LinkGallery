@@ -8,12 +8,15 @@ import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaStoreCursor
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.AccessTokenAuthenticator
+import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
 import com.linkgallery.companion.pairing.DisabledPairingCoordinator
 import com.linkgallery.companion.pairing.PairCancelRequest
 import com.linkgallery.companion.pairing.PairConfirmRequest
 import com.linkgallery.companion.pairing.PairStartRequest
 import com.linkgallery.companion.pairing.PairingCoordinator
 import com.linkgallery.companion.pairing.PairingResult
+import com.linkgallery.companion.pairing.RejectingAccessTokenAuthenticator
 import java.io.FilterInputStream
 import java.io.InputStream
 import java.net.URLDecoder
@@ -24,6 +27,7 @@ class ApiController(
     private val deviceInfoProvider: DeviceInfoProvider,
     private val mediaRepository: MediaRepository,
     private val pairingCoordinator: PairingCoordinator = DisabledPairingCoordinator,
+    private val accessTokenAuthenticator: AccessTokenAuthenticator = RejectingAccessTokenAuthenticator,
 ) {
     suspend fun handle(
         method: String,
@@ -35,12 +39,25 @@ class ApiController(
         if (!ReadOnlyRoutePolicy.permits(method, path)) {
             return problem(404, "not_found", "The requested route does not exist.")
         }
+        val bearerToken = bearerToken(headers)
+        if (
+            ReadOnlyRoutePolicy.requiresAuthentication(method, path) &&
+            accessTokenAuthenticator != AllowAllAccessTokenAuthenticator
+        ) {
+            if (bearerToken == null) {
+                return problem(401, "authentication_required", "Authorization: Bearer token is required.")
+            }
+            if (accessTokenAuthenticator.authenticate(bearerToken) == null) {
+                return problem(403, "authentication_failed", "The access token is invalid or revoked.")
+            }
+        }
 
         return when (path) {
             PUBLIC_INFO_PATH -> getPublicInfo()
             PAIR_START_PATH -> postPairStart(body)
             PAIR_CONFIRM_PATH -> postPairConfirm(body)
             PAIR_CANCEL_PATH -> postPairCancel(body)
+            PAIR_REVOKE_PATH -> postPairRevoke(bearerToken)
             DEVICE_PATH -> getDevice()
             MEDIA_PATH -> {
                 val parameters = try {
@@ -393,11 +410,29 @@ class ApiController(
         }
     }
 
+    private fun postPairRevoke(bearerToken: String?): ApiResponse {
+        val token = bearerToken ?: return problem(
+            401,
+            "authentication_required",
+            "Authorization: Bearer token is required.",
+        )
+        accessTokenAuthenticator.revoke(token)
+        return ApiResponse(200, Json.ok())
+    }
+
+    private fun bearerToken(headers: Map<String, String>): String? {
+        val header = header(headers, "Authorization") ?: return null
+        val prefix = "Bearer "
+        if (!header.startsWith(prefix, ignoreCase = true)) return null
+        return header.substring(prefix.length).trim().takeIf { it.isNotBlank() }
+    }
+
     private companion object {
         const val PUBLIC_INFO_PATH = "/api/v1/public/info"
         const val PAIR_START_PATH = "/api/v1/pair/start"
         const val PAIR_CONFIRM_PATH = "/api/v1/pair/confirm"
         const val PAIR_CANCEL_PATH = "/api/v1/pair/cancel"
+        const val PAIR_REVOKE_PATH = "/api/v1/pair/revoke"
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
         val THUMBNAIL_PATH = Regex("^/api/v1/media/([^/]+)/thumbnail$")

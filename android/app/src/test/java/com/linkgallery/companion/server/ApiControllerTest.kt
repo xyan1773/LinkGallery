@@ -10,7 +10,9 @@ import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
 import com.linkgallery.companion.pairing.PairingManager
+import com.linkgallery.companion.pairing.RejectingAccessTokenAuthenticator
 import java.io.ByteArrayInputStream
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
@@ -394,7 +396,71 @@ class ApiControllerTest {
         assertEquals(200, start.status)
         assertTrue(start.body.contains(""""codeLength":6"""))
         assertEquals(200, confirm.status)
-        assertEquals("""{"paired":true}""", confirm.body)
+        assertTrue(confirm.body.contains(""""paired":true"""))
+        assertTrue(confirm.body.contains(""""accessToken":"""))
+        assertTrue(confirm.body.contains(""""tokenType":"Bearer""""))
+    }
+
+    @Test
+    fun privateRoutesRequireBearerToken() {
+        val controller = controller(
+            accessTokenAuthenticator = RejectingAccessTokenAuthenticator,
+        )
+
+        val missing = runSuspend { controller.handle("GET", "/api/v1/device") }
+        val invalid = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/device",
+                mapOf("Authorization" to "Bearer bad-token"),
+            )
+        }
+
+        assertEquals(401, missing.status)
+        assertTrue(missing.body.contains("authentication_required"))
+        assertEquals(403, invalid.status)
+        assertTrue(invalid.body.contains("authentication_failed"))
+    }
+
+    @Test
+    fun revokeInvalidatesPairedToken() {
+        val pairingManager = PairingManager()
+        pairingManager.openPairingWindow(nowMillis = System.currentTimeMillis())
+        val controller = controller(
+            pairingManager = pairingManager,
+            accessTokenAuthenticator = pairingManager,
+        )
+        val start = runSuspend {
+            controller.handle("POST", "/api/v1/pair/start", body = START_PAIR_BODY)
+        }
+        val sessionId = """"pairingSessionId":"([^"]+)"""".toRegex()
+            .find(start.body)!!
+            .groupValues[1]
+        val code = checkNotNull(pairingManager.activeVerificationCode())
+        val confirm = runSuspend {
+            controller.handle(
+                "POST",
+                "/api/v1/pair/confirm",
+                body = """{"pairingSessionId":"$sessionId","verificationCode":"$code"}""",
+            )
+        }
+        val token = """"accessToken":"([^"]+)"""".toRegex()
+            .find(confirm.body)!!
+            .groupValues[1]
+
+        val authed = runSuspend {
+            controller.handle("GET", "/api/v1/device", mapOf("Authorization" to "Bearer $token"))
+        }
+        val revoke = runSuspend {
+            controller.handle("POST", "/api/v1/pair/revoke", mapOf("Authorization" to "Bearer $token"))
+        }
+        val afterRevoke = runSuspend {
+            controller.handle("GET", "/api/v1/device", mapOf("Authorization" to "Bearer $token"))
+        }
+
+        assertEquals(200, authed.status)
+        assertEquals(200, revoke.status)
+        assertEquals(403, afterRevoke.status)
     }
 
     private fun controller(
@@ -413,6 +479,8 @@ class ApiControllerTest {
             MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),
         ),
         pairingManager: PairingManager? = null,
+        accessTokenAuthenticator: com.linkgallery.companion.pairing.AccessTokenAuthenticator =
+            AllowAllAccessTokenAuthenticator,
     ): ApiController = ApiController(
         publicDeviceInfoProvider = PublicDeviceInfoProvider {
             PublicDeviceInfo(
@@ -430,6 +498,7 @@ class ApiControllerTest {
         deviceInfoProvider = deviceInfoProvider,
         mediaRepository = repository,
         pairingCoordinator = pairingManager ?: com.linkgallery.companion.pairing.DisabledPairingCoordinator,
+        accessTokenAuthenticator = accessTokenAuthenticator,
     )
 
     private class FakeMediaRepository(
