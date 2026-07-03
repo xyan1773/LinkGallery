@@ -11,7 +11,25 @@ public interface IMediaIndex
         int limit,
         int offset,
         CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<MediaAlbum>> GetAlbumsAsync(
+        string deviceId,
+        string? searchText,
+        int limit,
+        int offset,
+        CancellationToken cancellationToken);
 }
+
+public sealed record MediaAlbum(
+    string DeviceId,
+    string AlbumId,
+    string DisplayName,
+    string? RelativePath,
+    string? CoverMediaId,
+    int MediaCount,
+    int PhotoCount,
+    int VideoCount,
+    DateTimeOffset LatestSortTime);
 
 public interface IMediaIndexSynchronizer
 {

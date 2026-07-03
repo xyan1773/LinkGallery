@@ -12,6 +12,9 @@ public sealed class MediaItem
     public long? DurationMilliseconds { get; init; }
     public DateTimeOffset TakenAt { get; init; }
     public DateTimeOffset ModifiedAt { get; init; }
+    public string? MimeType { get; init; }
+    public long? Generation { get; init; }
+    public string? AlbumId { get; init; }
     public string? AlbumName { get; init; }
     public string? RelativePath { get; init; }
     public string? ThumbnailUrl { get; init; }
