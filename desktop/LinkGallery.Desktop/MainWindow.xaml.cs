@@ -171,8 +171,21 @@ public partial class MainWindow : Window, IDisposable
 
             ShowDevice(device);
             DisconnectButton.IsEnabled = true;
-            StatusText.Text = $"已连接 {device.Name} · 正在加载第一页媒体";
-            SetEmptyState("正在加载第一页媒体…");
+            await LoadIndexedPageAsync(
+                reset: true,
+                "本地缓存中还没有该设备的媒体",
+                cancellationToken);
+            if (TimelineRows.Count > 0)
+            {
+                ShowPage("Gallery");
+                StatusText.Text =
+                    $"已连接 {device.Name} · 已从本地缓存显示 {TimelineRows.Count:N0} 项 · 正在刷新…";
+            }
+            else
+            {
+                StatusText.Text = $"已连接 {device.Name} · 正在加载第一页媒体";
+                SetEmptyState("正在加载第一页媒体…");
+            }
 
             await LoadInitialRemotePageAsync(_source, cancellationToken);
             SetLoading(false);
@@ -395,6 +408,10 @@ public partial class MainWindow : Window, IDisposable
                 TimelineRows.Count,
                 cancellationToken);
             AppendTimelineItems(items);
+            if (reset && _activeDeviceId is not null)
+            {
+                await RefreshAlbumRowsFromIndexAsync(_activeDeviceId, cancellationToken);
+            }
             _hasMoreIndexedItems = items.Count == PageSize;
             UpdateTimelineFooter();
             TimelineList.Visibility = TimelineRows.Count == 0
@@ -449,6 +466,27 @@ public partial class MainWindow : Window, IDisposable
         foreach (var album in albums)
         {
             AlbumRows.Add(album);
+        }
+    }
+
+    private async Task RefreshAlbumRowsFromIndexAsync(
+        string deviceId,
+        CancellationToken cancellationToken)
+    {
+        var albums = await _mediaIndex.GetAlbumsAsync(
+            deviceId,
+            searchText: null,
+            limit: 500,
+            offset: 0,
+            cancellationToken);
+        AlbumRows.Clear();
+        foreach (var album in albums)
+        {
+            AlbumRows.Add(new AlbumRow(
+                album.DisplayName,
+                album.MediaCount,
+                album.PhotoCount,
+                album.VideoCount));
         }
     }
 

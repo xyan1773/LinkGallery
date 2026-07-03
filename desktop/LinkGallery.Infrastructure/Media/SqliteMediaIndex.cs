@@ -8,7 +8,6 @@ namespace LinkGallery.Infrastructure.Media;
 
 public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
 {
-    private const int SchemaVersion = 1;
     private readonly string _connectionString;
     private readonly SemaphoreSlim _migrationLock = new(1, 1);
     private bool _initialized;
@@ -66,14 +65,24 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
                 CREATE TABLE IF NOT EXISTS media_items (
                     device_id TEXT NOT NULL,
                     remote_id TEXT NOT NULL,
+                    media_key TEXT NOT NULL,
+                    media_id INTEGER NULL,
                     file_name TEXT NOT NULL,
                     media_type INTEGER NOT NULL,
+                    mime_type TEXT NULL,
                     file_size INTEGER NOT NULL,
                     width INTEGER NULL,
                     height INTEGER NULL,
                     duration_ms INTEGER NULL,
                     taken_at TEXT NOT NULL,
                     modified_at TEXT NOT NULL,
+                    sort_time INTEGER NOT NULL,
+                    date_taken INTEGER NOT NULL,
+                    date_modified INTEGER NOT NULL,
+                    generation INTEGER NULL,
+                    is_deleted INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL,
+                    album_id TEXT NOT NULL,
                     album_name TEXT NULL,
                     relative_path TEXT NULL,
                     source_device TEXT NULL,
@@ -94,14 +103,50 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
                     last_completed_at TEXT NOT NULL,
                     FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS device_sync_state (
+                    device_id TEXT NOT NULL PRIMARY KEY,
+                    library_version TEXT NULL,
+                    sync_cursor TEXT NULL,
+                    latest_known_cursor TEXT NULL,
+                    full_index_completed INTEGER NOT NULL DEFAULT 0,
+                    last_sync_at INTEGER NULL,
+                    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS thumbnail_cache (
+                    device_id TEXT NOT NULL,
+                    media_key TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    thumbnail_size INTEGER NOT NULL,
+                    local_path TEXT NOT NULL,
+                    file_size INTEGER NULL,
+                    last_accessed_at INTEGER NULL,
+                    PRIMARY KEY (device_id, media_key, generation, thumbnail_size)
+                );
+                CREATE TABLE IF NOT EXISTS albums (
+                    device_id TEXT NOT NULL,
+                    album_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    relative_path TEXT NULL,
+                    cover_media_id TEXT NULL,
+                    media_count INTEGER NOT NULL,
+                    photo_count INTEGER NOT NULL,
+                    video_count INTEGER NOT NULL,
+                    latest_sort_time INTEGER NOT NULL,
+                    last_synced_at INTEGER NOT NULL,
+                    PRIMARY KEY (device_id, album_id),
+                    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS ix_albums_device_latest
+                    ON albums(device_id, latest_sort_time DESC);
                 """, cancellationToken).ConfigureAwait(false);
+
+            await ApplySchemaV2Async(connection, cancellationToken).ConfigureAwait(false);
 
             await using var migration = connection.CreateCommand();
             migration.CommandText = """
                 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-                VALUES ($version, $appliedAt);
+                VALUES (1, $appliedAt), (2, $appliedAt);
                 """;
-            migration.Parameters.AddWithValue("$version", SchemaVersion);
             migration.Parameters.AddWithValue("$appliedAt", Format(DateTimeOffset.UtcNow));
             await migration.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             _initialized = true;
@@ -197,22 +242,34 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
             command.Transaction = (SqliteTransaction)transaction;
             command.CommandText = """
                 INSERT INTO media_items(
-                    device_id, remote_id, file_name, media_type, file_size, width, height, duration_ms,
-                    taken_at, modified_at, album_name, relative_path, source_device, source_application,
-                    is_edited_export, last_seen_at)
+                    device_id, remote_id, media_key, media_id, file_name, media_type, mime_type,
+                    file_size, width, height, duration_ms, taken_at, modified_at, sort_time,
+                    date_taken, date_modified, generation, is_deleted, updated_at, album_id,
+                    album_name, relative_path, source_device, source_application, is_edited_export,
+                    last_seen_at)
                 VALUES(
-                    $deviceId, $remoteId, $fileName, $mediaType, $fileSize, $width, $height, $duration,
-                    $takenAt, $modifiedAt, $album, $path, $sourceDevice, $sourceApplication,
-                    $isEdited, $lastSeenAt)
+                    $deviceId, $remoteId, $remoteId, NULL, $fileName, $mediaType, $mimeType,
+                    $fileSize, $width, $height, $duration, $takenAt, $modifiedAt, $sortTime,
+                    $dateTaken, $dateModified, $generation, 0, $updatedAt, $albumId,
+                    $album, $path, $sourceDevice, $sourceApplication, $isEdited, $lastSeenAt)
                 ON CONFLICT(device_id, remote_id) DO UPDATE SET
+                    media_key = excluded.media_key,
                     file_name = excluded.file_name,
                     media_type = excluded.media_type,
+                    mime_type = excluded.mime_type,
                     file_size = excluded.file_size,
                     width = excluded.width,
                     height = excluded.height,
                     duration_ms = excluded.duration_ms,
                     taken_at = excluded.taken_at,
                     modified_at = excluded.modified_at,
+                    sort_time = excluded.sort_time,
+                    date_taken = excluded.date_taken,
+                    date_modified = excluded.date_modified,
+                    generation = excluded.generation,
+                    is_deleted = 0,
+                    updated_at = excluded.updated_at,
+                    album_id = excluded.album_id,
                     album_name = excluded.album_name,
                     relative_path = excluded.relative_path,
                     source_device = excluded.source_device,
@@ -224,6 +281,11 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        foreach (var deviceId in items.Select(static item => item.DeviceId).Distinct(StringComparer.Ordinal))
+        {
+            await RefreshAlbumsAsync(connection, (SqliteTransaction)transaction, deviceId, seenAt, cancellationToken)
+                .ConfigureAwait(false);
+        }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -266,6 +328,12 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         cursor.Parameters.AddWithValue("$headModifiedAt", Db(head is null ? null : Format(head.ModifiedAt)));
         cursor.Parameters.AddWithValue("$completedAt", Format(completedAt));
         await cursor.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await RefreshAlbumsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            deviceId,
+            completedAt,
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return removed;
     }
@@ -286,14 +354,15 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         command.CommandText = """
             SELECT device_id, remote_id, file_name, media_type, file_size, width, height, duration_ms,
                    taken_at, modified_at, album_name, relative_path, source_device, source_application,
-                   is_edited_export
+                   is_edited_export, mime_type, generation, album_id
             FROM media_items
             WHERE ($deviceId IS NULL OR device_id = $deviceId)
+              AND is_deleted = 0
               AND ($pattern IS NULL
                    OR file_name LIKE $pattern ESCAPE '\'
                    OR album_name LIKE $pattern ESCAPE '\'
                    OR relative_path LIKE $pattern ESCAPE '\')
-            ORDER BY taken_at DESC, remote_id DESC
+            ORDER BY sort_time DESC, remote_id DESC
             LIMIT $limit OFFSET $offset;
             """;
         command.Parameters.AddWithValue("$deviceId", Db(deviceId));
@@ -310,6 +379,55 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         }
 
         return items;
+    }
+
+    public async Task<IReadOnlyList<MediaAlbum>> GetAlbumsAsync(
+        string deviceId,
+        string? searchText,
+        int limit,
+        int offset,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, 500);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT device_id, album_id, display_name, relative_path, cover_media_id,
+                   media_count, photo_count, video_count, latest_sort_time
+            FROM albums
+            WHERE device_id = $deviceId
+              AND ($pattern IS NULL
+                   OR display_name LIKE $pattern ESCAPE '\'
+                   OR relative_path LIKE $pattern ESCAPE '\')
+            ORDER BY latest_sort_time DESC, album_id
+            LIMIT $limit OFFSET $offset;
+            """;
+        command.Parameters.AddWithValue("$deviceId", deviceId);
+        command.Parameters.AddWithValue(
+            "$pattern",
+            Db(string.IsNullOrWhiteSpace(searchText) ? null : $"%{EscapeLike(searchText.Trim())}%"));
+        command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$offset", offset);
+        var albums = new List<MediaAlbum>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            albums.Add(new MediaAlbum(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                NullableString(reader, 3),
+                NullableString(reader, 4),
+                reader.GetInt32(5),
+                reader.GetInt32(6),
+                reader.GetInt32(7),
+                DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(8))));
+        }
+        return albums;
     }
 
     public void Dispose()
@@ -343,6 +461,139 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task ApplySchemaV2Async(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var columns = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["media_key"] = "TEXT",
+            ["media_id"] = "INTEGER",
+            ["mime_type"] = "TEXT",
+            ["sort_time"] = "INTEGER",
+            ["date_taken"] = "INTEGER",
+            ["date_modified"] = "INTEGER",
+            ["generation"] = "INTEGER",
+            ["is_deleted"] = "INTEGER NOT NULL DEFAULT 0",
+            ["updated_at"] = "INTEGER",
+            ["album_id"] = "TEXT",
+        };
+        foreach (var (name, definition) in columns)
+        {
+            if (await ColumnExistsAsync(connection, "media_items", name, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+            await ExecuteAsync(
+                connection,
+                $"ALTER TABLE media_items ADD COLUMN {name} {definition};",
+                cancellationToken).ConfigureAwait(false);
+        }
+        await ExecuteAsync(connection, """
+            UPDATE media_items
+            SET media_key = COALESCE(media_key, remote_id),
+                mime_type = COALESCE(mime_type, CASE media_type WHEN 0 THEN 'image/*' ELSE 'video/*' END),
+                sort_time = COALESCE(sort_time, unixepoch(taken_at) * 1000),
+                date_taken = COALESCE(date_taken, unixepoch(taken_at) * 1000),
+                date_modified = COALESCE(date_modified, unixepoch(modified_at) * 1000),
+                updated_at = COALESCE(updated_at, unixepoch(last_seen_at) * 1000),
+                album_id = COALESCE(
+                    album_id,
+                    lower(trim(replace(COALESCE(relative_path, '__unsorted'), '\', '/'), '/')));
+            DROP INDEX IF EXISTS ix_media_items_timeline;
+            CREATE INDEX IF NOT EXISTS ix_media_items_timeline
+                ON media_items(device_id, sort_time DESC, remote_id DESC);
+            CREATE INDEX IF NOT EXISTS ix_media_items_album_timeline
+                ON media_items(device_id, album_id, sort_time DESC, remote_id DESC);
+            DELETE FROM albums;
+            INSERT INTO albums(
+                device_id, album_id, display_name, relative_path, cover_media_id,
+                media_count, photo_count, video_count, latest_sort_time, last_synced_at)
+            SELECT m.device_id,
+                   m.album_id,
+                   COALESCE(MAX(m.album_name), 'Unsorted'),
+                   MAX(m.relative_path),
+                   (SELECT cover.remote_id
+                    FROM media_items cover
+                    WHERE cover.device_id = m.device_id
+                      AND cover.album_id = m.album_id
+                      AND cover.is_deleted = 0
+                    ORDER BY cover.sort_time DESC, cover.remote_id DESC
+                    LIMIT 1),
+                   COUNT(*),
+                   SUM(CASE WHEN m.media_type = 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN m.media_type = 1 THEN 1 ELSE 0 END),
+                   MAX(m.sort_time),
+                   MAX(m.updated_at)
+            FROM media_items m
+            WHERE m.is_deleted = 0
+            GROUP BY m.device_id, m.album_id;
+            """, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string table,
+        string column,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table});";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static async Task RefreshAlbumsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string deviceId,
+        DateTimeOffset syncedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var delete = connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = "DELETE FROM albums WHERE device_id = $deviceId;";
+        delete.Parameters.AddWithValue("$deviceId", deviceId);
+        await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT INTO albums(
+                device_id, album_id, display_name, relative_path, cover_media_id,
+                media_count, photo_count, video_count, latest_sort_time, last_synced_at)
+            SELECT m.device_id,
+                   m.album_id,
+                   COALESCE(MAX(m.album_name), 'Unsorted'),
+                   MAX(m.relative_path),
+                   (SELECT cover.remote_id
+                    FROM media_items cover
+                    WHERE cover.device_id = m.device_id
+                      AND cover.album_id = m.album_id
+                      AND cover.is_deleted = 0
+                    ORDER BY cover.sort_time DESC, cover.remote_id DESC
+                    LIMIT 1),
+                   COUNT(*),
+                   SUM(CASE WHEN m.media_type = 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN m.media_type = 1 THEN 1 ELSE 0 END),
+                   MAX(m.sort_time),
+                   $syncedAt
+            FROM media_items m
+            WHERE m.device_id = $deviceId AND m.is_deleted = 0
+            GROUP BY m.device_id, m.album_id;
+            """;
+        insert.Parameters.AddWithValue("$deviceId", deviceId);
+        insert.Parameters.AddWithValue("$syncedAt", syncedAt.ToUnixTimeMilliseconds());
+        await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static void AddItemParameters(
         SqliteCommand command,
         MediaItem item,
@@ -352,12 +603,19 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         command.Parameters.AddWithValue("$remoteId", item.RemoteId);
         command.Parameters.AddWithValue("$fileName", item.FileName);
         command.Parameters.AddWithValue("$mediaType", (int)item.Type);
+        command.Parameters.AddWithValue("$mimeType", Db(item.MimeType ?? DefaultMimeType(item.Type)));
         command.Parameters.AddWithValue("$fileSize", item.FileSize);
         command.Parameters.AddWithValue("$width", Db(item.Width));
         command.Parameters.AddWithValue("$height", Db(item.Height));
         command.Parameters.AddWithValue("$duration", Db(item.DurationMilliseconds));
         command.Parameters.AddWithValue("$takenAt", Format(item.TakenAt));
         command.Parameters.AddWithValue("$modifiedAt", Format(item.ModifiedAt));
+        command.Parameters.AddWithValue("$sortTime", item.TakenAt.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$dateTaken", item.TakenAt.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$dateModified", item.ModifiedAt.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$generation", Db(item.Generation));
+        command.Parameters.AddWithValue("$updatedAt", seenAt.ToUnixTimeMilliseconds());
+        command.Parameters.AddWithValue("$albumId", item.AlbumId ?? NormalizeAlbumId(item.RelativePath));
         command.Parameters.AddWithValue("$album", Db(item.AlbumName));
         command.Parameters.AddWithValue("$path", Db(item.RelativePath));
         command.Parameters.AddWithValue("$sourceDevice", Db(item.SourceDevice));
@@ -383,7 +641,23 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         SourceDevice = NullableString(reader, 12),
         SourceApplication = NullableString(reader, 13),
         IsEditedExport = reader.GetBoolean(14),
+        MimeType = NullableString(reader, 15),
+        Generation = NullableInt64(reader, 16),
+        AlbumId = NullableString(reader, 17),
     };
+
+    private static string NormalizeAlbumId(string? relativePath)
+    {
+        var normalized = relativePath?
+            .Replace('\\', '/')
+            .Trim()
+            .Trim('/')
+            .ToLowerInvariant();
+        return string.IsNullOrWhiteSpace(normalized) ? "__unsorted" : normalized;
+    }
+
+    private static string DefaultMimeType(MediaType type) =>
+        type == MediaType.Image ? "image/*" : "video/*";
 
     private static object Db(object? value) => value ?? DBNull.Value;
     private static string Format(DateTimeOffset value) => value.ToUniversalTime().ToString("O");

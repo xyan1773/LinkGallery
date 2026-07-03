@@ -10,6 +10,8 @@ namespace LinkGallery.Infrastructure.Tests.Media;
 public sealed class SqliteMediaIndexTests
 {
     private static readonly string[] ExpectedOfflineMediaIds = ["media-1", "media-4"];
+    private static readonly string[] ExpectedScreenshotAlbumIds =
+        ["dcim/screenshots", "pictures/screenshots"];
     private string _databasePath = null!;
 
     [TestInitialize]
@@ -49,14 +51,70 @@ public sealed class SqliteMediaIndexTests
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT
-                (SELECT COUNT(*) FROM schema_migrations WHERE version = 1),
+                (SELECT COUNT(*) FROM schema_migrations WHERE version IN (1, 2)),
                 (SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name IN ('devices', 'media_items', 'sync_cursors'));
+                 WHERE type = 'table' AND name IN (
+                    'devices', 'media_items', 'sync_cursors',
+                    'device_sync_state', 'thumbnail_cache', 'albums'));
             """;
         await using var reader = await command.ExecuteReaderAsync();
         Assert.IsTrue(await reader.ReadAsync());
-        Assert.AreEqual(1L, reader.GetInt64(0));
-        Assert.AreEqual(3L, reader.GetInt64(1));
+        Assert.AreEqual(2L, reader.GetInt64(0));
+        Assert.AreEqual(6L, reader.GetInt64(1));
+    }
+
+    [TestMethod]
+    public async Task VersionOneDatabaseMigratesWithoutLosingCachedMedia()
+    {
+        await using (var connection = new SqliteConnection($"Data Source={_databasePath}"))
+        {
+            await connection.OpenAsync();
+            await using var setup = connection.CreateCommand();
+            setup.CommandText = """
+                CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+                INSERT INTO schema_migrations VALUES(1, '2026-01-01T00:00:00Z');
+                CREATE TABLE devices(
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, model TEXT NULL,
+                    battery_percent INTEGER NULL, media_count INTEGER NOT NULL, address TEXT NULL,
+                    is_online INTEGER NOT NULL, last_seen_at TEXT NOT NULL);
+                INSERT INTO devices VALUES(
+                    'phone-1', 'Phone', 'android', NULL, NULL, 1, NULL, 0, '2026-01-01T00:00:00Z');
+                CREATE TABLE media_items(
+                    device_id TEXT NOT NULL, remote_id TEXT NOT NULL, file_name TEXT NOT NULL,
+                    media_type INTEGER NOT NULL, file_size INTEGER NOT NULL, width INTEGER NULL,
+                    height INTEGER NULL, duration_ms INTEGER NULL, taken_at TEXT NOT NULL,
+                    modified_at TEXT NOT NULL, album_name TEXT NULL, relative_path TEXT NULL,
+                    source_device TEXT NULL, source_application TEXT NULL,
+                    is_edited_export INTEGER NOT NULL, last_seen_at TEXT NOT NULL,
+                    PRIMARY KEY(device_id, remote_id));
+                INSERT INTO media_items VALUES(
+                    'phone-1', 'legacy-1', 'legacy.jpg', 0, 42, 10, 10, NULL,
+                    '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                    'Screenshots', 'Pictures/Screenshots', NULL, NULL, 0,
+                    '2026-01-01T00:00:00Z');
+                """;
+            await setup.ExecuteNonQueryAsync();
+        }
+
+        var index = new SqliteMediaIndex(_databasePath);
+        await index.InitializeAsync();
+        var media = await index.SearchAsync("phone-1", null, 10, 0, CancellationToken.None);
+        var albums = await index.GetAlbumsAsync("phone-1", null, 10, 0, CancellationToken.None);
+
+        Assert.HasCount(1, media);
+        Assert.AreEqual("legacy-1", media[0].RemoteId);
+        Assert.AreEqual("pictures/screenshots", media[0].AlbumId);
+        Assert.HasCount(1, albums);
+        Assert.AreEqual("pictures/screenshots", albums[0].AlbumId);
+
+        await using var verify = new SqliteConnection($"Data Source={_databasePath}");
+        await verify.OpenAsync();
+        await using var command = verify.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*) FROM pragma_table_info('media_items')
+            WHERE name IN ('media_key', 'sort_time', 'generation', 'is_deleted', 'album_id');
+            """;
+        Assert.AreEqual(5L, (long)(await command.ExecuteScalarAsync())!);
     }
 
     [TestMethod]
@@ -156,7 +214,37 @@ public sealed class SqliteMediaIndexTests
             offlineResults.Select(item => item.RemoteId).ToArray());
     }
 
-    private static MediaItem Item(int id, int modifiedSeconds, string? fileName = null) => new()
+    [TestMethod]
+    public async Task OfflineAlbumsKeepSameNamesSeparatedByNormalizedPath()
+    {
+        var source = new FakeMediaSource(
+            Item(1, 1, "one.jpg", "Pictures/Screenshots"),
+            Item(2, 2, "two.jpg", "DCIM/Screenshots"),
+            Item(3, 3, "three.jpg", "Pictures/Screenshots/"));
+        var index = new SqliteMediaIndex(_databasePath);
+        var synchronizer = new IncrementalMediaIndexSynchronizer(index, pageSize: 2);
+
+        await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+        var albums = await index.GetAlbumsAsync(
+            source.Device.Id,
+            "Screenshots",
+            100,
+            0,
+            CancellationToken.None);
+
+        Assert.HasCount(2, albums);
+        CollectionAssert.AreEquivalent(
+            ExpectedScreenshotAlbumIds,
+            albums.Select(album => album.AlbumId).ToArray());
+        Assert.AreEqual(3, albums.Sum(album => album.MediaCount));
+        Assert.IsTrue(albums.All(album => album.CoverMediaId is not null));
+    }
+
+    private static MediaItem Item(
+        int id,
+        int modifiedSeconds,
+        string? fileName = null,
+        string relativePath = "DCIM/Camera") => new()
     {
         DeviceId = "phone-1",
         RemoteId = $"media-{id}",
@@ -167,8 +255,9 @@ public sealed class SqliteMediaIndexTests
         Height = 1080,
         TakenAt = DateTimeOffset.UnixEpoch.AddSeconds(modifiedSeconds),
         ModifiedAt = DateTimeOffset.UnixEpoch.AddSeconds(modifiedSeconds),
+        Generation = id,
         AlbumName = "Camera",
-        RelativePath = "DCIM/Camera",
+        RelativePath = relativePath,
     };
 
     private sealed class FakeMediaSource(params MediaItem[] items) : IReadOnlyMediaSource
