@@ -151,8 +151,8 @@ class LinkGalleryHttpServer(
                     headers[line.substring(0, separator).trim().lowercase(Locale.ROOT)] =
                         line.substring(separator + 1).trim()
                 }
-                val body = readBody(reader, headers)
 
+                val body = readBody(reader, headers)
                 val response = executeController(method, target, headers, body)
                 status = response.status
                 write(socket, response)
@@ -160,6 +160,11 @@ class LinkGalleryHttpServer(
                 status = 504
                 runCatching {
                     write(socket, ApiResponse(504, Json.problem("request_timeout", "The request timed out.")))
+                }
+            } catch (exception: BadHttpRequest) {
+                status = 400
+                runCatching {
+                    write(socket, ApiResponse(400, Json.problem("bad_request", exception.message ?: "Bad request.")))
                 }
             } catch (_: Exception) {
                 status = 500
@@ -191,20 +196,19 @@ class LinkGalleryHttpServer(
     }
 
     private fun readBody(reader: BufferedReader, headers: Map<String, String>): String {
-        val contentLength = headers["content-length"]?.toIntOrNull() ?: return ""
-        if (contentLength <= 0) return ""
-        if (contentLength > MAX_BODY_BYTES) {
-            throw IllegalArgumentException("Request body is too large.")
+        val length = headers["content-length"]?.toIntOrNull() ?: return ""
+        if (length < 0 || length > MAX_BODY_BYTES) {
+            throw BadHttpRequest("Request body is too large.")
         }
-
-        val buffer = CharArray(contentLength)
+        if (length == 0) return ""
+        val buffer = CharArray(length)
         var offset = 0
-        while (offset < contentLength) {
-            val read = reader.read(buffer, offset, contentLength - offset)
-            if (read < 0) break
-            offset += read
+        while (offset < length) {
+            val count = reader.read(buffer, offset, length - offset)
+            if (count < 0) throw BadHttpRequest("Request body ended early.")
+            offset += count
         }
-        return String(buffer, 0, offset)
+        return String(buffer)
     }
 
     private fun write(socket: Socket, response: ApiResponse) {
@@ -216,9 +220,13 @@ class LinkGalleryHttpServer(
             206 -> "Partial Content"
             304 -> "Not Modified"
             400 -> "Bad Request"
+            401 -> "Unauthorized"
             403 -> "Forbidden"
             404 -> "Not Found"
+            409 -> "Conflict"
+            410 -> "Gone"
             416 -> "Range Not Satisfiable"
+            429 -> "Too Many Requests"
             500 -> "Internal Server Error"
             504 -> "Gateway Timeout"
             else -> "Response"
@@ -268,6 +276,8 @@ class LinkGalleryHttpServer(
 
     private companion object {
         const val MAX_HEADER_BYTES = 16 * 1024
-        const val MAX_BODY_BYTES = 16 * 1024
+        const val MAX_BODY_BYTES = 32 * 1024
     }
+
+    private class BadHttpRequest(message: String) : IllegalArgumentException(message)
 }

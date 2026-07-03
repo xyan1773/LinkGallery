@@ -3,8 +3,22 @@ package com.linkgallery.companion.server
 import com.linkgallery.companion.media.MediaPage
 import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.PairConfirmResponse
+import com.linkgallery.companion.pairing.PairStartResponse
 
 internal object Json {
+    fun publicDeviceInfo(value: PublicDeviceInfo): String = objectOf(
+        "deviceId" to string(value.deviceId),
+        "deviceName" to string(value.deviceName),
+        "manufacturer" to string(value.manufacturer),
+        "model" to string(value.model),
+        "apiVersion" to value.apiVersion.toString(),
+        "serverVersion" to string(value.serverVersion),
+        "instanceId" to string(value.instanceId),
+        "pairingAvailable" to value.pairingAvailable.toString(),
+        "certificateFingerprint" to string(value.certificateFingerprint),
+    )
+
     fun device(value: DeviceInfo): String = objectOf(
         "id" to string(value.id),
         "name" to string(value.name),
@@ -28,17 +42,22 @@ internal object Json {
         "message" to string(message),
     )
 
-    fun pairingChallenge(value: PairingChallenge): String = objectOf(
-        "sessionId" to string(value.sessionId),
-        "confirmationCode" to string(value.confirmationCode),
-        "expiresAt" to string(value.expiresAt),
+    fun pairStart(value: PairStartResponse): String = objectOf(
+        "pairingSessionId" to string(value.pairingSessionId),
+        "phoneNonce" to string(value.phoneNonce),
+        "expiresAtEpochMillis" to value.expiresAtEpochMillis.toString(),
+        "attemptsRemaining" to value.attemptsRemaining.toString(),
+        "codeLength" to value.codeLength.toString(),
     )
 
-    fun pairingResult(value: PairingResult): String = objectOf(
-        "deviceId" to string(value.deviceId),
-        "devicePublicKey" to string(value.devicePublicKey),
+    fun pairConfirm(value: PairConfirmResponse): String = objectOf(
+        "paired" to value.paired.toString(),
         "accessToken" to string(value.accessToken),
-        "expiresAt" to string(value.expiresAt),
+        "tokenType" to string(value.tokenType),
+    )
+
+    fun ok(): String = objectOf(
+        "ok" to "true",
     )
 
     private fun mediaItem(value: MediaRecord): String = objectOf(

@@ -24,9 +24,14 @@ public sealed class HttpReadOnlyMediaSource :
     private readonly HttpClient _httpClient;
     private readonly Uri _apiBaseAddress;
     private readonly TimeSpan _requestTimeout;
+    private readonly string? _accessToken;
     private string? _deviceId;
 
-    public HttpReadOnlyMediaSource(HttpClient httpClient, Uri apiBaseAddress, TimeSpan? requestTimeout = null)
+    public HttpReadOnlyMediaSource(
+        HttpClient httpClient,
+        Uri apiBaseAddress,
+        TimeSpan? requestTimeout = null,
+        string? accessToken = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(apiBaseAddress);
@@ -39,6 +44,7 @@ public sealed class HttpReadOnlyMediaSource :
         _httpClient = httpClient;
         _apiBaseAddress = EnsureTrailingSlash(apiBaseAddress);
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(10);
+        _accessToken = string.IsNullOrWhiteSpace(accessToken) ? null : accessToken.Trim();
         if (_requestTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(requestTimeout));
@@ -224,6 +230,11 @@ public sealed class HttpReadOnlyMediaSource :
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(_requestTimeout);
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_apiBaseAddress, relativePath));
+        if (_accessToken is not null)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+        }
+
         if (offset.HasValue)
         {
             request.Headers.Range = new RangeHeaderValue(offset.Value, null);

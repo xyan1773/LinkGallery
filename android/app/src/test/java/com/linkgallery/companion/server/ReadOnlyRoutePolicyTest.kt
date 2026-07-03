@@ -23,8 +23,9 @@ class ReadOnlyRoutePolicyTest {
 
     @Test
     fun pairingControlRoutesAreAllowedWithoutOpeningMediaWrites() {
-        assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/pair/request"))
+        assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/pair/start"))
         assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/pair/confirm"))
-        assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/pair/request"))
+        assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/pair/cancel"))
+        assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/pair/start"))
     }
 }

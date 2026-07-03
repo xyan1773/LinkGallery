@@ -7,6 +7,7 @@ import com.linkgallery.companion.media.MediaPage
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRepository
+import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
 import java.io.ByteArrayInputStream
 import java.io.IOException
 import java.io.InputStream
@@ -58,10 +59,12 @@ class LinkGalleryHttpServerTest {
         }
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
                 mediaRepository = repository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(
                 port = 0,
@@ -101,12 +104,14 @@ class LinkGalleryHttpServerTest {
     fun servesJsonOverHttpAndCanBeStopped() {
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(
                         DeviceInfo("device-1", "Test phone", "Test model", 50, 0),
                     )
                 },
                 mediaRepository = EmptyMediaRepository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 2_000),
             logger = RequestLogger { _, _, _, _ -> },
@@ -141,11 +146,13 @@ class LinkGalleryHttpServerTest {
         val neverCompletes = CountDownLatch(1)
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     neverCompletes.await()
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 0))
                 },
                 mediaRepository = EmptyMediaRepository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 100),
             logger = RequestLogger { _, _, _, _ -> },
@@ -192,10 +199,12 @@ class LinkGalleryHttpServerTest {
         }
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
                 mediaRepository = repository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 2_000),
             logger = RequestLogger { _, _, _, _ -> },
@@ -251,10 +260,12 @@ class LinkGalleryHttpServerTest {
         }
         val server = LinkGalleryHttpServer(
             controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
                 deviceInfoProvider = DeviceInfoProvider {
                     DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
                 },
                 mediaRepository = repository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
             ),
             config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 2_000),
             logger = RequestLogger { _, _, _, _ -> },
@@ -295,5 +306,19 @@ class LinkGalleryHttpServerTest {
             MediaPageResult.Success(MediaPage(emptyList(), null, false, 0))
 
         override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
+    }
+
+    private object FakePublicDeviceInfoProvider : PublicDeviceInfoProvider {
+        override fun get(): PublicDeviceInfo = PublicDeviceInfo(
+            deviceId = "DEVICEID",
+            deviceName = "Test phone",
+            manufacturer = "Google",
+            model = "Test model",
+            apiVersion = 1,
+            serverVersion = "0.1.0",
+            instanceId = "instance-1",
+            pairingAvailable = false,
+            certificateFingerprint = "AA:BB",
+        )
     }
 }

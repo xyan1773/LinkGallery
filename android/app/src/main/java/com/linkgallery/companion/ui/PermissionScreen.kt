@@ -57,6 +57,8 @@ import java.time.format.DateTimeFormatter
 fun PermissionScreen(
     connectionGuide: ConnectionGuide,
     mediaRepository: MediaRepository? = null,
+    onOpenPairingWindow: () -> Long = { 0L },
+    activePairingCodeProvider: () -> String? = { "428913" },
 ) {
     val context = LocalContext.current
     val permissions = AndroidMediaPermissionGateway.requiredPermissions(
@@ -82,6 +84,8 @@ fun PermissionScreen(
         mediaRepository = mediaRepository,
         permissionGranted = permissionGranted,
         onPermissionRequest = { launcher.launch(permissions) },
+        onOpenPairingWindow = onOpenPairingWindow,
+        activePairingCodeProvider = activePairingCodeProvider,
     )
 }
 
@@ -91,6 +95,8 @@ internal fun LinkGalleryApp(
     mediaRepository: MediaRepository?,
     permissionGranted: Boolean,
     onPermissionRequest: () -> Unit,
+    onOpenPairingWindow: () -> Long = { 0L },
+    activePairingCodeProvider: () -> String? = { "428913" },
 ) {
     var selectedTab by remember { mutableStateOf(AppTab.Gallery) }
     var density by remember { mutableStateOf(GalleryDensity.Comfortable) }
@@ -147,7 +153,10 @@ internal fun LinkGalleryApp(
                 AppTab.Connection -> ConnectionPage(
                     connectionGuide = connectionGuide,
                     permissionGranted = permissionGranted,
-                    onPair = { showPairing = true },
+                    onPair = {
+                        onOpenPairingWindow()
+                        showPairing = true
+                    },
                 )
                 AppTab.Settings -> SettingsPage(permissionGranted)
             }
@@ -155,7 +164,10 @@ internal fun LinkGalleryApp(
     }
 
     if (showPairing) {
-        PairingCodeDialog(onDismiss = { showPairing = false })
+        PairingCodeDialog(
+            code = activePairingCodeProvider(),
+            onDismiss = { showPairing = false },
+        )
     }
 }
 
@@ -368,7 +380,11 @@ private fun PermissionGate(permissionGranted: Boolean, onPermissionRequest: () -
 }
 
 @Composable
-private fun PairingCodeDialog(onDismiss: () -> Unit) {
+private fun PairingCodeDialog(code: String?, onDismiss: () -> Unit) {
+    val displayCode = code
+        ?.chunked(3)
+        ?.joinToString(" ")
+        ?: "Waiting"
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -380,7 +396,7 @@ private fun PairingCodeDialog(onDismiss: () -> Unit) {
         text = {
             Column {
                 Text(
-                    text = "428 913",
+                    text = displayCode,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.testTag("pairing_code"),

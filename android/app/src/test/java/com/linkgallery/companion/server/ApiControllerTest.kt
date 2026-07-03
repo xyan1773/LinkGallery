@@ -10,6 +10,9 @@ import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
+import com.linkgallery.companion.pairing.PairingManager
+import com.linkgallery.companion.pairing.RejectingAccessTokenAuthenticator
 import java.io.ByteArrayInputStream
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
@@ -22,6 +25,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApiControllerTest {
+    @Test
+    fun publicInfoResponseIsMinimalAndDoesNotRequireMediaPermission() {
+        val response = runSuspend {
+            controller(
+                deviceInfoProvider = DeviceInfoProvider {
+                    DeviceInfoResult.PermissionDenied(setOf("android.permission.READ_MEDIA_IMAGES"))
+                },
+            ).handle("GET", "/api/v1/public/info")
+        }
+
+        assertEquals(200, response.status)
+        assertEquals(
+            """{"deviceId":"DEVICEID","deviceName":"Pixel","manufacturer":"Google","model":"Pixel 9","apiVersion":1,"serverVersion":"0.1.0","instanceId":"instance-1","pairingAvailable":false,"certificateFingerprint":"AA:BB"}""",
+            response.body,
+        )
+        assertFalse(response.body.contains("mediaCount"))
+        assertFalse(response.body.contains("token", ignoreCase = true))
+    }
+
     @Test
     fun deviceResponseMatchesContract() {
         val response = runSuspend {
@@ -341,39 +363,108 @@ class ApiControllerTest {
     }
 
     @Test
-    fun pairingRequestAndConfirmFollowContractShape() {
-        val controller = controller()
-        val challenge = runSuspend {
-            controller.handle("POST", "/api/v1/pair/request", body = "{}")
+    fun pairStartRequiresAndroidWindow() {
+        val response = runSuspend {
+            controller().handle("POST", "/api/v1/pair/start", body = START_PAIR_BODY)
         }
 
-        assertEquals(202, challenge.status)
-        val sessionId = checkNotNull(
-            Regex(""""sessionId":"([^"]+)"""").find(challenge.body)?.groupValues?.get(1),
-        )
-        val code = checkNotNull(
-            Regex(""""confirmationCode":"([0-9]{6})"""").find(challenge.body)?.groupValues?.get(1),
-        )
+        assertEquals(403, response.status)
+        assertTrue(response.body.contains("pairing_unavailable"))
+    }
 
-        val result = runSuspend {
+    @Test
+    fun pairStartAndConfirmUseDisplayedCode() {
+        val pairingManager = PairingManager()
+        pairingManager.openPairingWindow(nowMillis = System.currentTimeMillis())
+        val controller = controller(pairingManager = pairingManager)
+
+        val start = runSuspend {
+            controller.handle("POST", "/api/v1/pair/start", body = START_PAIR_BODY)
+        }
+        val sessionId = """"pairingSessionId":"([^"]+)"""".toRegex()
+            .find(start.body)!!
+            .groupValues[1]
+        val code = checkNotNull(pairingManager.activeVerificationCode())
+        val confirm = runSuspend {
             controller.handle(
                 "POST",
                 "/api/v1/pair/confirm",
-                body = """{"sessionId":"$sessionId","confirmationCode":"$code"}""",
+                body = """{"pairingSessionId":"$sessionId","verificationCode":"$code"}""",
             )
         }
 
-        assertEquals(200, result.status)
-        assertTrue(result.body.contains(""""accessToken":"""))
-        assertTrue(result.body.contains(""""devicePublicKey":"""))
+        assertEquals(200, start.status)
+        assertTrue(start.body.contains(""""codeLength":6"""))
+        assertEquals(200, confirm.status)
+        assertTrue(confirm.body.contains(""""paired":true"""))
+        assertTrue(confirm.body.contains(""""accessToken":"""))
+        assertTrue(confirm.body.contains(""""tokenType":"Bearer""""))
+    }
+
+    @Test
+    fun privateRoutesRequireBearerToken() {
+        val controller = controller(
+            accessTokenAuthenticator = RejectingAccessTokenAuthenticator,
+        )
+
+        val missing = runSuspend { controller.handle("GET", "/api/v1/device") }
+        val invalid = runSuspend {
+            controller.handle(
+                "GET",
+                "/api/v1/device",
+                mapOf("Authorization" to "Bearer bad-token"),
+            )
+        }
+
+        assertEquals(401, missing.status)
+        assertTrue(missing.body.contains("authentication_required"))
+        assertEquals(403, invalid.status)
+        assertTrue(invalid.body.contains("authentication_failed"))
+    }
+
+    @Test
+    fun revokeInvalidatesPairedToken() {
+        val pairingManager = PairingManager()
+        pairingManager.openPairingWindow(nowMillis = System.currentTimeMillis())
+        val controller = controller(
+            pairingManager = pairingManager,
+            accessTokenAuthenticator = pairingManager,
+        )
+        val start = runSuspend {
+            controller.handle("POST", "/api/v1/pair/start", body = START_PAIR_BODY)
+        }
+        val sessionId = """"pairingSessionId":"([^"]+)"""".toRegex()
+            .find(start.body)!!
+            .groupValues[1]
+        val code = checkNotNull(pairingManager.activeVerificationCode())
+        val confirm = runSuspend {
+            controller.handle(
+                "POST",
+                "/api/v1/pair/confirm",
+                body = """{"pairingSessionId":"$sessionId","verificationCode":"$code"}""",
+            )
+        }
+        val token = """"accessToken":"([^"]+)"""".toRegex()
+            .find(confirm.body)!!
+            .groupValues[1]
+
+        val authed = runSuspend {
+            controller.handle("GET", "/api/v1/device", mapOf("Authorization" to "Bearer $token"))
+        }
+        val revoke = runSuspend {
+            controller.handle("POST", "/api/v1/pair/revoke", mapOf("Authorization" to "Bearer $token"))
+        }
+        val afterRevoke = runSuspend {
+            controller.handle("GET", "/api/v1/device", mapOf("Authorization" to "Bearer $token"))
+        }
+
+        assertEquals(200, authed.status)
+        assertEquals(200, revoke.status)
+        assertEquals(403, afterRevoke.status)
     }
 
     private fun controller(
-        repository: MediaRepository = FakeMediaRepository(
-            MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),
-        ),
-    ): ApiController = ApiController(
-        deviceInfoProvider = DeviceInfoProvider {
+        deviceInfoProvider: DeviceInfoProvider = DeviceInfoProvider {
             DeviceInfoResult.Success(
                 DeviceInfo(
                     id = "device-1",
@@ -384,7 +475,30 @@ class ApiControllerTest {
                 ),
             )
         },
+        repository: MediaRepository = FakeMediaRepository(
+            MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),
+        ),
+        pairingManager: PairingManager? = null,
+        accessTokenAuthenticator: com.linkgallery.companion.pairing.AccessTokenAuthenticator =
+            AllowAllAccessTokenAuthenticator,
+    ): ApiController = ApiController(
+        publicDeviceInfoProvider = PublicDeviceInfoProvider {
+            PublicDeviceInfo(
+                deviceId = "DEVICEID",
+                deviceName = "Pixel",
+                manufacturer = "Google",
+                model = "Pixel 9",
+                apiVersion = 1,
+                serverVersion = "0.1.0",
+                instanceId = "instance-1",
+                pairingAvailable = false,
+                certificateFingerprint = "AA:BB",
+            )
+        },
+        deviceInfoProvider = deviceInfoProvider,
         mediaRepository = repository,
+        pairingCoordinator = pairingManager ?: com.linkgallery.companion.pairing.DisabledPairingCoordinator,
+        accessTokenAuthenticator = accessTokenAuthenticator,
     )
 
     private class FakeMediaRepository(
@@ -435,6 +549,8 @@ class ApiControllerTest {
             modifiedAt = Instant.parse("2026-06-30T01:00:00Z"),
             thumbnailUrl = "/api/v1/media/media-1/thumbnail?size=256",
         )
+        const val START_PAIR_BODY =
+            """{"desktopId":"desktop-1","desktopName":"Windows PC","desktopModel":"Windows","identityPublicKey":"identity-key","ephemeralPublicKey":"ephemeral-key","nonce":"desktop-nonce"}"""
 
         fun <T> runSuspend(block: suspend () -> T): T {
             val completed = CountDownLatch(1)
