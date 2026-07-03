@@ -14,6 +14,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,10 +22,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 @Composable
-fun PermissionScreen(connectionGuide: ConnectionGuide) {
+fun PermissionScreen(
+    connectionGuide: ConnectionGuide,
+    onOpenPairingWindow: () -> Long = { 0L },
+    activePairingCodeProvider: () -> String? = { null },
+) {
     var permissionGranted by remember { mutableStateOf(false) }
+    var pairingExpiresAt by remember { mutableStateOf<Long?>(null) }
+    var pairingCode by remember { mutableStateOf<String?>(null) }
     val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         arrayOf(
             Manifest.permission.READ_MEDIA_IMAGES,
@@ -39,6 +47,17 @@ fun PermissionScreen(connectionGuide: ConnectionGuide) {
         permissionGranted = results.values.all { it }
     }
 
+    LaunchedEffect(pairingExpiresAt) {
+        while (pairingExpiresAt?.let { System.currentTimeMillis() < it } == true) {
+            pairingCode = activePairingCodeProvider()
+            delay(1_000)
+        }
+        if (pairingExpiresAt?.let { System.currentTimeMillis() >= it } == true) {
+            pairingExpiresAt = null
+            pairingCode = null
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -49,9 +68,9 @@ fun PermissionScreen(connectionGuide: ConnectionGuide) {
     ) {
         Text(
             text = if (permissionGranted) {
-                "照片与视频访问已就绪"
+                "Photo and video read access is ready"
             } else {
-                "允许 LinkGallery 只读浏览照片与视频"
+                "Allow LinkGallery to read photos and videos"
             },
             style = MaterialTheme.typography.headlineSmall,
         )
@@ -60,8 +79,29 @@ fun PermissionScreen(connectionGuide: ConnectionGuide) {
                 modifier = Modifier.padding(top = 24.dp),
                 onClick = { launcher.launch(permissions) },
             ) {
-                Text("授予读取权限")
+                Text("Grant read access")
             }
+        }
+        Button(
+            modifier = Modifier.padding(top = 24.dp),
+            onClick = {
+                pairingExpiresAt = onOpenPairingWindow()
+                pairingCode = activePairingCodeProvider()
+            },
+        ) {
+            Text("Add computer")
+        }
+        pairingExpiresAt?.let { expiresAt ->
+            Text(
+                modifier = Modifier.padding(top = 12.dp),
+                text = "Pairing open until $expiresAt",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                modifier = Modifier.padding(top = 8.dp),
+                text = pairingCode?.let { "Code: $it" } ?: "Waiting for pairing request",
+                style = MaterialTheme.typography.titleMedium,
+            )
         }
         Text(
             modifier = Modifier.padding(top = 32.dp),

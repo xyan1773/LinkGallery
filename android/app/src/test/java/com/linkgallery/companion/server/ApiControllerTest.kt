@@ -10,6 +10,7 @@ import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.PairingManager
 import java.io.ByteArrayInputStream
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
@@ -359,6 +360,43 @@ class ApiControllerTest {
         assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/media"))
     }
 
+    @Test
+    fun pairStartRequiresAndroidWindow() {
+        val response = runSuspend {
+            controller().handle("POST", "/api/v1/pair/start", body = START_PAIR_BODY)
+        }
+
+        assertEquals(403, response.status)
+        assertTrue(response.body.contains("pairing_unavailable"))
+    }
+
+    @Test
+    fun pairStartAndConfirmUseDisplayedCode() {
+        val pairingManager = PairingManager()
+        pairingManager.openPairingWindow(nowMillis = System.currentTimeMillis())
+        val controller = controller(pairingManager = pairingManager)
+
+        val start = runSuspend {
+            controller.handle("POST", "/api/v1/pair/start", body = START_PAIR_BODY)
+        }
+        val sessionId = """"pairingSessionId":"([^"]+)"""".toRegex()
+            .find(start.body)!!
+            .groupValues[1]
+        val code = checkNotNull(pairingManager.activeVerificationCode())
+        val confirm = runSuspend {
+            controller.handle(
+                "POST",
+                "/api/v1/pair/confirm",
+                body = """{"pairingSessionId":"$sessionId","verificationCode":"$code"}""",
+            )
+        }
+
+        assertEquals(200, start.status)
+        assertTrue(start.body.contains(""""codeLength":6"""))
+        assertEquals(200, confirm.status)
+        assertEquals("""{"paired":true}""", confirm.body)
+    }
+
     private fun controller(
         deviceInfoProvider: DeviceInfoProvider = DeviceInfoProvider {
             DeviceInfoResult.Success(
@@ -374,6 +412,7 @@ class ApiControllerTest {
         repository: MediaRepository = FakeMediaRepository(
             MediaPageResult.Success(MediaPage(listOf(MEDIA), "next-page", true, 2)),
         ),
+        pairingManager: PairingManager? = null,
     ): ApiController = ApiController(
         publicDeviceInfoProvider = PublicDeviceInfoProvider {
             PublicDeviceInfo(
@@ -390,6 +429,7 @@ class ApiControllerTest {
         },
         deviceInfoProvider = deviceInfoProvider,
         mediaRepository = repository,
+        pairingCoordinator = pairingManager ?: com.linkgallery.companion.pairing.DisabledPairingCoordinator,
     )
 
     private class FakeMediaRepository(
@@ -440,6 +480,8 @@ class ApiControllerTest {
             modifiedAt = Instant.parse("2026-06-30T01:00:00Z"),
             thumbnailUrl = "/api/v1/media/media-1/thumbnail?size=256",
         )
+        const val START_PAIR_BODY =
+            """{"desktopId":"desktop-1","desktopName":"Windows PC","desktopModel":"Windows","identityPublicKey":"identity-key","ephemeralPublicKey":"ephemeral-key","nonce":"desktop-nonce"}"""
 
         fun <T> runSuspend(block: suspend () -> T): T {
             val completed = CountDownLatch(1)
