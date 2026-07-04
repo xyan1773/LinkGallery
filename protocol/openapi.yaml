@@ -123,6 +123,86 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /media/sync/state:
+    get:
+      summary: Get the current media library synchronization state
+      operationId: getMediaSyncState
+      security: []
+      responses:
+        "200":
+          description: Current library version, opaque latest cursor, and item count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaSyncState"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /media/changes:
+    get:
+      summary: Get media metadata changes after an opaque synchronization cursor
+      operationId: getMediaChanges
+      security: []
+      parameters:
+        - name: after
+          in: query
+          description: Opaque cursor returned by sync/state or a preceding changes page.
+          schema:
+            type: string
+            nullable: true
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 200
+      responses:
+        "200":
+          description: One atomic page of metadata upserts and deletion tombstones
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaChanges"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /media/manifest:
+    get:
+      summary: Get a lightweight page of current media IDs and generations
+      operationId: getMediaManifest
+      security: []
+      parameters:
+        - name: cursor
+          in: query
+          description: Opaque cursor returned by the preceding manifest page.
+          schema:
+            type: string
+            nullable: true
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 500
+      responses:
+        "200":
+          description: Lightweight manifest page used to reconcile deletions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaManifestPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /media/{mediaId}/thumbnail:
     get:
       summary: Get a generated media thumbnail
@@ -394,6 +474,11 @@ components:
         relativePath:
           type: string
           nullable: true
+        generation:
+          type: integer
+          format: int64
+          nullable: true
+          description: MediaStore generation, or null when unavailable on API 29.
         thumbnailUrl:
           type: string
           nullable: true
@@ -425,3 +510,65 @@ components:
           type: integer
           minimum: 0
           description: Total media count matching the current type filter.
+    MediaSyncState:
+      type: object
+      required: [libraryVersion, latestCursor, total]
+      properties:
+        libraryVersion:
+          type: string
+        latestCursor:
+          type: string
+          description: Versioned opaque cursor. Clients must not parse or construct it.
+        total:
+          type: integer
+          minimum: 0
+    MediaChanges:
+      type: object
+      required:
+        [libraryVersion, nextCursor, latestCursor, hasMore, upserts, deletes]
+      properties:
+        libraryVersion:
+          type: string
+        fromCursor:
+          type: string
+          nullable: true
+        nextCursor:
+          type: string
+        latestCursor:
+          type: string
+        hasMore:
+          type: boolean
+        upserts:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaItem"
+        deletes:
+          type: array
+          description: Media IDs removed since fromCursor when deletion logging is available.
+          items:
+            type: string
+    MediaManifestEntry:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+          nullable: true
+    MediaManifestPage:
+      type: object
+      required: [libraryVersion, items, hasMore]
+      properties:
+        libraryVersion:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MediaManifestEntry"
+        nextCursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean

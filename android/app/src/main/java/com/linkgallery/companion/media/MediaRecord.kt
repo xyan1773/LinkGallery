@@ -14,6 +14,7 @@ data class MediaRecord(
     val durationMilliseconds: Long? = null,
     val albumName: String? = null,
     val relativePath: String? = null,
+    val generation: Long? = null,
     val thumbnailUrl: String? = null,
     val sourceDevice: String? = null,
     val sourceApplication: String? = null,

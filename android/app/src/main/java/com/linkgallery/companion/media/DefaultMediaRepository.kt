@@ -8,6 +8,87 @@ class DefaultMediaRepository(
     private val permissionGateway: MediaPermissionGateway,
     private val tokenCodec: OpaqueMediaTokenCodec = OpaqueMediaTokenCodec(),
 ) : MediaRepository {
+    override suspend fun getSyncState(): MediaSyncStateResult {
+        val types = MediaType.entries.toSet()
+        val missingPermissions = permissionGateway.missingPermissions(types)
+        if (missingPermissions.isNotEmpty()) {
+            return MediaSyncStateResult.PermissionDenied(missingPermissions)
+        }
+        val state = dataSource.libraryState()
+        return MediaSyncStateResult.Success(
+            MediaSyncState(
+                state.libraryVersion,
+                tokenCodec.encodeSyncCursor(state.latestCursor),
+                dataSource.count(types),
+            ),
+        )
+    }
+
+    override suspend fun getChanges(cursor: String?, limit: Int): MediaChangesResult {
+        val types = MediaType.entries.toSet()
+        val missingPermissions = permissionGateway.missingPermissions(types)
+        if (missingPermissions.isNotEmpty()) {
+            return MediaChangesResult.PermissionDenied(missingPermissions)
+        }
+        val after = cursor?.let(tokenCodec::decodeSyncCursor) ?: MediaSyncCursor(0, 0)
+        if (cursor != null && tokenCodec.decodeSyncCursor(cursor) == null) {
+            return MediaChangesResult.InvalidCursor
+        }
+        val state = dataSource.libraryState()
+        val rows = dataSource.queryChanges(after, limit + 1, types)
+        val hasMore = rows.size > limit
+        val pageRows = rows.take(limit)
+        val nextValue = pageRows.lastOrNull()?.let { row ->
+            MediaSyncCursor(
+                row.generation ?: row.dateModifiedEpochSeconds,
+                row.mediaStoreId,
+            )
+        } ?: after
+        return MediaChangesResult.Success(
+            MediaChanges(
+                libraryVersion = state.libraryVersion,
+                fromCursor = cursor,
+                nextCursor = tokenCodec.encodeSyncCursor(nextValue),
+                latestCursor = tokenCodec.encodeSyncCursor(state.latestCursor),
+                hasMore = hasMore,
+                upserts = pageRows.map(::toRecord),
+            ),
+        )
+    }
+
+    override suspend fun getManifest(cursor: String?, limit: Int): MediaManifestResult {
+        val types = MediaType.entries.toSet()
+        val missingPermissions = permissionGateway.missingPermissions(types)
+        if (missingPermissions.isNotEmpty()) {
+            return MediaManifestResult.PermissionDenied(missingPermissions)
+        }
+        val afterId = cursor?.let(tokenCodec::decodeManifestCursor)
+        if (cursor != null && afterId == null) {
+            return MediaManifestResult.InvalidCursor
+        }
+        val state = dataSource.libraryState()
+        val rows = dataSource.queryManifest(afterId, limit + 1, types)
+        val hasMore = rows.size > limit
+        val pageRows = rows.take(limit)
+        return MediaManifestResult.Success(
+            MediaManifestPage(
+                libraryVersion = state.libraryVersion,
+                items = pageRows.map { row ->
+                    MediaManifestEntry(
+                        tokenCodec.encodeId(row.type, row.mediaStoreId),
+                        row.generation,
+                    )
+                },
+                nextCursor = if (hasMore) {
+                    pageRows.lastOrNull()?.let { tokenCodec.encodeManifestCursor(it.mediaStoreId) }
+                } else {
+                    null
+                },
+                hasMore = hasMore,
+            ),
+        )
+    }
+
     override suspend fun getPage(query: MediaQuery): MediaPageResult {
         val missingPermissions = permissionGateway.missingPermissions(query.types)
         if (missingPermissions.isNotEmpty()) {
@@ -129,6 +210,7 @@ class DefaultMediaRepository(
             durationMilliseconds = row.durationMilliseconds,
             albumName = row.albumName,
             relativePath = row.relativePath,
+            generation = row.generation,
             thumbnailUrl = "/api/v1/media/${tokenCodec.encodeId(row)}/thumbnail?size=256",
         )
     }

@@ -7,11 +7,65 @@ interface MediaRepository {
 
     suspend fun getById(id: String): MediaItemResult
 
+    suspend fun getSyncState(): MediaSyncStateResult =
+        MediaSyncStateResult.PermissionDenied(emptySet())
+
+    suspend fun getChanges(cursor: String?, limit: Int): MediaChangesResult =
+        MediaChangesResult.PermissionDenied(emptySet())
+
+    suspend fun getManifest(cursor: String?, limit: Int): MediaManifestResult =
+        MediaManifestResult.PermissionDenied(emptySet())
+
     suspend fun getThumbnail(id: String, width: Int, height: Int): MediaThumbnailResult =
         MediaThumbnailResult.NotFound
 
     suspend fun getContent(id: String): MediaContentResult =
         MediaContentResult.NotFound
+}
+
+data class MediaSyncState(
+    val libraryVersion: String,
+    val latestCursor: String,
+    val total: Int,
+)
+
+data class MediaChanges(
+    val libraryVersion: String,
+    val fromCursor: String?,
+    val nextCursor: String,
+    val latestCursor: String,
+    val hasMore: Boolean,
+    val upserts: List<MediaRecord>,
+    val deletes: List<String> = emptyList(),
+)
+
+sealed interface MediaSyncStateResult {
+    data class Success(val state: MediaSyncState) : MediaSyncStateResult
+    data class PermissionDenied(val requiredPermissions: Set<String>) : MediaSyncStateResult
+}
+
+sealed interface MediaChangesResult {
+    data class Success(val changes: MediaChanges) : MediaChangesResult
+    data class PermissionDenied(val requiredPermissions: Set<String>) : MediaChangesResult
+    data object InvalidCursor : MediaChangesResult
+}
+
+data class MediaManifestEntry(
+    val id: String,
+    val generation: Long?,
+)
+
+data class MediaManifestPage(
+    val libraryVersion: String,
+    val items: List<MediaManifestEntry>,
+    val nextCursor: String?,
+    val hasMore: Boolean,
+)
+
+sealed interface MediaManifestResult {
+    data class Success(val page: MediaManifestPage) : MediaManifestResult
+    data class PermissionDenied(val requiredPermissions: Set<String>) : MediaManifestResult
+    data object InvalidCursor : MediaManifestResult
 }
 
 data class MediaQuery(

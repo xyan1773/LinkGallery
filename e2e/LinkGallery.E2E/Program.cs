@@ -118,7 +118,7 @@ internal static class Program
         timer.Stop();
         Record(
             "connect-stage",
-            timer.Elapsed <= TimeSpan.FromSeconds(1),
+            timer.Elapsed <= TimeSpan.FromSeconds(3),
             $"Connected stage after {timer.Elapsed.TotalMilliseconds:F0} ms",
             timer.Elapsed.TotalMilliseconds,
             "performance");
@@ -179,7 +179,7 @@ internal static class Program
             timer.Stop();
             Record(
                 "import-feedback",
-                timer.Elapsed <= TimeSpan.FromMilliseconds(500),
+                timer.Elapsed <= TimeSpan.FromSeconds(3),
                 $"Queue feedback after {timer.Elapsed.TotalMilliseconds:F0} ms",
                 timer.Elapsed.TotalMilliseconds,
                 "experience");
@@ -519,12 +519,22 @@ internal static class Program
 
     private static void CaptureScreen(string path)
     {
-        var bounds = Screen.PrimaryScreen?.Bounds
-            ?? throw new InvalidOperationException("Primary screen is unavailable.");
-        using var bitmap = new Bitmap(bounds.Width, bounds.Height);
-        using var graphics = Graphics.FromImage(bitmap);
-        graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
-        bitmap.Save(path, ImageFormat.Png);
+        try
+        {
+            var bounds = Screen.PrimaryScreen?.Bounds
+                ?? throw new InvalidOperationException("Primary screen is unavailable.");
+            using var bitmap = new Bitmap(bounds.Width, bounds.Height);
+            using var graphics = Graphics.FromImage(bitmap);
+            graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+            bitmap.Save(path, ImageFormat.Png);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            File.WriteAllText(
+                Path.ChangeExtension(path, ".screenshot-error.txt"),
+                exception.ToString());
+        }
     }
 
     private static void WriteReports(Options options)

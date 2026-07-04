@@ -10,6 +10,8 @@ namespace LinkGallery.Infrastructure.Tests.Media;
 public sealed class SqliteMediaIndexTests
 {
     private static readonly string[] ExpectedOfflineMediaIds = ["media-1", "media-4"];
+    private static readonly string[] ExpectedIncrementalMediaIds = ["media-1", "media-3"];
+    private static readonly string[] ExpectedRemainingMediaIds = ["media-1", "media-3"];
     private static readonly string[] ExpectedScreenshotAlbumIds =
         ["dcim/screenshots", "pictures/screenshots"];
     private string _databasePath = null!;
@@ -240,6 +242,83 @@ public sealed class SqliteMediaIndexTests
         Assert.IsTrue(albums.All(album => album.CoverMediaId is not null));
     }
 
+    [TestMethod]
+    public async Task IncrementalPageAppliesUpsertsDeletesAndCursorInOneRun()
+    {
+        var source = new FakeIncrementalMediaSource(Item(1, 1), Item(2, 2));
+        var index = new SqliteMediaIndex(_databasePath);
+        var synchronizer = new IncrementalMediaIndexSynchronizer(index, pageSize: 2);
+        var initial = await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+
+        source.Items = [Item(1, 10, "renamed.jpg"), Item(3, 3)];
+        source.LatestCursor = "cursor-2";
+        source.Changes =
+        [
+            new RemoteMediaChanges(
+                source.LibraryVersion,
+                "cursor-1",
+                "cursor-2",
+                "cursor-2",
+                HasMore: false,
+                Upserts: [source.Items[0], source.Items[1]],
+                Deletes: []),
+        ];
+        var incremental = await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+        var cached = await index.SearchAsync(source.Device.Id, null, 10, 0, CancellationToken.None);
+        var unchanged = await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+
+        Assert.IsTrue(initial.WasFullScan);
+        Assert.IsFalse(incremental.WasFullScan);
+        Assert.AreEqual(2, incremental.PagesFetched);
+        Assert.AreEqual(2, incremental.ItemsReceived);
+        Assert.AreEqual(1, incremental.ItemsRemoved);
+        Assert.HasCount(2, cached);
+        CollectionAssert.AreEquivalent(
+            ExpectedIncrementalMediaIds,
+            cached.Select(item => item.RemoteId).ToArray());
+        Assert.AreEqual("renamed.jpg", cached.Single(item => item.RemoteId == "media-1").FileName);
+        Assert.IsFalse(unchanged.WasFullScan);
+        Assert.AreEqual(1, unchanged.PagesFetched);
+    }
+
+    [TestMethod]
+    public async Task ReducedRemoteCountForcesFullReconciliationForDeletion()
+    {
+        var source = new FakeIncrementalMediaSource(Item(1, 1), Item(2, 2), Item(3, 3));
+        var index = new SqliteMediaIndex(_databasePath);
+        var synchronizer = new IncrementalMediaIndexSynchronizer(index, pageSize: 2);
+        await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+
+        source.Items = [Item(1, 1), Item(3, 3)];
+        source.LatestCursor = "cursor-2";
+        var result = await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+        var cached = await index.SearchAsync(source.Device.Id, null, 10, 0, CancellationToken.None);
+
+        Assert.IsTrue(result.WasFullScan);
+        Assert.AreEqual(1, result.ItemsRemoved);
+        CollectionAssert.AreEquivalent(
+            ExpectedRemainingMediaIds,
+            cached.Select(item => item.RemoteId).ToArray());
+    }
+
+    [TestMethod]
+    public async Task LibraryVersionChangeForcesSafeFullIndex()
+    {
+        var source = new FakeIncrementalMediaSource(Item(1, 1), Item(2, 2));
+        var index = new SqliteMediaIndex(_databasePath);
+        var synchronizer = new IncrementalMediaIndexSynchronizer(index, pageSize: 2);
+        await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+
+        source.LibraryVersion = "library-b";
+        source.LatestCursor = "cursor-reset";
+        source.Items = [Item(1, 10, "after-reset.jpg"), Item(2, 2)];
+        var result = await synchronizer.SynchronizeAsync(source, CancellationToken.None);
+        var cached = await index.SearchAsync(source.Device.Id, null, 10, 0, CancellationToken.None);
+
+        Assert.IsTrue(result.WasFullScan);
+        Assert.AreEqual("after-reset.jpg", cached.Single(item => item.RemoteId == "media-1").FileName);
+    }
+
     private static MediaItem Item(
         int id,
         int modifiedSeconds,
@@ -292,6 +371,88 @@ public sealed class SqliteMediaIndexTests
                 start = Array.FindIndex(ordered, item => item.RemoteId == query.Cursor) + 1;
             }
 
+            var page = ordered.Skip(start).Take(query.Limit).ToArray();
+            var next = start + page.Length < ordered.Length ? page[^1].RemoteId : null;
+            return Task.FromResult(new MediaPage(page, next));
+        }
+
+        public Task<Stream> OpenThumbnailAsync(
+            string remoteId,
+            ThumbnailSize size,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<Stream> OpenOriginalAsync(
+            string remoteId,
+            long offset,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class FakeIncrementalMediaSource(params MediaItem[] items)
+        : IReadOnlyMediaSource, IIncrementalMediaSource
+    {
+        public MediaItem[] Items { get; set; } = items;
+
+        public string LibraryVersion { get; set; } = "library-a";
+
+        public string LatestCursor { get; set; } = "cursor-1";
+
+        public IReadOnlyList<RemoteMediaChanges> Changes { get; set; } = [];
+
+        public Device Device => new()
+        {
+            Id = "phone-1",
+            Name = "Test phone",
+            Platform = "android",
+            MediaCount = Items.Length,
+            Address = new Uri("http://phone/api/v1/"),
+            IsOnline = true,
+            LastSeenAt = DateTimeOffset.UtcNow,
+        };
+
+        public Task<Device> GetDeviceInfoAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(Device);
+
+        public Task<RemoteMediaSyncState> GetSyncStateAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new RemoteMediaSyncState(LibraryVersion, LatestCursor, Items.Length));
+
+        public Task<RemoteMediaChanges> GetChangesAsync(
+            string? after,
+            int limit,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(Changes.Single(change => change.FromCursor == after));
+
+        public Task<RemoteMediaManifestPage> GetManifestPageAsync(
+            string? cursor,
+            int limit,
+            CancellationToken cancellationToken)
+        {
+            var ordered = Items.OrderBy(item => item.RemoteId, StringComparer.Ordinal).ToArray();
+            var start = cursor is null
+                ? 0
+                : Array.FindIndex(ordered, item => item.RemoteId == cursor) + 1;
+            var page = ordered.Skip(start).Take(limit).ToArray();
+            var hasMore = start + page.Length < ordered.Length;
+            return Task.FromResult(
+                new RemoteMediaManifestPage(
+                    LibraryVersion,
+                    page.Select(item => new RemoteMediaManifestEntry(item.RemoteId, item.Generation)).ToArray(),
+                    hasMore ? page[^1].RemoteId : null,
+                    hasMore));
+        }
+
+        public Task<MediaPage> GetMediaPageAsync(
+            MediaQuery query,
+            CancellationToken cancellationToken)
+        {
+            var ordered = Items
+                .OrderByDescending(item => item.ModifiedAt)
+                .ThenByDescending(item => item.RemoteId, StringComparer.Ordinal)
+                .ToArray();
+            var start = query.Cursor is null
+                ? 0
+                : Array.FindIndex(ordered, item => item.RemoteId == query.Cursor) + 1;
             var page = ordered.Skip(start).Take(query.Limit).ToArray();
             var next = start + page.Length < ordered.Length ? page[^1].RemoteId : null;
             return Task.FromResult(new MediaPage(page, next));

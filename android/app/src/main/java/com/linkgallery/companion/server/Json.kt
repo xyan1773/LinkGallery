@@ -1,7 +1,10 @@
 package com.linkgallery.companion.server
 
 import com.linkgallery.companion.media.MediaPage
+import com.linkgallery.companion.media.MediaChanges
+import com.linkgallery.companion.media.MediaManifestPage
 import com.linkgallery.companion.media.MediaRecord
+import com.linkgallery.companion.media.MediaSyncState
 import com.linkgallery.companion.media.MediaType
 import com.linkgallery.companion.pairing.PairConfirmResponse
 import com.linkgallery.companion.pairing.PairStartResponse
@@ -35,6 +38,36 @@ internal object Json {
         "nextCursor" to nullableString(value.nextCursor),
         "hasMore" to value.hasMore.toString(),
         "total" to value.total.toString(),
+    )
+
+    fun mediaSyncState(value: MediaSyncState): String = objectOf(
+        "libraryVersion" to string(value.libraryVersion),
+        "latestCursor" to string(value.latestCursor),
+        "total" to value.total.toString(),
+    )
+
+    fun mediaChanges(value: MediaChanges): String = objectOf(
+        "libraryVersion" to string(value.libraryVersion),
+        "fromCursor" to nullableString(value.fromCursor),
+        "nextCursor" to string(value.nextCursor),
+        "latestCursor" to string(value.latestCursor),
+        "hasMore" to value.hasMore.toString(),
+        "upserts" to value.upserts.joinToString(separator = ",", prefix = "[", postfix = "]") {
+            mediaItem(it)
+        },
+        "deletes" to value.deletes.joinToString(separator = ",", prefix = "[", postfix = "]", transform = ::string),
+    )
+
+    fun mediaManifest(value: MediaManifestPage): String = objectOf(
+        "libraryVersion" to string(value.libraryVersion),
+        "items" to value.items.joinToString(separator = ",", prefix = "[", postfix = "]") {
+            objectOf(
+                "id" to string(it.id),
+                "generation" to it.generation?.toString().orNull(),
+            )
+        },
+        "nextCursor" to nullableString(value.nextCursor),
+        "hasMore" to value.hasMore.toString(),
     )
 
     fun problem(code: String, message: String): String = objectOf(
@@ -77,6 +110,7 @@ internal object Json {
         "modifiedAt" to string(value.modifiedAt.toString()),
         "albumName" to nullableString(value.albumName),
         "relativePath" to nullableString(value.relativePath),
+        "generation" to value.generation?.toString().orNull(),
         "thumbnailUrl" to nullableString(value.thumbnailUrl),
         "sourceDevice" to nullableString(value.sourceDevice),
         "sourceApplication" to nullableString(value.sourceApplication),

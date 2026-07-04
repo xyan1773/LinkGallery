@@ -9,6 +9,7 @@ namespace LinkGallery.Infrastructure.Media;
 
 public sealed class CachingReadOnlyMediaSource :
     IReadOnlyMediaSource,
+    IIncrementalMediaSource,
     IEntityAwareMediaSource,
     IMediaPlaybackUriSource,
     IDisposable
@@ -95,6 +96,21 @@ public sealed class CachingReadOnlyMediaSource :
             return new MediaPage(cached.Items, cached.NextCursor, cached.HasMore, cached.Total);
         }
     }
+
+    public Task<RemoteMediaSyncState> GetSyncStateAsync(CancellationToken cancellationToken) =>
+        IncrementalSource.GetSyncStateAsync(cancellationToken);
+
+    public Task<RemoteMediaChanges> GetChangesAsync(
+        string? after,
+        int limit,
+        CancellationToken cancellationToken) =>
+        IncrementalSource.GetChangesAsync(after, limit, cancellationToken);
+
+    public Task<RemoteMediaManifestPage> GetManifestPageAsync(
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken) =>
+        IncrementalSource.GetManifestPageAsync(cursor, limit, cancellationToken);
 
     public Task<Stream> OpenThumbnailAsync(
         string remoteId,
@@ -232,6 +248,10 @@ public sealed class CachingReadOnlyMediaSource :
     private static bool IsConnectionFailure(Exception exception) =>
         exception is MediaSourceTimeoutException ||
         exception is HttpRequestException and not MediaSourceHttpException;
+
+    private IIncrementalMediaSource IncrementalSource =>
+        _inner as IIncrementalMediaSource ??
+        throw new NotSupportedException("The wrapped source does not support incremental sync.");
 
     public sealed class TimelineSnapshot
     {

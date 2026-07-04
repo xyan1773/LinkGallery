@@ -10,7 +10,10 @@ internal data class MediaLocator(
 
 class OpaqueMediaTokenCodec {
     internal fun encodeId(row: MediaStoreRow): String =
-        ID_PREFIX + encode("${row.type.name}:${row.mediaStoreId}")
+        encodeId(row.type, row.mediaStoreId)
+
+    internal fun encodeId(type: MediaType, mediaStoreId: Long): String =
+        ID_PREFIX + encode("${type.name}:$mediaStoreId")
 
     internal fun decodeId(value: String): MediaLocator? {
         if (!value.startsWith(ID_PREFIX)) return null
@@ -33,6 +36,28 @@ class OpaqueMediaTokenCodec {
         return MediaStoreCursor(sortTimestamp, id)
     }
 
+    internal fun encodeSyncCursor(value: MediaSyncCursor): String =
+        SYNC_CURSOR_PREFIX + encode("${value.value}:${value.mediaStoreId}")
+
+    internal fun decodeSyncCursor(value: String): MediaSyncCursor? {
+        if (!value.startsWith(SYNC_CURSOR_PREFIX)) return null
+        val parts = decode(value.removePrefix(SYNC_CURSOR_PREFIX))?.split(':') ?: return null
+        if (parts.size != 2) return null
+        val generation = parts[0].toLongOrNull()?.takeIf { it >= 0 } ?: return null
+        val id = parts[1].toLongOrNull()?.takeIf { it >= 0 } ?: return null
+        return MediaSyncCursor(generation, id)
+    }
+
+    internal fun encodeManifestCursor(mediaStoreId: Long): String =
+        MANIFEST_CURSOR_PREFIX + encode(mediaStoreId.toString())
+
+    internal fun decodeManifestCursor(value: String): Long? {
+        if (!value.startsWith(MANIFEST_CURSOR_PREFIX)) return null
+        return decode(value.removePrefix(MANIFEST_CURSOR_PREFIX))
+            ?.toLongOrNull()
+            ?.takeIf { it >= 0 }
+    }
+
     private fun encode(value: String): String =
         Base64.getUrlEncoder()
             .withoutPadding()
@@ -46,5 +71,7 @@ class OpaqueMediaTokenCodec {
     private companion object {
         const val ID_PREFIX = "lgm1_"
         const val CURSOR_PREFIX = "lgc2_"
+        const val SYNC_CURSOR_PREFIX = "lgs1_"
+        const val MANIFEST_CURSOR_PREFIX = "lgmfc1_"
     }
 }

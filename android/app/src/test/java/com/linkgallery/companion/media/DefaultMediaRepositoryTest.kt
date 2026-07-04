@@ -118,6 +118,74 @@ class DefaultMediaRepositoryTest {
     }
 
     @Test
+    fun `sync changes use generation cursor and expose generation`() = runSuspend {
+        val source = FakeDataSource(
+            rows = listOf(
+                row(id = 1, modified = 10, generation = 11),
+                row(id = 2, modified = 20, generation = 11),
+            ),
+        )
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+
+        val state = repository.getSyncState() as MediaSyncStateResult.Success
+        val changes = repository.getChanges(state.state.latestCursor, 10) as MediaChangesResult.Success
+
+        assertTrue(state.state.latestCursor.startsWith("lgs1_"))
+        assertTrue(changes.changes.upserts.isEmpty())
+        val fromBeginning = repository.getChanges(null, 1) as MediaChangesResult.Success
+        assertEquals(11L, fromBeginning.changes.upserts.single().generation)
+        assertTrue(fromBeginning.changes.hasMore)
+        assertEquals(
+            MediaSyncCursor(11, 1),
+            OpaqueMediaTokenCodec().decodeSyncCursor(fromBeginning.changes.nextCursor),
+        )
+        val second = repository.getChanges(
+            fromBeginning.changes.nextCursor,
+            1,
+        ) as MediaChangesResult.Success
+        assertEquals(2L, decodeTestMediaId(second.changes.upserts.single()))
+    }
+
+    @Test
+    fun `api 29 sync cursor falls back to modified seconds`() = runSuspend {
+        val repository = DefaultMediaRepository(
+            FakeDataSource(rows = listOf(row(id = 7, modified = 123, generation = null))),
+            FakePermissionGateway(),
+        )
+
+        val changes = repository.getChanges(null, 10) as MediaChangesResult.Success
+
+        assertEquals(
+            MediaSyncCursor(123, 7),
+            OpaqueMediaTokenCodec().decodeSyncCursor(changes.changes.nextCursor),
+        )
+        assertNull(changes.changes.upserts.single().generation)
+    }
+
+    @Test
+    fun `manifest pages lightweight ids without duplicate boundaries`() = runSuspend {
+        val repository = DefaultMediaRepository(
+            FakeDataSource(
+                rows = listOf(
+                    row(id = 1, generation = 21),
+                    row(id = 2, generation = 22),
+                ),
+            ),
+            FakePermissionGateway(),
+        )
+
+        val first = repository.getManifest(null, 1) as MediaManifestResult.Success
+        val second = repository.getManifest(first.page.nextCursor, 1) as MediaManifestResult.Success
+
+        assertEquals(1L, OpaqueMediaTokenCodec().decodeId(first.page.items.single().id)?.mediaStoreId)
+        assertEquals(21L, first.page.items.single().generation)
+        assertTrue(first.page.hasMore)
+        assertEquals(2L, OpaqueMediaTokenCodec().decodeId(second.page.items.single().id)?.mediaStoreId)
+        assertFalse(second.page.hasMore)
+        assertNull(second.page.nextCursor)
+    }
+
+    @Test
     fun `returns not found when a previously listed item was removed`() = runSuspend {
         val source = FakeDataSource(rows = listOf(row(id = 42)))
         val repository = DefaultMediaRepository(source, FakePermissionGateway())
@@ -214,6 +282,55 @@ class DefaultMediaRepositoryTest {
         override fun count(types: Set<MediaType>): Int =
             rows.count { it.type in types }
 
+        override fun libraryState(): MediaLibraryState = MediaLibraryState(
+            libraryVersion = "library-test",
+            latestCursor = rows
+                .maxWithOrNull(
+                    compareBy<MediaStoreRow> {
+                        it.generation ?: it.dateModifiedEpochSeconds
+                    }.thenBy { it.mediaStoreId },
+                )
+                ?.let {
+                    MediaSyncCursor(
+                        it.generation ?: it.dateModifiedEpochSeconds,
+                        it.mediaStoreId,
+                    )
+                }
+                ?: MediaSyncCursor(0, 0),
+        )
+
+        override fun queryChanges(
+            after: MediaSyncCursor,
+            limit: Int,
+            types: Set<MediaType>,
+        ): List<MediaStoreRow> = rows
+            .asSequence()
+            .filter { it.type in types }
+            .filter {
+                val value = it.generation ?: it.dateModifiedEpochSeconds
+                value > after.value || (value == after.value && it.mediaStoreId > after.mediaStoreId)
+            }
+            .sortedWith(
+                compareBy<MediaStoreRow> {
+                    it.generation ?: it.dateModifiedEpochSeconds
+                }.thenBy { it.mediaStoreId },
+            )
+            .take(limit)
+            .toList()
+
+        override fun queryManifest(
+            afterId: Long?,
+            limit: Int,
+            types: Set<MediaType>,
+        ): List<MediaManifestRow> = rows
+            .asSequence()
+            .filter { it.type in types }
+            .filter { afterId == null || it.mediaStoreId > afterId }
+            .sortedBy { it.mediaStoreId }
+            .take(limit)
+            .map { MediaManifestRow(it.mediaStoreId, it.type, it.generation) }
+            .toList()
+
         override fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow? =
             rows.find { it.mediaStoreId == mediaStoreId && it.type == type }
 
@@ -245,6 +362,7 @@ class DefaultMediaRepositoryTest {
             taken: Long? = 30_500,
             type: MediaType = MediaType.IMAGE,
             size: Long = 4_096,
+            generation: Long? = null,
         ) = MediaStoreRow(
             mediaStoreId = id,
             fileName = "photo-$id.jpg",
@@ -257,6 +375,8 @@ class DefaultMediaRepositoryTest {
             durationMilliseconds = if (type == MediaType.VIDEO) 12_000 else null,
             albumName = "Camera",
             relativePath = "DCIM/Camera/",
+            generationAdded = generation,
+            generationModified = generation,
         )
 
         fun decodeTestMediaId(item: MediaRecord): Long =

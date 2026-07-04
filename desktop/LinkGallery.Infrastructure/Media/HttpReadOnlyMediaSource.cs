@@ -13,6 +13,7 @@ namespace LinkGallery.Infrastructure.Media;
 
 public sealed class HttpReadOnlyMediaSource :
     IReadOnlyMediaSource,
+    IIncrementalMediaSource,
     IMediaPlaybackUriSource,
     IEntityAwareMediaSource
 {
@@ -142,6 +143,76 @@ public sealed class HttpReadOnlyMediaSource :
             dto.NextCursor,
             dto.HasMore,
             dto.Total);
+    }
+
+    public async Task<RemoteMediaSyncState> GetSyncStateAsync(CancellationToken cancellationToken)
+    {
+        var dto = await GetJsonAsync<MediaSyncStateDto>("media/sync/state", cancellationToken)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(dto.LibraryVersion) ||
+            string.IsNullOrWhiteSpace(dto.LatestCursor) ||
+            dto.Total < 0)
+        {
+            throw new MediaSourceProtocolException("手机返回了无效的媒体同步状态。");
+        }
+        return new RemoteMediaSyncState(dto.LibraryVersion, dto.LatestCursor, dto.Total);
+    }
+
+    public async Task<RemoteMediaChanges> GetChangesAsync(
+        string? after,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, 500);
+        var path = $"media/changes?limit={limit.ToString(CultureInfo.InvariantCulture)}";
+        if (!string.IsNullOrWhiteSpace(after))
+        {
+            path += $"&after={Uri.EscapeDataString(after)}";
+        }
+        var dto = await GetJsonAsync<MediaChangesDto>(path, cancellationToken).ConfigureAwait(false);
+        var deviceId = _deviceId ?? throw new InvalidOperationException("请先加载设备信息。");
+        if (string.IsNullOrWhiteSpace(dto.LibraryVersion) ||
+            string.IsNullOrWhiteSpace(dto.NextCursor) ||
+            string.IsNullOrWhiteSpace(dto.LatestCursor) ||
+            dto.Upserts is null ||
+            dto.Deletes is null)
+        {
+            throw new MediaSourceProtocolException("手机返回了无效的媒体增量页。");
+        }
+        return new RemoteMediaChanges(
+            dto.LibraryVersion,
+            dto.FromCursor,
+            dto.NextCursor,
+            dto.LatestCursor,
+            dto.HasMore,
+            dto.Upserts.Select(item => ToDomain(item, deviceId)).ToArray(),
+            dto.Deletes);
+    }
+
+    public async Task<RemoteMediaManifestPage> GetManifestPageAsync(
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, 500);
+        var path = $"media/manifest?limit={limit.ToString(CultureInfo.InvariantCulture)}";
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            path += $"&cursor={Uri.EscapeDataString(cursor)}";
+        }
+        var dto = await GetJsonAsync<MediaManifestPageDto>(path, cancellationToken)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(dto.LibraryVersion) || dto.Items is null)
+        {
+            throw new MediaSourceProtocolException("The phone returned an invalid media manifest.");
+        }
+        return new RemoteMediaManifestPage(
+            dto.LibraryVersion,
+            dto.Items.Select(item => new RemoteMediaManifestEntry(item.Id, item.Generation)).ToArray(),
+            dto.NextCursor,
+            dto.HasMore);
     }
 
     public Task<Stream> OpenThumbnailAsync(
@@ -357,6 +428,7 @@ public sealed class HttpReadOnlyMediaSource :
             ModifiedAt = dto.ModifiedAt,
             AlbumName = dto.AlbumName,
             RelativePath = dto.RelativePath,
+            Generation = dto.Generation,
             ThumbnailUrl = dto.ThumbnailUrl,
             SourceDevice = dto.SourceDevice,
             SourceApplication = dto.SourceApplication,
@@ -415,6 +487,25 @@ public sealed class HttpReadOnlyMediaSource :
         bool HasMore,
         int? Total);
 
+    private sealed record MediaSyncStateDto(string LibraryVersion, string LatestCursor, int Total);
+
+    private sealed record MediaChangesDto(
+        string LibraryVersion,
+        string? FromCursor,
+        string NextCursor,
+        string LatestCursor,
+        bool HasMore,
+        IReadOnlyList<MediaItemDto>? Upserts,
+        IReadOnlyList<string>? Deletes);
+
+    private sealed record MediaManifestPageDto(
+        string LibraryVersion,
+        IReadOnlyList<MediaManifestEntryDto>? Items,
+        string? NextCursor,
+        bool HasMore);
+
+    private sealed record MediaManifestEntryDto(string Id, long? Generation);
+
     private sealed record MediaItemDto(
         string Id,
         string FileName,
@@ -427,6 +518,7 @@ public sealed class HttpReadOnlyMediaSource :
         DateTimeOffset ModifiedAt,
         string? AlbumName,
         string? RelativePath,
+        long? Generation,
         string? ThumbnailUrl,
         string? SourceDevice,
         string? SourceApplication,

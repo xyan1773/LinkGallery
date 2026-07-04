@@ -22,6 +22,43 @@ public interface IReadOnlyMediaSource
         CancellationToken cancellationToken);
 }
 
+public interface IIncrementalMediaSource
+{
+    Task<RemoteMediaSyncState> GetSyncStateAsync(CancellationToken cancellationToken);
+
+    Task<RemoteMediaChanges> GetChangesAsync(
+        string? after,
+        int limit,
+        CancellationToken cancellationToken);
+
+    Task<RemoteMediaManifestPage> GetManifestPageAsync(
+        string? cursor,
+        int limit,
+        CancellationToken cancellationToken);
+}
+
+public sealed record RemoteMediaSyncState(
+    string LibraryVersion,
+    string LatestCursor,
+    int Total);
+
+public sealed record RemoteMediaChanges(
+    string LibraryVersion,
+    string? FromCursor,
+    string NextCursor,
+    string LatestCursor,
+    bool HasMore,
+    IReadOnlyList<MediaItem> Upserts,
+    IReadOnlyList<string> Deletes);
+
+public sealed record RemoteMediaManifestEntry(string Id, long? Generation);
+
+public sealed record RemoteMediaManifestPage(
+    string LibraryVersion,
+    IReadOnlyList<RemoteMediaManifestEntry> Items,
+    string? NextCursor,
+    bool HasMore);
+
 public interface IMediaPlaybackUriSource
 {
     Uri GetOriginalUri(string remoteId);

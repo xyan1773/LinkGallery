@@ -2,11 +2,14 @@ package com.linkgallery.companion.server
 
 import com.linkgallery.companion.media.MediaContent
 import com.linkgallery.companion.media.MediaContentResult
+import com.linkgallery.companion.media.MediaChangesResult
+import com.linkgallery.companion.media.MediaManifestResult
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaStoreCursor
 import com.linkgallery.companion.media.MediaThumbnailResult
+import com.linkgallery.companion.media.MediaSyncStateResult
 import com.linkgallery.companion.media.MediaType
 import com.linkgallery.companion.pairing.AccessTokenAuthenticator
 import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
@@ -59,6 +62,23 @@ class ApiController(
             PAIR_CANCEL_PATH -> postPairCancel(body)
             PAIR_REVOKE_PATH -> postPairRevoke(bearerToken)
             DEVICE_PATH -> getDevice()
+            MEDIA_SYNC_STATE_PATH -> getMediaSyncState()
+            MEDIA_CHANGES_PATH -> {
+                val parameters = try {
+                    parseQuery(requestTarget.substringAfter('?', ""))
+                } catch (_: IllegalArgumentException) {
+                    return problem(400, "invalid_parameter", "The query string is invalid.")
+                }
+                getMediaChanges(parameters)
+            }
+            MEDIA_MANIFEST_PATH -> {
+                val parameters = try {
+                    parseQuery(requestTarget.substringAfter('?', ""))
+                } catch (_: IllegalArgumentException) {
+                    return problem(400, "invalid_parameter", "The query string is invalid.")
+                }
+                getMediaManifest(parameters)
+            }
             MEDIA_PATH -> {
                 val parameters = try {
                     parseQuery(requestTarget.substringAfter('?', ""))
@@ -329,6 +349,37 @@ class ApiController(
         }
     }
 
+    private suspend fun getMediaSyncState(): ApiResponse =
+        when (val result = mediaRepository.getSyncState()) {
+            is MediaSyncStateResult.Success -> ApiResponse(200, Json.mediaSyncState(result.state))
+            is MediaSyncStateResult.PermissionDenied -> permissionDenied(result.requiredPermissions)
+        }
+
+    private suspend fun getMediaChanges(parameters: Map<String, List<String>>): ApiResponse {
+        val after = parameters["after"]?.singleOrNull()
+            ?: if ("after" in parameters) return invalidParameter("after") else null
+        val limit = parameters["limit"]?.singleOrNull()?.toIntOrNull() ?: 200
+        if (limit !in 1..500) return invalidParameter("limit")
+        return when (val result = mediaRepository.getChanges(after, limit)) {
+            is MediaChangesResult.Success -> ApiResponse(200, Json.mediaChanges(result.changes))
+            is MediaChangesResult.PermissionDenied -> permissionDenied(result.requiredPermissions)
+            MediaChangesResult.InvalidCursor -> invalidParameter("after")
+        }
+    }
+
+    private suspend fun getMediaManifest(parameters: Map<String, List<String>>): ApiResponse {
+        val cursor = parameters["cursor"]?.singleOrNull()
+            ?: if ("cursor" in parameters) return invalidParameter("cursor") else null
+        val limit = parameters["limit"]?.singleOrNull()?.toIntOrNull() ?: 500
+        if (limit !in 1..500) return invalidParameter("limit")
+        return when (val result = mediaRepository.getManifest(cursor, limit)) {
+            is MediaManifestResult.Success -> ApiResponse(200, Json.mediaManifest(result.page))
+            is MediaManifestResult.PermissionDenied ->
+                permissionDenied(result.requiredPermissions)
+            MediaManifestResult.InvalidCursor -> invalidParameter("cursor")
+        }
+    }
+
     private fun parseQuery(query: String): Map<String, List<String>> {
         if (query.isBlank()) return emptyMap()
         return query.split('&').groupBy(
@@ -435,6 +486,9 @@ class ApiController(
         const val PAIR_REVOKE_PATH = "/api/v1/pair/revoke"
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
+        const val MEDIA_SYNC_STATE_PATH = "/api/v1/media/sync/state"
+        const val MEDIA_CHANGES_PATH = "/api/v1/media/changes"
+        const val MEDIA_MANIFEST_PATH = "/api/v1/media/manifest"
         val THUMBNAIL_PATH = Regex("^/api/v1/media/([^/]+)/thumbnail$")
         val CONTENT_PATH = Regex("^/api/v1/media/([^/]+)/content$")
         val RANGE_PATTERN = Regex("^bytes=(\\d*)-(\\d*)$")

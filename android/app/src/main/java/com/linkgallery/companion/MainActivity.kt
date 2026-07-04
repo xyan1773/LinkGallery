@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
         nsdRegistrar = AndroidNsdServiceRegistrar(applicationContext, publicDeviceInfoProvider)
         udpDiscoveryResponder = AndroidUdpDiscoveryResponder(publicDeviceInfoProvider)
         val mediaRepository = DefaultMediaRepository(
-            AndroidMediaStoreDataSource(contentResolver),
+            AndroidMediaStoreDataSource(applicationContext, contentResolver),
             permissionGateway,
         )
         httpServer = LinkGalleryHttpServer(
