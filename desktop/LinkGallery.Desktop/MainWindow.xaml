@@ -171,6 +171,20 @@
                                         Click="OnSearchClick"
                                         Content="Search"
                                         Style="{StaticResource LgSecondaryButton}" />
+                                <ComboBox x:Name="TypeFilterComboBox"
+                                          AutomationProperties.AutomationId="TypeFilterComboBox"
+                                          Width="110"
+                                          Margin="8,0,0,0"
+                                          SelectedIndex="0">
+                                    <ComboBoxItem Content="全部类型" Tag="all" />
+                                    <ComboBoxItem Content="图片" Tag="image" />
+                                    <ComboBoxItem Content="视频" Tag="video" />
+                                </ComboBox>
+                                <ComboBox x:Name="DateFilterComboBox"
+                                          AutomationProperties.AutomationId="DateFilterComboBox"
+                                          Width="130"
+                                          Margin="8,0,0,0"
+                                          SelectedIndex="0" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
                                 <Button x:Name="ImportSelectedButton"

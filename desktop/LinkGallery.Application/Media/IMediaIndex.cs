@@ -6,6 +6,10 @@ namespace LinkGallery.Application.Media;
 public interface IMediaIndex
 {
     Task<IReadOnlyList<MediaItem>> SearchAsync(
+        MediaIndexQuery query,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<MediaItem>> SearchAsync(
         string? deviceId,
         string? searchText,
         int limit,
@@ -19,6 +23,15 @@ public interface IMediaIndex
         int offset,
         CancellationToken cancellationToken);
 }
+
+public sealed record MediaIndexQuery(
+    string? DeviceId,
+    string? SearchText,
+    IReadOnlySet<MediaType>? Types,
+    DateTimeOffset? FromInclusive,
+    DateTimeOffset? ToExclusive,
+    int Limit,
+    int Offset);
 
 public sealed record MediaAlbum(
     string DeviceId,
@@ -42,6 +55,7 @@ public enum MediaSyncStage
 {
     Connecting,
     DeviceLoaded,
+    Paused,
     FetchingPage,
     WritingPage,
     Completing,
@@ -63,3 +77,8 @@ public sealed record MediaSyncResult(
     int ItemsReceived,
     int ItemsRemoved,
     bool WasFullScan);
+
+public sealed record MediaSyncSeed(
+    Device Device,
+    MediaPage FirstPage,
+    RemoteMediaSyncState? BaselineState = null);
