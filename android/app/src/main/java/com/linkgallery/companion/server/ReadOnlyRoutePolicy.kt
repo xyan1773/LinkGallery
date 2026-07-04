@@ -5,6 +5,9 @@ object ReadOnlyRoutePolicy {
         "/api/v1/public/info",
         "/api/v1/device",
         "/api/v1/media",
+        "/api/v1/media/sync/state",
+        "/api/v1/media/changes",
+        "/api/v1/media/manifest",
     )
     private val unauthenticatedPairingRoutes = setOf(
         "/api/v1/pair/start",

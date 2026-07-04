@@ -1,6 +1,11 @@
 package com.linkgallery.companion.server
 
 import com.linkgallery.companion.media.MediaItemResult
+import com.linkgallery.companion.media.MediaChanges
+import com.linkgallery.companion.media.MediaChangesResult
+import com.linkgallery.companion.media.MediaManifestEntry
+import com.linkgallery.companion.media.MediaManifestPage
+import com.linkgallery.companion.media.MediaManifestResult
 import com.linkgallery.companion.media.MediaContent
 import com.linkgallery.companion.media.MediaContentResult
 import com.linkgallery.companion.media.MediaPage
@@ -8,6 +13,8 @@ import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
 import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
+import com.linkgallery.companion.media.MediaSyncState
+import com.linkgallery.companion.media.MediaSyncStateResult
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
 import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
@@ -87,6 +94,58 @@ class ApiControllerTest {
         assertEquals(200, response.status)
         assertEquals(1234L, repository.lastQuery?.before?.sortTimestampEpochMillis)
         assertEquals(42L, repository.lastQuery?.before?.mediaStoreId)
+    }
+
+    @Test
+    fun syncStateAndChangesResponsesUseOpaqueCursorContract() {
+        val repository = FakeMediaRepository(
+            pageResult = MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
+            syncStateResult = MediaSyncStateResult.Success(
+                MediaSyncState("library-a", "lgs1_latest", 1),
+            ),
+            changesResult = MediaChangesResult.Success(
+                MediaChanges(
+                    libraryVersion = "library-a",
+                    fromCursor = "lgs1_before",
+                    nextCursor = "lgs1_latest",
+                    latestCursor = "lgs1_latest",
+                    hasMore = false,
+                    upserts = listOf(MEDIA.copy(generation = 42)),
+                    deletes = listOf("removed-1"),
+                ),
+            ),
+            manifestResult = MediaManifestResult.Success(
+                MediaManifestPage(
+                    libraryVersion = "library-a",
+                    items = listOf(MediaManifestEntry("media-1", 42)),
+                    nextCursor = null,
+                    hasMore = false,
+                ),
+            ),
+        )
+
+        val state = runSuspend {
+            controller(repository = repository).handle("GET", "/api/v1/media/sync/state")
+        }
+        val changes = runSuspend {
+            controller(repository = repository)
+                .handle("GET", "/api/v1/media/changes?after=lgs1_before&limit=5")
+        }
+        val manifest = runSuspend {
+            controller(repository = repository)
+                .handle("GET", "/api/v1/media/manifest?limit=5")
+        }
+
+        assertEquals(200, state.status)
+        assertTrue(state.body.contains(""""latestCursor":"lgs1_latest""""))
+        assertEquals(200, changes.status)
+        assertTrue(changes.body.contains(""""fromCursor":"lgs1_before""""))
+        assertTrue(changes.body.contains(""""generation":42"""))
+        assertTrue(changes.body.contains(""""deletes":["removed-1"]"""))
+        assertEquals("lgs1_before", repository.lastChangesCursor)
+        assertEquals(5, repository.lastChangesLimit)
+        assertEquals(200, manifest.status)
+        assertTrue(manifest.body.contains(""""items":[{"id":"media-1","generation":42}]"""))
     }
 
     @Test
@@ -505,12 +564,31 @@ class ApiControllerTest {
         private val pageResult: MediaPageResult,
         private val thumbnailResult: MediaThumbnailResult = MediaThumbnailResult.NotFound,
         private val contentResult: MediaContentResult = MediaContentResult.NotFound,
+        private val syncStateResult: MediaSyncStateResult =
+            MediaSyncStateResult.PermissionDenied(emptySet()),
+        private val changesResult: MediaChangesResult =
+            MediaChangesResult.PermissionDenied(emptySet()),
+        private val manifestResult: MediaManifestResult =
+            MediaManifestResult.PermissionDenied(emptySet()),
     ) : MediaRepository {
         var lastThumbnailSize: Pair<Int, Int>? = null
+        var lastChangesCursor: String? = null
+        var lastChangesLimit: Int? = null
 
         override suspend fun getPage(query: MediaQuery): MediaPageResult = pageResult
 
         override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
+
+        override suspend fun getSyncState(): MediaSyncStateResult = syncStateResult
+
+        override suspend fun getChanges(cursor: String?, limit: Int): MediaChangesResult {
+            lastChangesCursor = cursor
+            lastChangesLimit = limit
+            return changesResult
+        }
+
+        override suspend fun getManifest(cursor: String?, limit: Int): MediaManifestResult =
+            manifestResult
 
         override suspend fun getThumbnail(
             id: String,

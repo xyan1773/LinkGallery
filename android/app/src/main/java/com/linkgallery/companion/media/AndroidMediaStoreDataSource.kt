@@ -2,6 +2,7 @@ package com.linkgallery.companion.media
 
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.content.Context
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.os.Build
@@ -12,13 +13,14 @@ import java.io.IOException
 import java.io.InputStream
 
 class AndroidMediaStoreDataSource(
+    private val context: Context,
     private val contentResolver: ContentResolver,
 ) : MediaStoreDataSource {
     override fun query(request: MediaStoreRequest): List<MediaStoreRow> {
         val spec = request.toMediaStoreQuerySpec()
         return contentResolver.query(
             COLLECTION,
-            PROJECTION,
+            projection,
             spec.selection,
             spec.arguments.toTypedArray(),
             spec.sortOrder,
@@ -44,11 +46,113 @@ class AndroidMediaStoreDataSource(
         } ?: 0
     }
 
+    override fun libraryState(): MediaLibraryState =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            MediaLibraryState(
+                libraryVersion = MediaStore.getVersion(context, MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                latestCursor = MediaSyncCursor(
+                    MediaStore.getGeneration(context, MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                    Long.MAX_VALUE,
+                ),
+            )
+        } else {
+            MediaLibraryState(
+                libraryVersion = MediaStore.getVersion(context),
+                latestCursor = latestModifiedCursor(),
+            )
+        }
+
+    override fun queryChanges(
+        after: MediaSyncCursor,
+        limit: Int,
+        types: Set<MediaType>,
+    ): List<MediaStoreRow> {
+        val (typeSelection, typeArguments) = selectionFor(types)
+        val arguments = typeArguments.toMutableList()
+        val selection: String
+        val sortOrder: String
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val generation = generationExpression()
+            selection =
+                "$typeSelection AND (" +
+                "$GENERATION_ADDED > ? OR $GENERATION_MODIFIED > ? OR " +
+                "(($GENERATION_ADDED = ? OR $GENERATION_MODIFIED = ?) AND $ID > ?))"
+            arguments += after.value.toString()
+            arguments += after.value.toString()
+            arguments += after.value.toString()
+            arguments += after.value.toString()
+            arguments += after.mediaStoreId.toString()
+            sortOrder =
+                "$generation ASC, $ID ASC"
+        } else {
+            selection =
+                "$typeSelection AND ($DATE_MODIFIED > ? OR ($DATE_MODIFIED = ? AND $ID > ?))"
+            arguments += after.value.toString()
+            arguments += after.value.toString()
+            arguments += after.mediaStoreId.toString()
+            sortOrder = "$DATE_MODIFIED ASC, $ID ASC"
+        }
+        return contentResolver.query(
+            COLLECTION,
+            projection,
+            selection,
+            arguments.toTypedArray(),
+            sortOrder,
+        )?.use { cursor ->
+            buildList {
+                while (size < limit && cursor.moveToNext()) add(cursor.toRow())
+            }
+        }.orEmpty()
+    }
+
+    override fun queryManifest(
+        afterId: Long?,
+        limit: Int,
+        types: Set<MediaType>,
+    ): List<MediaManifestRow> {
+        val (typeSelection, typeArguments) = selectionFor(types)
+        val selection = if (afterId == null) typeSelection else "$typeSelection AND $ID > ?"
+        val arguments = typeArguments.toMutableList()
+        if (afterId != null) arguments += afterId.toString()
+        val manifestProjection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            arrayOf(ID, MEDIA_TYPE, GENERATION_ADDED, GENERATION_MODIFIED)
+        } else {
+            arrayOf(ID, MEDIA_TYPE)
+        }
+        return contentResolver.query(
+            COLLECTION,
+            manifestProjection,
+            selection,
+            arguments.toTypedArray(),
+            "$ID ASC",
+        )?.use { cursor ->
+            buildList {
+                while (size < limit && cursor.moveToNext()) {
+                    val type = when (cursor.getInt(cursor.column(MEDIA_TYPE))) {
+                        MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE -> MediaType.IMAGE
+                        MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO -> MediaType.VIDEO
+                        else -> continue
+                    }
+                    add(
+                        MediaManifestRow(
+                            cursor.getLong(cursor.column(ID)),
+                            type,
+                            listOfNotNull(
+                                cursor.nullableLongIfPresent(GENERATION_ADDED),
+                                cursor.nullableLongIfPresent(GENERATION_MODIFIED),
+                            ).maxOrNull(),
+                        ),
+                    )
+                }
+            }
+        }.orEmpty()
+    }
+
     override fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow? {
         val uri = ContentUris.withAppendedId(COLLECTION, mediaStoreId)
         val selection = "$MEDIA_TYPE = ?"
         val arguments = arrayOf(type.mediaStoreValue.toString())
-        return contentResolver.query(uri, PROJECTION, selection, arguments, null)?.use { cursor ->
+        return contentResolver.query(uri, projection, selection, arguments, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.toRow() else null
         }
     }
@@ -147,6 +251,8 @@ class AndroidMediaStoreDataSource(
             durationMilliseconds = if (type == MediaType.VIDEO) nullableLong(DURATION) else null,
             albumName = nullableString(BUCKET_DISPLAY_NAME),
             relativePath = nullableString(RELATIVE_PATH),
+            generationAdded = nullableLongIfPresent(GENERATION_ADDED),
+            generationModified = nullableLongIfPresent(GENERATION_MODIFIED),
         )
     }
 
@@ -160,6 +266,30 @@ class AndroidMediaStoreDataSource(
 
     private fun Cursor.nullableString(name: String): String? =
         column(name).let { index -> if (isNull(index)) null else getString(index) }
+
+    private fun Cursor.nullableLongIfPresent(name: String): Long? {
+        val index = getColumnIndex(name)
+        return if (index < 0 || isNull(index)) null else getLong(index)
+    }
+
+    private fun latestModifiedCursor(): MediaSyncCursor =
+        contentResolver.query(
+            COLLECTION,
+            arrayOf(DATE_MODIFIED, ID),
+            null,
+            null,
+            "$DATE_MODIFIED DESC, $ID DESC",
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                MediaSyncCursor(cursor.getLong(0), cursor.getLong(1))
+            } else {
+                MediaSyncCursor(0, 0)
+            }
+        } ?: MediaSyncCursor(0, 0)
+
+    private fun generationExpression(): String =
+        "CASE WHEN $GENERATION_MODIFIED > $GENERATION_ADDED " +
+            "THEN $GENERATION_MODIFIED ELSE $GENERATION_ADDED END"
 
     private val MediaType.mediaStoreValue: Int
         get() = when (this) {
@@ -182,7 +312,9 @@ class AndroidMediaStoreDataSource(
         const val BUCKET_DISPLAY_NAME = MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME
         const val RELATIVE_PATH = MediaStore.MediaColumns.RELATIVE_PATH
         const val MEDIA_TYPE = MediaStore.Files.FileColumns.MEDIA_TYPE
-        val PROJECTION = arrayOf(
+        const val GENERATION_ADDED = MediaStore.MediaColumns.GENERATION_ADDED
+        const val GENERATION_MODIFIED = MediaStore.MediaColumns.GENERATION_MODIFIED
+        val BASE_PROJECTION = arrayOf(
             ID,
             DISPLAY_NAME,
             SIZE,
@@ -196,6 +328,13 @@ class AndroidMediaStoreDataSource(
             MEDIA_TYPE,
         )
     }
+
+    private val projection: Array<String>
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            BASE_PROJECTION + arrayOf(GENERATION_ADDED, GENERATION_MODIFIED)
+        } else {
+            BASE_PROJECTION
+        }
 }
 
 internal data class MediaStoreQuerySpec(

@@ -216,7 +216,11 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM media_items WHERE device_id = $deviceId;";
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM media_items
+            WHERE device_id = $deviceId AND is_deleted = 0;
+            """;
         command.Parameters.AddWithValue("$deviceId", deviceId);
         return Convert.ToInt32(
             await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
@@ -238,47 +242,12 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         foreach (var item in items)
         {
-            await using var command = connection.CreateCommand();
-            command.Transaction = (SqliteTransaction)transaction;
-            command.CommandText = """
-                INSERT INTO media_items(
-                    device_id, remote_id, media_key, media_id, file_name, media_type, mime_type,
-                    file_size, width, height, duration_ms, taken_at, modified_at, sort_time,
-                    date_taken, date_modified, generation, is_deleted, updated_at, album_id,
-                    album_name, relative_path, source_device, source_application, is_edited_export,
-                    last_seen_at)
-                VALUES(
-                    $deviceId, $remoteId, $remoteId, NULL, $fileName, $mediaType, $mimeType,
-                    $fileSize, $width, $height, $duration, $takenAt, $modifiedAt, $sortTime,
-                    $dateTaken, $dateModified, $generation, 0, $updatedAt, $albumId,
-                    $album, $path, $sourceDevice, $sourceApplication, $isEdited, $lastSeenAt)
-                ON CONFLICT(device_id, remote_id) DO UPDATE SET
-                    media_key = excluded.media_key,
-                    file_name = excluded.file_name,
-                    media_type = excluded.media_type,
-                    mime_type = excluded.mime_type,
-                    file_size = excluded.file_size,
-                    width = excluded.width,
-                    height = excluded.height,
-                    duration_ms = excluded.duration_ms,
-                    taken_at = excluded.taken_at,
-                    modified_at = excluded.modified_at,
-                    sort_time = excluded.sort_time,
-                    date_taken = excluded.date_taken,
-                    date_modified = excluded.date_modified,
-                    generation = excluded.generation,
-                    is_deleted = 0,
-                    updated_at = excluded.updated_at,
-                    album_id = excluded.album_id,
-                    album_name = excluded.album_name,
-                    relative_path = excluded.relative_path,
-                    source_device = excluded.source_device,
-                    source_application = excluded.source_application,
-                    is_edited_export = excluded.is_edited_export,
-                    last_seen_at = excluded.last_seen_at;
-                """;
-            AddItemParameters(command, item, seenAt);
-            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await UpsertItemAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                item,
+                seenAt,
+                cancellationToken).ConfigureAwait(false);
         }
 
         foreach (var deviceId in items.Select(static item => item.DeviceId).Distinct(StringComparer.Ordinal))
@@ -287,6 +256,227 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
                 .ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<DeviceSyncState?> GetDeviceSyncStateAsync(
+        string deviceId,
+        CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT library_version, sync_cursor, latest_known_cursor, full_index_completed, last_sync_at
+            FROM device_sync_state
+            WHERE device_id = $deviceId;
+            """;
+        command.Parameters.AddWithValue("$deviceId", deviceId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        return new DeviceSyncState(
+            reader.IsDBNull(0) ? null : reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetBoolean(3),
+            reader.IsDBNull(4)
+                ? null
+                : DateTimeOffset.FromUnixTimeMilliseconds(reader.GetInt64(4)));
+    }
+
+    internal async Task SaveDeviceSyncStateAsync(
+        string deviceId,
+        RemoteMediaSyncState state,
+        DateTimeOffset syncedAt,
+        CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO device_sync_state(
+                device_id, library_version, sync_cursor, latest_known_cursor,
+                full_index_completed, last_sync_at)
+            VALUES($deviceId, $version, $cursor, $cursor, 1, $syncedAt)
+            ON CONFLICT(device_id) DO UPDATE SET
+                library_version = excluded.library_version,
+                sync_cursor = excluded.sync_cursor,
+                latest_known_cursor = excluded.latest_known_cursor,
+                full_index_completed = 1,
+                last_sync_at = excluded.last_sync_at;
+            """;
+        command.Parameters.AddWithValue("$deviceId", deviceId);
+        command.Parameters.AddWithValue("$version", state.LibraryVersion);
+        command.Parameters.AddWithValue("$cursor", state.LatestCursor);
+        command.Parameters.AddWithValue("$syncedAt", syncedAt.ToUnixTimeMilliseconds());
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<int> ApplyChangePageAsync(
+        string deviceId,
+        RemoteMediaChanges page,
+        DateTimeOffset syncedAt,
+        CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        foreach (var item in page.Upserts)
+        {
+            if (!string.Equals(item.DeviceId, deviceId, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("Incremental page contains media for another device.");
+            }
+            await UpsertItemAsync(connection, transaction, item, syncedAt, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var deleted = 0;
+        foreach (var remoteId in page.Deletes.Distinct(StringComparer.Ordinal))
+        {
+            await using var tombstone = connection.CreateCommand();
+            tombstone.Transaction = transaction;
+            tombstone.CommandText = """
+                UPDATE media_items
+                SET is_deleted = 1, updated_at = $updatedAt
+                WHERE device_id = $deviceId
+                  AND remote_id = $remoteId
+                  AND is_deleted = 0;
+                """;
+            tombstone.Parameters.AddWithValue("$updatedAt", syncedAt.ToUnixTimeMilliseconds());
+            tombstone.Parameters.AddWithValue("$deviceId", deviceId);
+            tombstone.Parameters.AddWithValue("$remoteId", remoteId);
+            deleted += await tombstone.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var state = connection.CreateCommand();
+        state.Transaction = transaction;
+        state.CommandText = """
+            INSERT INTO device_sync_state(
+                device_id, library_version, sync_cursor, latest_known_cursor,
+                full_index_completed, last_sync_at)
+            VALUES($deviceId, $version, $cursor, $latestCursor, 1, $syncedAt)
+            ON CONFLICT(device_id) DO UPDATE SET
+                library_version = excluded.library_version,
+                sync_cursor = excluded.sync_cursor,
+                latest_known_cursor = excluded.latest_known_cursor,
+                full_index_completed = 1,
+                last_sync_at = excluded.last_sync_at;
+            """;
+        state.Parameters.AddWithValue("$deviceId", deviceId);
+        state.Parameters.AddWithValue("$version", page.LibraryVersion);
+        state.Parameters.AddWithValue("$cursor", page.NextCursor);
+        state.Parameters.AddWithValue("$latestCursor", page.LatestCursor);
+        state.Parameters.AddWithValue("$syncedAt", syncedAt.ToUnixTimeMilliseconds());
+        await state.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await RefreshAlbumsAsync(connection, transaction, deviceId, syncedAt, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return deleted;
+    }
+
+    internal async Task<int> ReconcileManifestAsync(
+        string deviceId,
+        IReadOnlyList<RemoteMediaManifestEntry> manifest,
+        RemoteMediaSyncState state,
+        DateTimeOffset syncedAt,
+        CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await using (var create = connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText = """
+                DROP TABLE IF EXISTS current_media_manifest;
+                CREATE TEMP TABLE current_media_manifest(
+                    remote_id TEXT NOT NULL PRIMARY KEY,
+                    generation INTEGER NULL
+                );
+                """;
+            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var entry in manifest)
+        {
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT OR REPLACE INTO current_media_manifest(remote_id, generation)
+                VALUES($remoteId, $generation);
+                """;
+            insert.Parameters.AddWithValue("$remoteId", entry.Id);
+            insert.Parameters.AddWithValue("$generation", Db(entry.Generation));
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var delete = connection.CreateCommand();
+        delete.Transaction = transaction;
+        delete.CommandText = """
+            UPDATE media_items
+            SET is_deleted = 1, updated_at = $updatedAt
+            WHERE device_id = $deviceId
+              AND is_deleted = 0
+              AND NOT EXISTS(
+                  SELECT 1
+                  FROM current_media_manifest manifest
+                  WHERE manifest.remote_id = media_items.remote_id
+              );
+            """;
+        delete.Parameters.AddWithValue("$updatedAt", syncedAt.ToUnixTimeMilliseconds());
+        delete.Parameters.AddWithValue("$deviceId", deviceId);
+        var deleted = await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var restore = connection.CreateCommand();
+        restore.Transaction = transaction;
+        restore.CommandText = """
+            UPDATE media_items
+            SET is_deleted = 0, updated_at = $updatedAt
+            WHERE device_id = $deviceId
+              AND is_deleted = 1
+              AND EXISTS(
+                  SELECT 1
+                  FROM current_media_manifest manifest
+                  WHERE manifest.remote_id = media_items.remote_id
+              );
+            """;
+        restore.Parameters.AddWithValue("$updatedAt", syncedAt.ToUnixTimeMilliseconds());
+        restore.Parameters.AddWithValue("$deviceId", deviceId);
+        await restore.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var syncState = connection.CreateCommand();
+        syncState.Transaction = transaction;
+        syncState.CommandText = """
+            INSERT INTO device_sync_state(
+                device_id, library_version, sync_cursor, latest_known_cursor,
+                full_index_completed, last_sync_at)
+            VALUES($deviceId, $version, $cursor, $cursor, 1, $syncedAt)
+            ON CONFLICT(device_id) DO UPDATE SET
+                library_version = excluded.library_version,
+                sync_cursor = excluded.sync_cursor,
+                latest_known_cursor = excluded.latest_known_cursor,
+                full_index_completed = 1,
+                last_sync_at = excluded.last_sync_at;
+            """;
+        syncState.Parameters.AddWithValue("$deviceId", deviceId);
+        syncState.Parameters.AddWithValue("$version", state.LibraryVersion);
+        syncState.Parameters.AddWithValue("$cursor", state.LatestCursor);
+        syncState.Parameters.AddWithValue("$syncedAt", syncedAt.ToUnixTimeMilliseconds());
+        await syncState.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await RefreshAlbumsAsync(connection, transaction, deviceId, syncedAt, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return deleted;
     }
 
     internal async Task<int> CompleteAsync(
@@ -624,6 +814,56 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         command.Parameters.AddWithValue("$lastSeenAt", Format(seenAt));
     }
 
+    private static async Task UpsertItemAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        MediaItem item,
+        DateTimeOffset seenAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO media_items(
+                device_id, remote_id, media_key, media_id, file_name, media_type, mime_type,
+                file_size, width, height, duration_ms, taken_at, modified_at, sort_time,
+                date_taken, date_modified, generation, is_deleted, updated_at, album_id,
+                album_name, relative_path, source_device, source_application, is_edited_export,
+                last_seen_at)
+            VALUES(
+                $deviceId, $remoteId, $remoteId, NULL, $fileName, $mediaType, $mimeType,
+                $fileSize, $width, $height, $duration, $takenAt, $modifiedAt, $sortTime,
+                $dateTaken, $dateModified, $generation, 0, $updatedAt, $albumId,
+                $album, $path, $sourceDevice, $sourceApplication, $isEdited, $lastSeenAt)
+            ON CONFLICT(device_id, remote_id) DO UPDATE SET
+                media_key = excluded.media_key,
+                file_name = excluded.file_name,
+                media_type = excluded.media_type,
+                mime_type = excluded.mime_type,
+                file_size = excluded.file_size,
+                width = excluded.width,
+                height = excluded.height,
+                duration_ms = excluded.duration_ms,
+                taken_at = excluded.taken_at,
+                modified_at = excluded.modified_at,
+                sort_time = excluded.sort_time,
+                date_taken = excluded.date_taken,
+                date_modified = excluded.date_modified,
+                generation = excluded.generation,
+                is_deleted = 0,
+                updated_at = excluded.updated_at,
+                album_id = excluded.album_id,
+                album_name = excluded.album_name,
+                relative_path = excluded.relative_path,
+                source_device = excluded.source_device,
+                source_application = excluded.source_application,
+                is_edited_export = excluded.is_edited_export,
+                last_seen_at = excluded.last_seen_at;
+            """;
+        AddItemParameters(command, item, seenAt);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static MediaItem ReadItem(SqliteDataReader reader) => new()
     {
         DeviceId = reader.GetString(0),
@@ -676,3 +916,10 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
 }
 
 internal sealed record SyncCheckpoint(string RemoteId, DateTimeOffset ModifiedAt);
+
+internal sealed record DeviceSyncState(
+    string? LibraryVersion,
+    string? SyncCursor,
+    string? LatestKnownCursor,
+    bool FullIndexCompleted,
+    DateTimeOffset? LastSyncAt);

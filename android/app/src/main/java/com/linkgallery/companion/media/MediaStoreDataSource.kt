@@ -7,6 +7,11 @@ data class MediaStoreCursor(
     val mediaStoreId: Long,
 )
 
+data class MediaSyncCursor(
+    val value: Long,
+    val mediaStoreId: Long,
+)
+
 data class MediaStoreRequest(
     val after: MediaStoreCursor?,
     val limit: Int,
@@ -25,10 +30,26 @@ data class MediaStoreRow(
     val durationMilliseconds: Long?,
     val albumName: String?,
     val relativePath: String?,
+    val generationAdded: Long? = null,
+    val generationModified: Long? = null,
 ) {
     val sortTimestampEpochMillis: Long
         get() = dateTakenEpochMillis?.takeIf { it > 0 } ?: dateModifiedEpochSeconds * 1000
+
+    val generation: Long?
+        get() = listOfNotNull(generationAdded, generationModified).maxOrNull()
 }
+
+data class MediaLibraryState(
+    val libraryVersion: String,
+    val latestCursor: MediaSyncCursor,
+)
+
+data class MediaManifestRow(
+    val mediaStoreId: Long,
+    val type: MediaType,
+    val generation: Long?,
+)
 
 internal fun Iterable<MediaStoreRow>.keysetPage(
     after: MediaStoreCursor?,
@@ -60,6 +81,21 @@ interface MediaStoreDataSource {
     fun query(request: MediaStoreRequest): List<MediaStoreRow>
 
     fun count(types: Set<MediaType>): Int
+
+    fun libraryState(): MediaLibraryState =
+        MediaLibraryState("test-library", MediaSyncCursor(0, 0))
+
+    fun queryChanges(
+        after: MediaSyncCursor,
+        limit: Int,
+        types: Set<MediaType>,
+    ): List<MediaStoreRow> = emptyList()
+
+    fun queryManifest(
+        afterId: Long?,
+        limit: Int,
+        types: Set<MediaType>,
+    ): List<MediaManifestRow> = emptyList()
 
     fun find(mediaStoreId: Long, type: MediaType): MediaStoreRow?
 
