@@ -216,7 +216,8 @@ class DefaultMediaRepository(
     }
 
     private fun thumbnailEntityTag(row: MediaStoreRow, width: Int, height: Int): String =
-        "\"thumb-${row.type.name.lowercase()}-${row.mediaStoreId}-${row.dateModifiedEpochSeconds}-${row.fileSize}-${width}x$height\""
+        "\"thumb-${row.type.name.lowercase()}-${row.mediaStoreId}-" +
+            "${row.generation ?: row.dateModifiedEpochSeconds}-${row.fileSize}-${width}x$height\""
 
     private data class ContentEntity(
         val length: Long,

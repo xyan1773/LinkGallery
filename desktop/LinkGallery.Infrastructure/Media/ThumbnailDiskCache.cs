@@ -1,15 +1,29 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using LinkGallery.Application.Media;
+using LinkGallery.Domain.Media;
 
 namespace LinkGallery.Infrastructure.Media;
 
 public sealed record ThumbnailCacheKey(
     string DeviceId,
     string RemoteId,
-    long ModifiedAtUtcTicks,
+    long Generation,
     int Width,
-    int Height);
+    int Height)
+{
+    public static ThumbnailCacheKey Create(MediaItem item, ThumbnailSize size)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return new ThumbnailCacheKey(
+            item.DeviceId,
+            item.RemoteId,
+            item.Generation ?? item.ModifiedAt.ToUnixTimeMilliseconds(),
+            size.Width,
+            size.Height);
+    }
+}
 
 public sealed class ThumbnailDiskCache : IDisposable
 {
@@ -145,12 +159,12 @@ public sealed class ThumbnailDiskCache : IDisposable
         }
     }
 
-    private string GetPath(ThumbnailCacheKey key)
+    internal string GetPath(ThumbnailCacheKey key)
         => GetPath(_directory, key);
 
     internal static string GetPath(string directory, ThumbnailCacheKey key)
     {
-        var value = $"{key.DeviceId}\n{key.RemoteId}\n{key.ModifiedAtUtcTicks}\n{key.Width}x{key.Height}";
+        var value = $"{key.DeviceId}\n{key.RemoteId}\n{key.Generation}\n{key.Width}x{key.Height}";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
         return Path.Combine(directory, $"{hash}.jpg");
     }

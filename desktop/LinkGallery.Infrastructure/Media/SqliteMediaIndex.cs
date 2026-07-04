@@ -479,6 +479,50 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         return deleted;
     }
 
+    internal async Task RecordThumbnailCacheAccessAsync(
+        ThumbnailCacheKey key,
+        string localPath,
+        long fileSize,
+        DateTimeOffset accessedAt,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(localPath);
+        ArgumentOutOfRangeException.ThrowIfNegative(fileSize);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO thumbnail_cache(
+                device_id, media_key, generation, thumbnail_size,
+                local_path, file_size, last_accessed_at)
+            VALUES(
+                $deviceId, $mediaKey, $generation, $thumbnailSize,
+                $localPath, $fileSize, $lastAccessedAt)
+            ON CONFLICT(device_id, media_key, generation, thumbnail_size) DO UPDATE SET
+                local_path = excluded.local_path,
+                file_size = excluded.file_size,
+                last_accessed_at = excluded.last_accessed_at;
+            """;
+        command.Parameters.AddWithValue("$deviceId", key.DeviceId);
+        command.Parameters.AddWithValue("$mediaKey", key.RemoteId);
+        command.Parameters.AddWithValue("$generation", key.Generation);
+        command.Parameters.AddWithValue("$thumbnailSize", Math.Max(key.Width, key.Height));
+        command.Parameters.AddWithValue("$localPath", Path.GetFullPath(localPath));
+        command.Parameters.AddWithValue("$fileSize", fileSize);
+        command.Parameters.AddWithValue("$lastAccessedAt", accessedAt.ToUnixTimeMilliseconds());
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task ClearThumbnailCacheMetadataAsync(CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM thumbnail_cache;";
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     internal async Task<int> CompleteAsync(
         string deviceId,
         SyncCheckpoint? head,
