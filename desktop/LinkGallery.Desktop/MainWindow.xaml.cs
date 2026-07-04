@@ -30,6 +30,7 @@ public partial class MainWindow : Window, IDisposable
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
     private readonly string _dataDirectory;
     private readonly SqliteMediaIndex _mediaIndex;
+    private readonly BackgroundIndexGate _backgroundIndexGate = new();
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
     private readonly LocalCopyCatalog _localCopies;
     private readonly ThumbnailCacheReader _thumbnailCache;
@@ -39,6 +40,7 @@ public partial class MainWindow : Window, IDisposable
     private readonly DispatcherTimer _transferRefreshTimer;
     private CancellationTokenSource? _connectionCancellation;
     private CancellationTokenSource? _backgroundSyncCancellation;
+    private CancellationTokenSource? _queryCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
     private string? _remoteNextCursor;
@@ -53,7 +55,9 @@ public partial class MainWindow : Window, IDisposable
     {
         _dataDirectory = ResolveDataDirectory();
         _mediaIndex = new SqliteMediaIndex(Path.Combine(_dataDirectory, "media-index.db"));
-        _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
+        _synchronizer = new IncrementalMediaIndexSynchronizer(
+            _mediaIndex,
+            gate: _backgroundIndexGate);
         _localCopies = new LocalCopyCatalog(Path.Combine(_dataDirectory, "local-copies.json"));
         _thumbnailCache = new ThumbnailCacheReader(
             Path.Combine(_dataDirectory, "cache", "thumbnails"));
@@ -70,7 +74,76 @@ public partial class MainWindow : Window, IDisposable
         _transferRefreshTimer.Tick += OnTransferRefreshTick;
         InitializeComponent();
         DataContext = this;
+        PopulateDateFilters();
     }
+
+    private void PopulateDateFilters()
+    {
+        DateFilterComboBox.Items.Add(new ComboBoxItem { Content = "全部日期", Tag = "all" });
+        var now = DateTime.Today;
+        for (var year = now.Year; year >= now.Year - 4; year--)
+        {
+            DateFilterComboBox.Items.Add(new ComboBoxItem
+            {
+                Content = $"{year} 年",
+                Tag = $"year:{year}",
+            });
+        }
+        for (var offset = 0; offset < 24; offset++)
+        {
+            var month = now.AddMonths(-offset);
+            DateFilterComboBox.Items.Add(new ComboBoxItem
+            {
+                Content = month.ToString("yyyy 年 M 月", CultureInfo.CurrentCulture),
+                Tag = $"month:{month:yyyy-MM}",
+            });
+        }
+        DateFilterComboBox.SelectedIndex = 0;
+    }
+
+    private HashSet<MediaType>? GetSelectedMediaTypes() =>
+        ((TypeFilterComboBox.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        {
+            "image" => new HashSet<MediaType> { MediaType.Image },
+            "video" => new HashSet<MediaType> { MediaType.Video },
+            _ => null,
+        };
+
+    private (DateTimeOffset? FromInclusive, DateTimeOffset? ToExclusive)
+        GetSelectedDateRange()
+    {
+        var tag = (DateFilterComboBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        if (tag?.StartsWith("year:", StringComparison.Ordinal) == true &&
+            int.TryParse(tag.AsSpan(5), CultureInfo.InvariantCulture, out var year))
+        {
+            return (LocalBoundary(year, 1), LocalBoundary(year + 1, 1));
+        }
+        if (tag?.StartsWith("month:", StringComparison.Ordinal) == true &&
+            DateTime.TryParseExact(
+                tag.AsSpan(6),
+                "yyyy-MM",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var month))
+        {
+            var next = month.AddMonths(1);
+            return (
+                LocalBoundary(month.Year, month.Month),
+                LocalBoundary(next.Year, next.Month));
+        }
+        return (null, null);
+    }
+
+    private static DateTimeOffset LocalBoundary(int year, int month)
+    {
+        var local = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        return new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local));
+    }
+
+    private bool HasActiveLocalFilters() =>
+        !string.IsNullOrWhiteSpace(SearchTextBox.Text) ||
+        GetSelectedMediaTypes() is not null ||
+        GetSelectedDateRange().FromInclusive is not null;
 
     private static string ResolveDataDirectory()
     {
@@ -189,10 +262,10 @@ public partial class MainWindow : Window, IDisposable
                 SetEmptyState("正在加载第一页媒体…");
             }
 
-            await LoadInitialRemotePageAsync(_source, cancellationToken);
+            var syncSeed = await LoadInitialRemotePageAsync(_source, device, cancellationToken);
             SetLoading(false);
             ShowPage("Gallery");
-            StartBackgroundSync(_source, endpoint);
+            StartBackgroundSync(_source, endpoint, syncSeed);
         }
         catch (OperationCanceledException)
         {
@@ -228,14 +301,18 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private async Task LoadInitialRemotePageAsync(
+    private async Task<MediaSyncSeed?> LoadInitialRemotePageAsync(
         CachingReadOnlyMediaSource source,
+        LinkGallery.Domain.Devices.Device device,
         CancellationToken cancellationToken)
     {
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            var baselineState = source is IIncrementalMediaSource incrementalSource
+                ? await incrementalSource.GetSyncStateAsync(timeout.Token)
+                : null;
             var page = await source.GetMediaPageAsync(
                 new MediaQuery(Limit: PageSize),
                 timeout.Token);
@@ -258,15 +335,18 @@ public partial class MainWindow : Window, IDisposable
             StatusText.Text = page.Items.Count == 0
                 ? "已连接 · 手机中没有可显示的媒体"
                 : $"已连接 · 已显示最新 {page.Items.Count:N0} 项 · 后台继续同步索引";
+            return new MediaSyncSeed(device, page, baselineState);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             await ShowInitialPageDegradedAsync("已连接 · 第一页媒体加载超时，后台继续同步索引");
+            return null;
         }
         catch (Exception exception)
         {
             await ShowInitialPageDegradedAsync(
                 $"已连接 · 第一页媒体加载失败：{DescribeConnectionStageError(exception)}");
+            return null;
         }
     }
 
@@ -283,7 +363,10 @@ public partial class MainWindow : Window, IDisposable
             CancellationToken.None);
     }
 
-    private void StartBackgroundSync(CachingReadOnlyMediaSource source, string endpoint)
+    private void StartBackgroundSync(
+        CachingReadOnlyMediaSource source,
+        string endpoint,
+        MediaSyncSeed? seed)
     {
         _backgroundSyncCancellation?.Cancel();
         _backgroundSyncCancellation?.Dispose();
@@ -291,17 +374,26 @@ public partial class MainWindow : Window, IDisposable
             _connectionCancellation?.Token ?? CancellationToken.None);
         var progress = new Progress<MediaSyncProgress>(
             update => UpdateBackgroundSyncProgress(endpoint, update));
-        _ = SynchronizeInBackgroundAsync(source, progress, _backgroundSyncCancellation.Token);
+        _ = SynchronizeInBackgroundAsync(
+            source,
+            progress,
+            seed,
+            _backgroundSyncCancellation.Token);
     }
 
     private async Task SynchronizeInBackgroundAsync(
         CachingReadOnlyMediaSource source,
         IProgress<MediaSyncProgress> progress,
+        MediaSyncSeed? seed,
         CancellationToken cancellationToken)
     {
         try
         {
-            var sync = await _synchronizer.SynchronizeAsync(source, progress, cancellationToken);
+            var sync = await _synchronizer.SynchronizeAsync(
+                source,
+                progress,
+                seed,
+                cancellationToken);
             var syncMode = sync.WasFullScan ? "完整索引" : "增量更新";
             StatusText.Text =
                 $"已连接 · {syncMode} {sync.ItemsReceived:N0} 项（{sync.PagesFetched:N0} 页）" +
@@ -333,6 +425,8 @@ public partial class MainWindow : Window, IDisposable
             MediaSyncStage.Connecting => $"已显示第一页 · 后台连接 {endpoint}…",
             MediaSyncStage.DeviceLoaded =>
                 $"已连接 {progress.Device?.Name} · 后台准备同步 {totalText} 项媒体",
+            MediaSyncStage.Paused =>
+                $"已显示第一批 · 后台索引已暂停 · {progress.ItemsReceived:N0}/{totalText}",
             MediaSyncStage.FetchingPage =>
                 $"已显示第一页 · 后台读取第 {progress.PagesFetched + 1:N0} 页 · {progress.ItemsReceived:N0}/{totalText}",
             MediaSyncStage.WritingPage =>
@@ -403,11 +497,16 @@ public partial class MainWindow : Window, IDisposable
                 _hasMoreIndexedItems = true;
             }
 
+            var (fromInclusive, toExclusive) = GetSelectedDateRange();
             var items = await _mediaIndex.SearchAsync(
-                _activeDeviceId,
-                SearchTextBox.Text,
-                PageSize,
-                TimelineRows.Count,
+                new MediaIndexQuery(
+                    _activeDeviceId,
+                    SearchTextBox.Text,
+                    GetSelectedMediaTypes(),
+                    fromInclusive,
+                    toExclusive,
+                    PageSize,
+                    TimelineRows.Count),
                 cancellationToken);
             AppendTimelineItems(items);
             if (reset && _activeDeviceId is not null)
@@ -753,7 +852,18 @@ public partial class MainWindow : Window, IDisposable
         {
             Owner = this,
         };
-        detail.Show();
+        var pauseReason = $"preview:{Guid.NewGuid():N}";
+        _backgroundIndexGate.Pause(pauseReason);
+        detail.Closed += (_, _) => _backgroundIndexGate.Resume(pauseReason);
+        try
+        {
+            detail.Show();
+        }
+        catch
+        {
+            _backgroundIndexGate.Resume(pauseReason);
+            throw;
+        }
     }
 
     private async void OnTimelineScrollChanged(object sender, ScrollChangedEventArgs e)
@@ -770,7 +880,7 @@ public partial class MainWindow : Window, IDisposable
             var cancellationToken = _connectionCancellation?.Token ?? CancellationToken.None;
             if (_source is not null &&
                 !_source.IsOffline &&
-                string.IsNullOrWhiteSpace(SearchTextBox.Text))
+                !HasActiveLocalFilters())
             {
                 await LoadRemoteNextPageAsync(_source, cancellationToken);
                 return;
@@ -865,13 +975,24 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnSearchClick(object sender, RoutedEventArgs e)
     {
+        _queryCancellation?.Cancel();
+        _queryCancellation?.Dispose();
+        _queryCancellation = new CancellationTokenSource();
+        var cancellationToken = _queryCancellation.Token;
         try
         {
+            while (_isLoadingPage)
+            {
+                await Task.Delay(10, cancellationToken);
+            }
             await LoadIndexedPageAsync(
                 reset: true,
                 "本地索引中没有匹配的媒体",
-                CancellationToken.None);
+                cancellationToken);
             UpdateIndexedStatus();
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception exception)
         {
@@ -1060,6 +1181,18 @@ public partial class MainWindow : Window, IDisposable
         var remainingBytes = jobs
             .Where(job => !job.IsTerminal)
             .Sum(job => job.TotalBytes - job.BytesTransferred);
+        var hasActiveTransfer = jobs.Any(job =>
+            job.Status is TransferStatus.Pending or
+                TransferStatus.Running or
+                TransferStatus.Retrying);
+        if (hasActiveTransfer)
+        {
+            _backgroundIndexGate.Pause("transfer");
+        }
+        else
+        {
+            _backgroundIndexGate.Resume("transfer");
+        }
         ImportSummaryText.Text = jobs.Count == 0
             ? "暂无任务"
             : $"{completed:N0}/{jobs.Count:N0} 完成 · {failed:N0} 失败 · 剩余 {FormatSize(remainingBytes)}";
@@ -1109,6 +1242,9 @@ public partial class MainWindow : Window, IDisposable
         _backgroundSyncCancellation?.Cancel();
         _backgroundSyncCancellation?.Dispose();
         _backgroundSyncCancellation = null;
+        _queryCancellation?.Cancel();
+        _queryCancellation?.Dispose();
+        _queryCancellation = null;
         _connectionCancellation?.Cancel();
         _connectionCancellation?.Dispose();
         _connectionCancellation = null;

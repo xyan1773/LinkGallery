@@ -577,11 +577,26 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
         string? searchText,
         int limit,
         int offset,
+        CancellationToken cancellationToken) =>
+        await SearchAsync(
+            new MediaIndexQuery(
+                deviceId,
+                searchText,
+                Types: null,
+                FromInclusive: null,
+                ToExclusive: null,
+                limit,
+                offset),
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<MediaItem>> SearchAsync(
+        MediaIndexQuery query,
         CancellationToken cancellationToken)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, 500);
-        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentOutOfRangeException.ThrowIfLessThan(query.Limit, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(query.Limit, 500);
+        ArgumentOutOfRangeException.ThrowIfNegative(query.Offset);
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
@@ -592,6 +607,11 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
             FROM media_items
             WHERE ($deviceId IS NULL OR device_id = $deviceId)
               AND is_deleted = 0
+              AND ($filterTypes = 0
+                   OR ($includeImages = 1 AND media_type = $imageType)
+                   OR ($includeVideos = 1 AND media_type = $videoType))
+              AND ($fromInclusive IS NULL OR sort_time >= $fromInclusive)
+              AND ($toExclusive IS NULL OR sort_time < $toExclusive)
               AND ($pattern IS NULL
                    OR file_name LIKE $pattern ESCAPE '\'
                    OR album_name LIKE $pattern ESCAPE '\'
@@ -599,12 +619,27 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
             ORDER BY sort_time DESC, remote_id DESC
             LIMIT $limit OFFSET $offset;
             """;
-        command.Parameters.AddWithValue("$deviceId", Db(deviceId));
+        var includeImages = query.Types?.Contains(MediaType.Image) == true;
+        var includeVideos = query.Types?.Contains(MediaType.Video) == true;
+        command.Parameters.AddWithValue("$deviceId", Db(query.DeviceId));
+        command.Parameters.AddWithValue("$filterTypes", query.Types is null ? 0 : 1);
+        command.Parameters.AddWithValue("$includeImages", includeImages ? 1 : 0);
+        command.Parameters.AddWithValue("$includeVideos", includeVideos ? 1 : 0);
+        command.Parameters.AddWithValue("$imageType", (int)MediaType.Image);
+        command.Parameters.AddWithValue("$videoType", (int)MediaType.Video);
+        command.Parameters.AddWithValue(
+            "$fromInclusive",
+            Db(query.FromInclusive?.ToUnixTimeMilliseconds()));
+        command.Parameters.AddWithValue(
+            "$toExclusive",
+            Db(query.ToExclusive?.ToUnixTimeMilliseconds()));
         command.Parameters.AddWithValue(
             "$pattern",
-            Db(string.IsNullOrWhiteSpace(searchText) ? null : $"%{EscapeLike(searchText.Trim())}%"));
-        command.Parameters.AddWithValue("$limit", limit);
-        command.Parameters.AddWithValue("$offset", offset);
+            Db(string.IsNullOrWhiteSpace(query.SearchText)
+                ? null
+                : $"%{EscapeLike(query.SearchText.Trim())}%"));
+        command.Parameters.AddWithValue("$limit", query.Limit);
+        command.Parameters.AddWithValue("$offset", query.Offset);
         var items = new List<MediaItem>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))

@@ -214,6 +214,10 @@ internal static class Program
                 timer.Elapsed.TotalMilliseconds,
                 "functional");
         }
+        else
+        {
+            RunOfflineFilterJourney(mainWindow, timeline, options);
+        }
 
         for (var iteration = 0; iteration < options.ConnectionIterations; iteration++)
         {
@@ -239,6 +243,88 @@ internal static class Program
         }
 
         CaptureScreen(Path.Combine(options.ArtifactsDirectory, "core-journey.png"));
+    }
+
+    private static void RunOfflineFilterJourney(
+        AutomationElement mainWindow,
+        AutomationElement timeline,
+        Options options)
+    {
+        WaitUntil(
+            () =>
+            {
+                var status = ReadName(FindById(mainWindow, "StatusText"));
+                return status.Contains("完整索引", StringComparison.Ordinal) &&
+                    status.Contains("5,000", StringComparison.Ordinal);
+            },
+            TimeSpan.FromMinutes(2),
+            "Background index did not reach 5,000 items.");
+        Record("background-index", true, "Background index reached 5,000/5,000", 0, "scale");
+
+        TryInvoke(mainWindow, "NavDevicesButton");
+        Invoke(FindById(mainWindow, "DisconnectButton"));
+        TryInvoke(mainWindow, "NavGalleryButton");
+        var search = FindById(mainWindow, "SearchTextBox");
+        ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue("scale_");
+        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "图片");
+        SelectComboItem(
+            FindById(mainWindow, "DateFilterComboBox"),
+            DateTime.Today.ToString("yyyy 年 M 月", CultureInfo.CurrentCulture));
+        Invoke(FindById(mainWindow, "SearchButton"));
+        var filtered = WaitForListItems(timeline, ElementTimeout);
+        Record(
+            "offline-image-month-filter",
+            filtered.Count > 0,
+            $"{filtered.Count} cached image items matched the current month",
+            0,
+            "functional");
+
+        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "视频");
+        Invoke(FindById(mainWindow, "SearchButton"));
+        WaitUntil(
+            () => !FindById(mainWindow, "EmptyText").Current.IsOffscreen,
+            ElementTimeout,
+            "Empty filtered state was not displayed.");
+        Record(
+            "offline-video-filter",
+            true,
+            "Video-only cached query returned the expected empty state",
+            0,
+            "functional");
+
+        ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue("");
+        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "全部类型");
+        SelectComboItem(FindById(mainWindow, "DateFilterComboBox"), "全部日期");
+        Invoke(FindById(mainWindow, "SearchButton"));
+        TryInvoke(mainWindow, "NavDevicesButton");
+        Invoke(FindById(mainWindow, "ConnectButton"));
+        WaitUntil(
+            () => ReadName(FindById(mainWindow, "StatusText"))
+                .Contains("已连接", StringComparison.Ordinal),
+            options.ConnectTimeout,
+            "Reconnect after offline filtering failed.");
+    }
+
+    private static void SelectComboItem(AutomationElement comboBox, string itemName)
+    {
+        if (comboBox.TryGetCurrentPattern(
+                ExpandCollapsePattern.Pattern,
+                out var expandPattern))
+        {
+            ((ExpandCollapsePattern)expandPattern).Expand();
+        }
+        var item = comboBox.FindFirst(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.NameProperty, itemName))
+            ?? throw new InvalidOperationException(
+                $"Combo box item '{itemName}' was not found.");
+        Select(item);
+        if (comboBox.TryGetCurrentPattern(
+                ExpandCollapsePattern.Pattern,
+                out var collapsePattern))
+        {
+            ((ExpandCollapsePattern)collapsePattern).Collapse();
+        }
     }
 
     private static AutomationElementCollection RunVideoJourney(

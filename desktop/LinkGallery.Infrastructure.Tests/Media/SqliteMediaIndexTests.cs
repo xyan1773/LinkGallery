@@ -185,6 +185,64 @@ public sealed class SqliteMediaIndexTests
     }
 
     [TestMethod]
+    public async Task SeededFullIndexContinuesFromInitialPageCursor()
+    {
+        var source = new FakeIncrementalMediaSource(
+            Enumerable.Range(1, 450)
+                .Select(id => Item(id, modifiedSeconds: id))
+                .ToArray());
+        var firstPage = await source.GetMediaPageAsync(
+            new MediaQuery(Limit: 100),
+            CancellationToken.None);
+        source.RequestedCursors.Clear();
+        var baseline = await source.GetSyncStateAsync(CancellationToken.None);
+        var index = new SqliteMediaIndex(_databasePath);
+        var synchronizer = new IncrementalMediaIndexSynchronizer(index, pageSize: 200);
+
+        var result = await synchronizer.SynchronizeAsync(
+            source,
+            progress: null,
+            new MediaSyncSeed(source.Device, firstPage, baseline),
+            CancellationToken.None);
+
+        Assert.IsTrue(result.WasFullScan);
+        Assert.AreEqual(4, result.PagesFetched);
+        Assert.AreEqual(450, result.ItemsReceived);
+        Assert.HasCount(2, source.RequestedCursors);
+        Assert.AreEqual(firstPage.NextCursor, source.RequestedCursors[0]);
+        Assert.IsFalse(source.RequestedCursors.Any(static cursor => cursor is null));
+    }
+
+    [TestMethod]
+    public async Task SearchFiltersByTypeAndDateRangeInsideSqlite()
+    {
+        var source = new FakeMediaSource(
+            Item(1, (int)new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero)
+                .ToUnixTimeSeconds()),
+            Item(2, (int)new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero)
+                .ToUnixTimeSeconds(), type: MediaType.Image),
+            Item(3, (int)new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero)
+                .ToUnixTimeSeconds(), type: MediaType.Video));
+        var index = new SqliteMediaIndex(_databasePath);
+        await new IncrementalMediaIndexSynchronizer(index)
+            .SynchronizeAsync(source, CancellationToken.None);
+
+        var results = await index.SearchAsync(
+            new MediaIndexQuery(
+                source.Device.Id,
+                SearchText: null,
+                new HashSet<MediaType> { MediaType.Video },
+                new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                Limit: 100,
+                Offset: 0),
+            CancellationToken.None);
+
+        Assert.HasCount(1, results);
+        Assert.AreEqual("media-3", results[0].RemoteId);
+    }
+
+    [TestMethod]
     public async Task NewAndRemovedItemsAreReconciledAndRemainSearchableOffline()
     {
         var source = new FakeMediaSource(
@@ -323,12 +381,13 @@ public sealed class SqliteMediaIndexTests
         int id,
         int modifiedSeconds,
         string? fileName = null,
-        string relativePath = "DCIM/Camera") => new()
+        string relativePath = "DCIM/Camera",
+        MediaType type = MediaType.Image) => new()
     {
         DeviceId = "phone-1",
         RemoteId = $"media-{id}",
         FileName = fileName ?? $"photo-{id:D5}.jpg",
-        Type = MediaType.Image,
+        Type = type,
         FileSize = id * 10L,
         Width = 1920,
         Height = 1080,
@@ -400,6 +459,8 @@ public sealed class SqliteMediaIndexTests
 
         public IReadOnlyList<RemoteMediaChanges> Changes { get; set; } = [];
 
+        public List<string?> RequestedCursors { get; } = [];
+
         public Device Device => new()
         {
             Id = "phone-1",
@@ -446,6 +507,7 @@ public sealed class SqliteMediaIndexTests
             MediaQuery query,
             CancellationToken cancellationToken)
         {
+            RequestedCursors.Add(query.Cursor);
             var ordered = Items
                 .OrderByDescending(item => item.ModifiedAt)
                 .ThenByDescending(item => item.RemoteId, StringComparer.Ordinal)
