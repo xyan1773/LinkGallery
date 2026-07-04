@@ -42,10 +42,5 @@ public sealed class ThumbnailCacheReader : IMediaThumbnailCache
     private string GetPath(MediaItem item, ThumbnailSize size) =>
         ThumbnailDiskCache.GetPath(
             _directory,
-            new ThumbnailCacheKey(
-                item.DeviceId,
-                item.RemoteId,
-                item.ModifiedAt.UtcTicks,
-                size.Width,
-                size.Height));
+            ThumbnailCacheKey.Create(item, size));
 }

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -17,21 +18,25 @@ public sealed class CachingReadOnlyMediaSource :
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IReadOnlyMediaSource _inner;
     private readonly ThumbnailDiskCache _thumbnailCache;
+    private readonly SqliteMediaIndex? _mediaIndex;
     private readonly string _timelinePath;
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
-    private readonly Dictionary<string, DateTimeOffset> _modifiedAt = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _thumbnailGenerations =
+        new(StringComparer.Ordinal);
     private TimelineSnapshot _snapshot = new();
 
     public CachingReadOnlyMediaSource(
         IReadOnlyMediaSource inner,
         string cacheRoot,
         string cacheIdentity,
-        long thumbnailCacheBytes = 512L * 1024 * 1024)
+        long thumbnailCacheBytes = 512L * 1024 * 1024,
+        SqliteMediaIndex? mediaIndex = null)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentException.ThrowIfNullOrWhiteSpace(cacheRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(cacheIdentity);
         _inner = inner;
+        _mediaIndex = mediaIndex;
         var root = Path.GetFullPath(cacheRoot);
         var identityHash = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(cacheIdentity)));
@@ -112,18 +117,33 @@ public sealed class CachingReadOnlyMediaSource :
         CancellationToken cancellationToken) =>
         IncrementalSource.GetManifestPageAsync(cursor, limit, cancellationToken);
 
-    public Task<Stream> OpenThumbnailAsync(
+    public async Task<Stream> OpenThumbnailAsync(
         string remoteId,
         ThumbnailSize size,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
         var deviceId = _snapshot.Device?.Id ?? "unknown-device";
-        var modifiedAt = _modifiedAt.GetValueOrDefault(remoteId).UtcTicks;
-        return _thumbnailCache.GetOrCreateAsync(
-            new ThumbnailCacheKey(deviceId, remoteId, modifiedAt, size.Width, size.Height),
+        var key = new ThumbnailCacheKey(
+            deviceId,
+            remoteId,
+            _thumbnailGenerations.GetValueOrDefault(remoteId),
+            size.Width,
+            size.Height);
+        var stream = await _thumbnailCache.GetOrCreateAsync(
+            key,
             token => _inner.OpenThumbnailAsync(remoteId, size, token),
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        if (_mediaIndex is not null)
+        {
+            await _mediaIndex.RecordThumbnailCacheAccessAsync(
+                key,
+                _thumbnailCache.GetPath(key),
+                stream.Length,
+                DateTimeOffset.UtcNow,
+                cancellationToken).ConfigureAwait(false);
+        }
+        return stream;
     }
 
     public Task<Stream> OpenOriginalAsync(
@@ -156,8 +176,14 @@ public sealed class CachingReadOnlyMediaSource :
         return source.GetOriginalUri(remoteId);
     }
 
-    public Task ClearThumbnailCacheAsync(CancellationToken cancellationToken = default) =>
-        _thumbnailCache.ClearAsync(cancellationToken);
+    public async Task ClearThumbnailCacheAsync(CancellationToken cancellationToken = default)
+    {
+        await _thumbnailCache.ClearAsync(cancellationToken).ConfigureAwait(false);
+        if (_mediaIndex is not null)
+        {
+            await _mediaIndex.ClearThumbnailCacheMetadataAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     public void Dispose()
     {
@@ -233,7 +259,8 @@ public sealed class CachingReadOnlyMediaSource :
     {
         foreach (var item in items)
         {
-            _modifiedAt[item.RemoteId] = item.ModifiedAt;
+            _thumbnailGenerations[item.RemoteId] =
+                item.Generation ?? item.ModifiedAt.ToUnixTimeMilliseconds();
         }
     }
 

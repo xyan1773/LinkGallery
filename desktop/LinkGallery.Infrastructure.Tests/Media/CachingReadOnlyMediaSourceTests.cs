@@ -2,6 +2,7 @@ using LinkGallery.Application.Media;
 using LinkGallery.Domain.Devices;
 using LinkGallery.Domain.Media;
 using LinkGallery.Infrastructure.Media;
+using Microsoft.Data.Sqlite;
 
 namespace LinkGallery.Infrastructure.Tests.Media;
 
@@ -79,6 +80,75 @@ public sealed class CachingReadOnlyMediaSourceTests
         }
     }
 
+    [TestMethod]
+    public async Task GenerationControlsThumbnailInvalidationAndSqliteMetadata()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"LinkGallery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "media-index.db");
+        try
+        {
+            var inner = new StubSource { Generation = 42 };
+            using var index = new SqliteMediaIndex(databasePath);
+            using var source = new CachingReadOnlyMediaSource(
+                inner,
+                root,
+                "phone-address",
+                thumbnailCacheBytes: 1024,
+                mediaIndex: index);
+            _ = await source.GetDeviceInfoAsync(CancellationToken.None);
+            _ = await source.GetMediaPageAsync(new MediaQuery(), CancellationToken.None);
+
+            await using (await source.OpenThumbnailAsync(
+                "media-1",
+                new ThumbnailSize(256, 256),
+                CancellationToken.None))
+            {
+            }
+            await using (await source.OpenThumbnailAsync(
+                "media-1",
+                new ThumbnailSize(256, 256),
+                CancellationToken.None))
+            {
+            }
+            Assert.AreEqual(1, inner.ThumbnailFetchCount);
+
+            inner.Generation = 43;
+            _ = await source.GetMediaPageAsync(new MediaQuery(), CancellationToken.None);
+            await using (await source.OpenThumbnailAsync(
+                "media-1",
+                new ThumbnailSize(256, 256),
+                CancellationToken.None))
+            {
+            }
+            Assert.AreEqual(2, inner.ThumbnailFetchCount);
+
+            await using var connection = new SqliteConnection($"Data Source={databasePath}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*), MIN(generation), MAX(generation), SUM(file_size)
+                FROM thumbnail_cache;
+                """;
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.AreEqual(2L, reader.GetInt64(0));
+            Assert.AreEqual(42L, reader.GetInt64(1));
+            Assert.AreEqual(43L, reader.GetInt64(2));
+            Assert.AreEqual(8L, reader.GetInt64(3));
+
+            await source.ClearThumbnailCacheAsync();
+            reader.Close();
+            command.CommandText = "SELECT COUNT(*) FROM thumbnail_cache;";
+            Assert.AreEqual(0L, (long)(await command.ExecuteScalarAsync())!);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(root, true);
+        }
+    }
+
     private sealed class StubSource : IReadOnlyMediaSource, IEntityAwareMediaSource
     {
         public bool Fail { get; init; }
@@ -86,6 +156,10 @@ public sealed class CachingReadOnlyMediaSourceTests
         public long LastOffset { get; private set; }
 
         public string? LastEntityTag { get; private set; }
+
+        public long? Generation { get; set; }
+
+        public int ThumbnailFetchCount { get; private set; }
 
         public Task<Device> GetDeviceInfoAsync(CancellationToken cancellationToken) =>
             Fail
@@ -115,6 +189,7 @@ public sealed class CachingReadOnlyMediaSourceTests
                         Type = MediaType.Image,
                         ModifiedAt = DateTimeOffset.UnixEpoch,
                         TakenAt = DateTimeOffset.UnixEpoch,
+                        Generation = Generation,
                     },
                 ],
                 null));
@@ -122,10 +197,15 @@ public sealed class CachingReadOnlyMediaSourceTests
         public Task<Stream> OpenThumbnailAsync(
             string remoteId,
             ThumbnailSize size,
-            CancellationToken cancellationToken) =>
-            Fail
-                ? Task.FromException<Stream>(new HttpRequestException("offline"))
-                : Task.FromResult<Stream>(new MemoryStream([1, 2, 3, 4]));
+            CancellationToken cancellationToken)
+        {
+            if (Fail)
+            {
+                return Task.FromException<Stream>(new HttpRequestException("offline"));
+            }
+            ThumbnailFetchCount++;
+            return Task.FromResult<Stream>(new MemoryStream([1, 2, 3, 4]));
+        }
 
         public Task<Stream> OpenOriginalAsync(
             string remoteId,

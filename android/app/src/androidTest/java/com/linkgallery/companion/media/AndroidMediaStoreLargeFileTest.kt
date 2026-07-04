@@ -18,6 +18,9 @@ class AndroidMediaStoreLargeFileTest {
     fun generationChangesIncludeEveryVisibleManifestEntry() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val resolver = context.contentResolver
+        val source = AndroidMediaStoreDataSource(context, resolver)
+        val types = MediaType.entries.toSet()
+        val baseline = source.libraryState().latestCursor
         val uri = checkNotNull(
             resolver.insert(
                 MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
@@ -40,10 +43,8 @@ class AndroidMediaStoreLargeFileTest {
                 null,
             )
             val id = ContentUris.parseId(uri)
-            val source = AndroidMediaStoreDataSource(context, resolver)
-            val types = MediaType.entries.toSet()
-            val manifest = source.queryManifest(null, 500, types)
-            val changes = source.queryChanges(MediaSyncCursor(0, 0), 500, types)
+            val manifest = source.queryManifest(id - 1, 2, types)
+            val changes = source.queryChanges(baseline, 10, types)
 
             assertTrue(manifest.any { it.mediaStoreId == id })
             assertTrue(changes.any { it.mediaStoreId == id })

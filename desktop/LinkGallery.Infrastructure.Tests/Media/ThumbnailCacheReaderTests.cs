@@ -22,17 +22,13 @@ public sealed class ThumbnailCacheReaderTests
                 Type = MediaType.Image,
                 TakenAt = DateTimeOffset.UnixEpoch,
                 ModifiedAt = DateTimeOffset.UnixEpoch.AddSeconds(10),
+                Generation = 7,
             };
             var size = new ThumbnailSize(320, 240);
             using (var cache = new ThumbnailDiskCache(root, 1024))
             {
                 await using var created = await cache.GetOrCreateAsync(
-                    new ThumbnailCacheKey(
-                        item.DeviceId,
-                        item.RemoteId,
-                        item.ModifiedAt.UtcTicks,
-                        size.Width,
-                        size.Height),
+                    ThumbnailCacheKey.Create(item, size),
                     _ => Task.FromResult<Stream>(new MemoryStream([1, 2, 3])),
                     CancellationToken.None);
             }

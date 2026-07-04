@@ -226,6 +226,23 @@ class DefaultMediaRepositoryTest {
     }
 
     @Test
+    fun `thumbnail entity tag prefers MediaStore generation`() = runSuspend {
+        val repository = DefaultMediaRepository(
+            FakeDataSource(
+                rows = listOf(row(id = 7, modified = 123, generation = 456)),
+            ),
+            FakePermissionGateway(),
+        )
+        val id = (
+            repository.getPage(MediaQuery()) as MediaPageResult.Success
+            ).page.items.single().id
+
+        val result = repository.getThumbnail(id, 256, 256) as MediaThumbnailResult.Found
+
+        assertEquals("\"thumb-image-7-456-4096-256x256\"", result.entityTag)
+    }
+
+    @Test
     fun `opens original content at requested offset after permission check`() = runSuspend {
         val source = FakeDataSource(rows = listOf(row(id = 7, type = MediaType.VIDEO, size = 10)))
         val repository = DefaultMediaRepository(source, FakePermissionGateway())

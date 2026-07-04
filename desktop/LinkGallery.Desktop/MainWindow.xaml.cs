@@ -23,9 +23,12 @@ namespace LinkGallery.Desktop;
 public partial class MainWindow : Window, IDisposable
 {
     private const int PageSize = 100;
+    private const double TimelineCardWidth = 184;
+    private const double TimelineCardHeight = 244;
     private static readonly ThumbnailSize TimelineThumbnailSize = new(256, 256);
     private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
+    private readonly string _dataDirectory;
     private readonly SqliteMediaIndex _mediaIndex;
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
     private readonly LocalCopyCatalog _localCopies;
@@ -42,18 +45,19 @@ public partial class MainWindow : Window, IDisposable
     private bool _hasMoreRemoteItems;
     private bool _hasMoreIndexedItems;
     private bool _isLoadingPage;
+    private bool _thumbnailViewportUpdateScheduled;
     private readonly HashSet<string> _loadedRemoteIds = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public MainWindow()
     {
-        var dataDirectory = ResolveDataDirectory();
-        _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
+        _dataDirectory = ResolveDataDirectory();
+        _mediaIndex = new SqliteMediaIndex(Path.Combine(_dataDirectory, "media-index.db"));
         _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
-        _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
+        _localCopies = new LocalCopyCatalog(Path.Combine(_dataDirectory, "local-copies.json"));
         _thumbnailCache = new ThumbnailCacheReader(
-            Path.Combine(dataDirectory, "cache", "thumbnails"));
-        _transferStore = new JsonTransferJobStore(Path.Combine(dataDirectory, "transfer-jobs.json"));
+            Path.Combine(_dataDirectory, "cache", "thumbnails"));
+        _transferStore = new JsonTransferJobStore(Path.Combine(_dataDirectory, "transfer-jobs.json"));
         _transferCoordinator = new PersistentTransferCoordinator(
             _transferStore,
             _transferSourceResolver,
@@ -156,14 +160,12 @@ public partial class MainWindow : Window, IDisposable
             _connectionCancellation = new CancellationTokenSource();
             var cancellationToken = _connectionCancellation.Token;
             var httpSource = new HttpReadOnlyMediaSource(_httpClient, apiAddress);
-            var cacheRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "LinkGallery",
-                "cache");
+            var cacheRoot = Path.Combine(_dataDirectory, "cache");
             _source = new CachingReadOnlyMediaSource(
                 httpSource,
                 cacheRoot,
-                apiAddress.AbsoluteUri);
+                apiAddress.AbsoluteUri,
+                mediaIndex: _mediaIndex);
 
             var device = await GetDeviceInfoWithTimeoutAsync(_source, cancellationToken);
             _activeDeviceId = device.Id;
@@ -504,11 +506,34 @@ public partial class MainWindow : Window, IDisposable
         return unique;
     }
 
-    private async void OnTimelineItemLoaded(object sender, RoutedEventArgs e)
+    private void OnTimelineItemLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is not ListBoxItem { DataContext: MediaRow row } ||
-            _source is not { } source ||
-            row.Thumbnail is not null)
+        if (sender is not ListBoxItem)
+        {
+            return;
+        }
+        ScheduleThumbnailViewportUpdate();
+    }
+
+    private void ScheduleThumbnailViewportUpdate()
+    {
+        if (_thumbnailViewportUpdateScheduled)
+        {
+            return;
+        }
+        _thumbnailViewportUpdateScheduled = true;
+        _ = Dispatcher.BeginInvoke(
+            () =>
+            {
+                _thumbnailViewportUpdateScheduled = false;
+                UpdateVisibleThumbnailLoads();
+            },
+            DispatcherPriority.ContextIdle);
+    }
+
+    private async Task EnsureThumbnailAsync(MediaRow row)
+    {
+        if (_source is not { } source || row.Thumbnail is not null)
         {
             return;
         }
@@ -571,6 +596,54 @@ public partial class MainWindow : Window, IDisposable
 
             loadCancellation.Dispose();
         }
+    }
+
+    private void UpdateVisibleThumbnailLoads()
+    {
+        var scrollViewer = FindVisualChild<ScrollViewer>(TimelineList);
+        if (scrollViewer is null || scrollViewer.ViewportHeight <= 0)
+        {
+            return;
+        }
+        var range = ThumbnailLoadWindow.Calculate(
+            TimelineRows.Count,
+            scrollViewer.ViewportWidth,
+            scrollViewer.ViewportHeight,
+            scrollViewer.VerticalOffset,
+            TimelineCardWidth,
+            TimelineCardHeight);
+
+        for (var index = 0; index < TimelineRows.Count; index++)
+        {
+            var row = TimelineRows[index];
+            if (index >= range.FirstIndex && index < range.LastIndexExclusive)
+            {
+                _ = EnsureThumbnailAsync(row);
+            }
+            else if (row.Thumbnail is null && row.IsThumbnailLoading)
+            {
+                row.ThumbnailLoadCancellation?.Cancel();
+            }
+        }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match)
+            {
+                return match;
+            }
+            var descendant = FindVisualChild<T>(child);
+            if (descendant is not null)
+            {
+                return descendant;
+            }
+        }
+        return null;
     }
 
     private void OnTimelineItemUnloaded(object sender, RoutedEventArgs e)
@@ -685,6 +758,7 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnTimelineScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        ScheduleThumbnailViewportUpdate();
         if (e.VerticalChange <= 0 ||
             e.VerticalOffset < e.ExtentHeight - e.ViewportHeight - (e.ViewportHeight * 1.5))
         {
