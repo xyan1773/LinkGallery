@@ -23,6 +23,7 @@ namespace LinkGallery.Desktop;
 public partial class MainWindow : Window, IDisposable
 {
     private const int PageSize = 100;
+    private const int DecodedThumbnailCapacity = 128;
     private const double TimelineCardWidth = 184;
     private const double TimelineCardHeight = 244;
     private static readonly ThumbnailSize TimelineThumbnailSize = new(256, 256);
@@ -41,14 +42,18 @@ public partial class MainWindow : Window, IDisposable
     private CancellationTokenSource? _connectionCancellation;
     private CancellationTokenSource? _backgroundSyncCancellation;
     private CancellationTokenSource? _queryCancellation;
+    private Task? _backgroundSyncTask;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
     private string? _remoteNextCursor;
     private bool _hasMoreRemoteItems;
     private bool _hasMoreIndexedItems;
     private bool _isLoadingPage;
+    private bool _isSwitchingConnection;
     private bool _thumbnailViewportUpdateScheduled;
     private readonly HashSet<string> _loadedRemoteIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<DecodedThumbnailKey, ImageSource> _decodedThumbnails = [];
+    private readonly Queue<DecodedThumbnailKey> _decodedThumbnailOrder = [];
     private bool _disposed;
 
     public MainWindow()
@@ -222,10 +227,16 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
-        Disconnect(clearTimeline: true);
-
+        if (_isSwitchingConnection)
+        {
+            return;
+        }
+        _isSwitchingConnection = true;
+        ConnectButton.IsEnabled = false;
+        DisconnectButton.IsEnabled = false;
         try
         {
+            await DisconnectAsync(clearTimeline: true);
             var apiAddress = HttpReadOnlyMediaSource.NormalizeApiAddress(AddressTextBox.Text);
             var endpoint = $"{apiAddress.Host}:{apiAddress.Port}";
             SetLoading(true, $"正在连接 {endpoint}…");
@@ -281,6 +292,7 @@ public partial class MainWindow : Window, IDisposable
         }
         finally
         {
+            _isSwitchingConnection = false;
             SetLoading(false);
         }
     }
@@ -317,8 +329,7 @@ public partial class MainWindow : Window, IDisposable
                 new MediaQuery(Limit: PageSize),
                 timeout.Token);
 
-            TimelineRows.Clear();
-            RefreshAlbumRows();
+            ClearTimelineRows();
             _loadedRemoteIds.Clear();
             AppendTimelineItems(DeduplicateRemoteItems(page.Items));
             _remoteNextCursor = page.NextCursor;
@@ -374,7 +385,7 @@ public partial class MainWindow : Window, IDisposable
             _connectionCancellation?.Token ?? CancellationToken.None);
         var progress = new Progress<MediaSyncProgress>(
             update => UpdateBackgroundSyncProgress(endpoint, update));
-        _ = SynchronizeInBackgroundAsync(
+        _backgroundSyncTask = SynchronizeInBackgroundAsync(
             source,
             progress,
             seed,
@@ -492,8 +503,7 @@ public partial class MainWindow : Window, IDisposable
         {
             if (reset)
             {
-                TimelineRows.Clear();
-                RefreshAlbumRows();
+                ClearTimelineRows();
                 _hasMoreIndexedItems = true;
             }
 
@@ -542,6 +552,17 @@ public partial class MainWindow : Window, IDisposable
             previousDate = date;
         }
 
+        RefreshAlbumRows();
+    }
+
+    private void ClearTimelineRows()
+    {
+        foreach (var row in TimelineRows)
+        {
+            row.ThumbnailLoadCancellation?.Cancel();
+            row.Thumbnail = null;
+        }
+        TimelineRows.Clear();
         RefreshAlbumRows();
     }
 
@@ -636,6 +657,12 @@ public partial class MainWindow : Window, IDisposable
         {
             return;
         }
+        var decodedKey = DecodedThumbnailKey.Create(row.Item, TimelineThumbnailSize);
+        if (_decodedThumbnails.TryGetValue(decodedKey, out var decodedThumbnail))
+        {
+            row.Thumbnail = decodedThumbnail;
+            return;
+        }
 
         if (row.IsThumbnailLoading)
         {
@@ -669,6 +696,7 @@ public partial class MainWindow : Window, IDisposable
                 image.StreamSource = stream;
                 image.EndInit();
                 image.Freeze();
+                RememberDecodedThumbnail(decodedKey, image);
                 row.Thumbnail = image;
             }
             finally
@@ -694,6 +722,19 @@ public partial class MainWindow : Window, IDisposable
             }
 
             loadCancellation.Dispose();
+        }
+    }
+
+    private void RememberDecodedThumbnail(DecodedThumbnailKey key, ImageSource image)
+    {
+        if (!_decodedThumbnails.TryAdd(key, image))
+        {
+            return;
+        }
+        _decodedThumbnailOrder.Enqueue(key);
+        while (_decodedThumbnailOrder.Count > DecodedThumbnailCapacity)
+        {
+            _decodedThumbnails.Remove(_decodedThumbnailOrder.Dequeue());
         }
     }
 
@@ -1011,6 +1052,8 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             await _source.ClearThumbnailCacheAsync();
+            _decodedThumbnails.Clear();
+            _decodedThumbnailOrder.Clear();
             foreach (var row in TimelineRows)
             {
                 row.Thumbnail = null;
@@ -1200,9 +1243,16 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnDisconnectClick(object sender, RoutedEventArgs e)
     {
-        Disconnect(clearTimeline: true);
+        if (_isSwitchingConnection)
+        {
+            return;
+        }
+        _isSwitchingConnection = true;
+        ConnectButton.IsEnabled = false;
+        DisconnectButton.IsEnabled = false;
         try
         {
+            await DisconnectAsync(clearTimeline: true);
             await LoadIndexedPageAsync(
                 reset: true,
                 "本地缓存中还没有媒体",
@@ -1212,6 +1262,12 @@ public partial class MainWindow : Window, IDisposable
         catch (Exception exception)
         {
             StatusText.Text = $"无法读取本地索引：{exception.Message}";
+        }
+        finally
+        {
+            _isSwitchingConnection = false;
+            ConnectButton.IsEnabled = true;
+            DisconnectButton.IsEnabled = false;
         }
     }
 
@@ -1224,11 +1280,13 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        Disconnect(clearTimeline: true);
+        _ = Disconnect(clearTimeline: true);
         _transferRefreshTimer.Stop();
         _transferCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _transferStore.Dispose();
         _thumbnailConcurrency.Dispose();
+        _decodedThumbnails.Clear();
+        _decodedThumbnailOrder.Clear();
         _httpClient.Dispose();
         _localCopies.Dispose();
         _mediaIndex.Dispose();
@@ -1236,8 +1294,16 @@ public partial class MainWindow : Window, IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private void Disconnect(bool clearTimeline)
+    private async Task DisconnectAsync(bool clearTimeline)
     {
+        var backgroundSync = Disconnect(clearTimeline);
+        await backgroundSync;
+    }
+
+    private Task Disconnect(bool clearTimeline)
+    {
+        var backgroundSync = _backgroundSyncTask ?? Task.CompletedTask;
+        _backgroundSyncTask = null;
         _transferSourceResolver.Clear();
         _backgroundSyncCancellation?.Cancel();
         _backgroundSyncCancellation?.Dispose();
@@ -1263,14 +1329,14 @@ public partial class MainWindow : Window, IDisposable
         SetTimelineFooter(null);
         if (clearTimeline)
         {
-            TimelineRows.Clear();
-            RefreshAlbumRows();
+            ClearTimelineRows();
         }
 
         EmptyText.Text = "输入手机地址开始连接";
         EmptyText.Visibility = Visibility.Visible;
         DisconnectButton.IsEnabled = false;
         SetLoading(false);
+        return backgroundSync;
     }
 
     private void SetLoading(bool isLoading, string? status = null)
@@ -1409,6 +1475,22 @@ public partial class MainWindow : Window, IDisposable
 
             return $"{value:0.#} {units[unit]}";
         }
+    }
+
+    private readonly record struct DecodedThumbnailKey(
+        string DeviceId,
+        string RemoteId,
+        long Generation,
+        int Width,
+        int Height)
+    {
+        public static DecodedThumbnailKey Create(MediaItem item, ThumbnailSize size) =>
+            new(
+                item.DeviceId,
+                item.RemoteId,
+                item.Generation ?? item.ModifiedAt.ToUnixTimeMilliseconds(),
+                size.Width,
+                size.Height);
     }
 
     public sealed class AlbumRow(
