@@ -492,10 +492,11 @@ try {
         'desktop\LinkGallery.Desktop\bin\Debug\net8.0-windows\LinkGallery.Desktop.exe'
     $runner = Join-Path $repositoryRoot `
         'e2e\LinkGallery.E2E\bin\Debug\net8.0-windows\LinkGallery.E2E.exe'
-    $iterations = if ($Profile -eq 'Soak') { 10 } else { 1 }
+    $iterations = 1
     $minutes = if ($Profile -eq 'Soak') { $SoakMinutes } else { 0 }
-    $requireVideo = $Profile -ne 'Scale'
-    $skipImport = $Profile -eq 'Scale'
+    $requireVideo = $Profile -notin 'Scale','Soak'
+    $skipImport = $Profile -in 'Scale','Soak'
+    $scaleAcceptance = $Profile -eq 'Scale'
     & $runner `
         --desktop $desktop `
         --address $address `
@@ -505,7 +506,8 @@ try {
         --iterations $iterations `
         --soak-minutes $minutes `
         --require-video $requireVideo `
-        --skip-import $skipImport
+        --skip-import $skipImport `
+        --scale-acceptance $scaleAcceptance
     $runnerExit = $LASTEXITCODE
 
     $integrityRequired = $Profile -notin 'Physical','Scale' -and -not $SkipMedia

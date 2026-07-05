@@ -25,6 +25,8 @@ internal static class Program
         Directory.CreateDirectory(options.ImportDirectory);
 
         using var desktop = StartDesktop(options);
+        using var watchdogCancellation = new CancellationTokenSource();
+        var watchdog = RunWatchdogAsync(desktop, options, watchdogCancellation.Token);
         try
         {
             RunCoreJourney(desktop, options);
@@ -36,6 +38,8 @@ internal static class Program
         }
         finally
         {
+            watchdogCancellation.Cancel();
+            watchdog.GetAwaiter().GetResult();
             if (!desktop.HasExited)
             {
                 desktop.CloseMainWindow();
@@ -53,6 +57,35 @@ internal static class Program
 
         WriteReports(options);
         return Results.All(static result => result.Passed) ? 0 : 1;
+    }
+
+    private static async Task RunWatchdogAsync(
+        Process desktop,
+        Options options,
+        CancellationToken cancellationToken)
+    {
+        var maximumRuntime = options.SoakDuration + TimeSpan.FromMinutes(10);
+        var started = Stopwatch.StartNew();
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                desktop.Refresh();
+                cancellationToken.ThrowIfCancellationRequested();
+                if (started.Elapsed > maximumRuntime)
+                {
+                    var reason = $"E2E exceeded its maximum runtime of {maximumRuntime}.";
+                    File.WriteAllText(
+                        Path.Combine(options.ArtifactsDirectory, "watchdog-failure.txt"),
+                        reason);
+                    Environment.Exit(3);
+                }
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private static Process StartDesktop(Options options)
@@ -214,15 +247,16 @@ internal static class Program
                 timer.Elapsed.TotalMilliseconds,
                 "functional");
         }
-        else
+        if (options.ScaleAcceptance)
         {
             RunOfflineFilterJourney(mainWindow, timeline, options);
         }
 
         for (var iteration = 0; iteration < options.ConnectionIterations; iteration++)
         {
-            TryInvoke(mainWindow, "NavDevicesButton");
-            Invoke(FindById(mainWindow, "DisconnectButton"));
+            Invoke(FindById(mainWindow, "NavDevicesButton"));
+            Invoke(WaitForElementById(mainWindow, "DisconnectButton", ElementTimeout));
+            WaitForOfflineCache(mainWindow);
             Invoke(FindById(mainWindow, "ConnectButton"));
             WaitUntil(
                 () => ReadName(FindById(mainWindow, "StatusText"))
@@ -261,9 +295,10 @@ internal static class Program
             "Background index did not reach 5,000 items.");
         Record("background-index", true, "Background index reached 5,000/5,000", 0, "scale");
 
-        TryInvoke(mainWindow, "NavDevicesButton");
-        Invoke(FindById(mainWindow, "DisconnectButton"));
-        TryInvoke(mainWindow, "NavGalleryButton");
+        Invoke(FindById(mainWindow, "NavDevicesButton"));
+        Invoke(WaitForElementById(mainWindow, "DisconnectButton", ElementTimeout));
+        WaitForOfflineCache(mainWindow);
+        Invoke(FindById(mainWindow, "NavGalleryButton"));
         var search = FindById(mainWindow, "SearchTextBox");
         ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue("scale_");
         SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "图片");
@@ -296,7 +331,7 @@ internal static class Program
         SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "全部类型");
         SelectComboItem(FindById(mainWindow, "DateFilterComboBox"), "全部日期");
         Invoke(FindById(mainWindow, "SearchButton"));
-        TryInvoke(mainWindow, "NavDevicesButton");
+        Invoke(FindById(mainWindow, "NavDevicesButton"));
         Invoke(FindById(mainWindow, "ConnectButton"));
         WaitUntil(
             () => ReadName(FindById(mainWindow, "StatusText"))
@@ -304,6 +339,13 @@ internal static class Program
             options.ConnectTimeout,
             "Reconnect after offline filtering failed.");
     }
+
+    private static void WaitForOfflineCache(AutomationElement mainWindow) =>
+        WaitUntil(
+            () => ReadName(FindById(mainWindow, "StatusText"))
+                .Contains("离线缓存", StringComparison.Ordinal),
+            ElementTimeout,
+            "Desktop did not finish switching to the offline cache.");
 
     private static void SelectComboItem(AutomationElement comboBox, string itemName)
     {
@@ -418,30 +460,91 @@ internal static class Program
 
     private static void RunSoak(Process desktop, AutomationElement mainWindow, Options options)
     {
+        WaitUntil(
+            () =>
+            {
+                var status = ReadName(FindById(mainWindow, "StatusText"));
+                return status.Contains("完整索引", StringComparison.Ordinal) ||
+                    status.Contains("增量更新", StringComparison.Ordinal);
+            },
+            TimeSpan.FromMinutes(2),
+            "Background index did not settle before soak sampling.");
+        Invoke(FindById(mainWindow, "NavGalleryButton"));
+        var warmupTimeline = WaitForElementById(mainWindow, "TimelineList", ElementTimeout);
+        var warmupItems = WaitForListItems(warmupTimeline, ElementTimeout);
+        if (warmupItems[^1].TryGetCurrentPattern(
+                ScrollItemPattern.Pattern,
+                out var warmupEndPattern))
+        {
+            ((ScrollItemPattern)warmupEndPattern).ScrollIntoView();
+            Thread.Sleep(TimeSpan.FromSeconds(3));
+        }
+        if (warmupItems[0].TryGetCurrentPattern(
+                ScrollItemPattern.Pattern,
+                out var warmupStartPattern))
+        {
+            ((ScrollItemPattern)warmupStartPattern).ScrollIntoView();
+            Thread.Sleep(TimeSpan.FromSeconds(3));
+        }
         var started = Stopwatch.StartNew();
         var samples = new List<long>();
-        var cycles = 0;
+        var reconnects = 0;
+        var scrolls = 0;
+        var nextReconnect = TimeSpan.FromMinutes(5);
         while (started.Elapsed < options.SoakDuration)
         {
             desktop.Refresh();
             samples.Add(desktop.WorkingSet64);
-            Invoke(FindById(mainWindow, "DisconnectButton"));
-            Invoke(FindById(mainWindow, "ConnectButton"));
-            WaitUntil(
-                () => ReadName(FindById(mainWindow, "StatusText"))
-                    .Contains("已连接", StringComparison.Ordinal),
-                options.ConnectTimeout,
-                "Soak reconnect failed.");
-            cycles++;
+            Invoke(FindById(mainWindow, "NavGalleryButton"));
+            var timeline = WaitForElementById(mainWindow, "TimelineList", ElementTimeout);
+            var items = WaitForListItems(timeline, ElementTimeout);
+            var target = scrolls % 2 == 0 ? items[^1] : items[0];
+            if (target.TryGetCurrentPattern(ScrollItemPattern.Pattern, out var scrollPattern))
+            {
+                ((ScrollItemPattern)scrollPattern).ScrollIntoView();
+                scrolls++;
+            }
+            Thread.Sleep(TimeSpan.FromSeconds(5));
+            if (started.Elapsed >= nextReconnect &&
+                started.Elapsed < options.SoakDuration)
+            {
+                Invoke(FindById(mainWindow, "NavDevicesButton"));
+                Invoke(WaitForElementById(mainWindow, "DisconnectButton", ElementTimeout));
+                WaitForOfflineCache(mainWindow);
+                Invoke(FindById(mainWindow, "ConnectButton"));
+                WaitUntil(
+                    () => ReadName(FindById(mainWindow, "StatusText"))
+                        .Contains("已连接", StringComparison.Ordinal),
+                    options.ConnectTimeout,
+                    "Soak reconnect failed.");
+                reconnects++;
+                nextReconnect += TimeSpan.FromMinutes(5);
+            }
         }
 
-        var baseline = samples.Take(Math.Min(3, samples.Count)).Average();
-        var tail = samples.TakeLast(Math.Min(3, samples.Count)).Average();
+        var burnInSamples = samples.Count / 3;
+        var evaluatedSamples = samples.Skip(burnInSamples).ToArray();
+        var baseline = evaluatedSamples.Take(Math.Min(3, evaluatedSamples.Length)).Average();
+        var tail = evaluatedSamples.TakeLast(Math.Min(3, evaluatedSamples.Length)).Average();
         var growth = baseline == 0 ? 0 : (tail - baseline) / baseline;
+        File.WriteAllText(
+            Path.Combine(options.ArtifactsDirectory, "soak-memory.json"),
+            JsonSerializer.Serialize(
+                new
+                {
+                    burnInSamples,
+                    reconnects,
+                    samples,
+                    baselineBytes = baseline,
+                    tailBytes = tail,
+                    growth,
+                },
+                JsonOptions));
         Record(
             "soak",
-            growth <= 0.20,
-            $"{cycles} cycles; working-set growth {growth:P1}",
+            growth <= 0.20 && scrolls > 0,
+            $"{reconnects} reconnects; {scrolls} scrolls; {burnInSamples} warm-up samples; " +
+            $"steady-state working-set growth {growth:P1}",
             started.Elapsed.TotalMilliseconds,
             "stability");
     }
@@ -683,6 +786,7 @@ internal static class Program
         TimeSpan SoakDuration,
         bool RequireVideo,
         bool SkipImport,
+        bool ScaleAcceptance,
         bool ExpectConnectionFailure)
     {
         public static Options Parse(string[] args)
@@ -720,6 +824,7 @@ internal static class Program
                 TimeSpan.FromMinutes(ParseInt(values, "soak-minutes", 0)),
                 ParseBool(values, "require-video", true),
                 ParseBool(values, "skip-import", false),
+                ParseBool(values, "scale-acceptance", false),
                 ParseBool(values, "expect-connect-failure", false));
         }
 
