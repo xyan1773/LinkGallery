@@ -1,0 +1,1106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f5f5f7" />
+  <title>LinkGallery Android UI Mockup</title>
+  <style>
+    :root {
+      --blue: #0066cc;
+      --blue-strong: #0071e3;
+      --blue-soft: #eaf3ff;
+      --ink: #1d1d1f;
+      --muted: #6e6e73;
+      --canvas: #ffffff;
+      --parchment: #f5f5f7;
+      --line: #e0e0e0;
+      --success: #34c759;
+      --danger: #ff3b30;
+      --shadow: 0 22px 70px rgba(0, 0, 0, .16);
+      --ease: cubic-bezier(.2,.8,.2,1);
+      --safe-bottom: max(14px, env(safe-area-inset-bottom));
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 18% 10%, rgba(0,102,204,.08), transparent 28%),
+        radial-gradient(circle at 88% 86%, rgba(52,199,89,.06), transparent 24%),
+        var(--parchment);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    button, input {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+    }
+
+    .page {
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: 26px;
+    }
+
+    .stage {
+      width: min(100%, 1180px);
+      display: grid;
+      grid-template-columns: minmax(320px, 390px) minmax(320px, 390px);
+      justify-content: center;
+      gap: 54px;
+      align-items: center;
+    }
+
+    .preview-caption {
+      display: none;
+    }
+
+    .phone {
+      position: relative;
+      width: 390px;
+      height: 820px;
+      overflow: hidden;
+      border-radius: 36px;
+      background: var(--canvas);
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255,255,255,.85);
+      isolation: isolate;
+    }
+
+    .phone::before {
+      content: "";
+      position: absolute;
+      top: 9px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 92px;
+      height: 6px;
+      background: rgba(29,29,31,.16);
+      border-radius: 999px;
+      z-index: 20;
+    }
+
+    .screen {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--canvas);
+      overflow: hidden;
+    }
+
+    .topbar {
+      position: relative;
+      z-index: 5;
+      padding: 28px 20px 12px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      background: rgba(255,255,255,.88);
+      backdrop-filter: saturate(160%) blur(18px);
+      border-bottom: 1px solid rgba(224,224,224,.55);
+    }
+
+    .eyebrow {
+      margin: 0 0 5px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .01em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 32px;
+      line-height: 1.04;
+      letter-spacing: -.025em;
+      font-weight: 700;
+    }
+
+    .subline {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .icon-btn, .round-btn {
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      color: var(--ink);
+      background: rgba(255,255,255,.76);
+      border: 1px solid rgba(209,209,214,.65);
+      backdrop-filter: blur(18px);
+      cursor: pointer;
+      transition:
+        transform 80ms var(--ease),
+        background-color 120ms var(--ease),
+        color 120ms var(--ease),
+        border-color 120ms var(--ease);
+    }
+
+    .icon-btn:hover, .round-btn:hover {
+      color: var(--blue);
+      background: var(--blue-soft);
+      border-color: rgba(0,102,204,.18);
+    }
+
+    .icon-btn:active, .round-btn:active {
+      transform: scale(.94);
+      color: white;
+      background: var(--blue);
+    }
+
+    .icon-btn svg, .round-btn svg {
+      width: 20px;
+      height: 20px;
+      stroke-width: 1.9;
+    }
+
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 14px 16px 110px;
+      scrollbar-width: none;
+    }
+
+    .content::-webkit-scrollbar {
+      display: none;
+    }
+
+    .section {
+      margin-top: 12px;
+    }
+
+    .section + .section {
+      margin-top: 22px;
+    }
+
+    .section-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .section h2 {
+      margin: 0;
+      font-size: 17px;
+      letter-spacing: -.012em;
+    }
+
+    .section-action {
+      min-height: 36px;
+      padding: 0 11px;
+      border-radius: 18px;
+      background: transparent;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .section-action:hover {
+      background: var(--blue-soft);
+    }
+
+    .album-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px 12px;
+    }
+
+    .album-card {
+      appearance: none;
+      text-align: left;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      border-radius: 15px;
+      transition: transform 80ms var(--ease);
+    }
+
+    .album-card:active {
+      transform: scale(.98);
+    }
+
+    .cover {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1.65;
+      border-radius: 13px;
+      overflow: hidden;
+      background: var(--cover);
+    }
+
+    .cover::before {
+      content: "";
+      position: absolute;
+      width: 31px;
+      height: 31px;
+      left: 12px;
+      top: 12px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.58);
+    }
+
+    .cover::after {
+      content: "";
+      position: absolute;
+      right: 14px;
+      bottom: 16px;
+      width: 48px;
+      height: 21px;
+      border-radius: 6px;
+      background: rgba(29,29,31,.34);
+    }
+
+    .album-card:hover .cover {
+      outline: 2px solid rgba(0,102,204,.2);
+      outline-offset: -2px;
+    }
+
+    .album-label {
+      margin-top: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+
+    .album-count {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .bottom-nav {
+      position: absolute;
+      z-index: 10;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      min-height: 80px;
+      padding: 8px 10px var(--safe-bottom);
+      background: rgba(255,255,255,.72);
+      backdrop-filter: saturate(170%) blur(22px);
+      border-top: 1px solid rgba(209,209,214,.55);
+    }
+
+    .nav-item {
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 3px;
+      min-height: 56px;
+      color: var(--muted);
+      background: transparent;
+      border-radius: 18px;
+      cursor: pointer;
+      transition:
+        transform 80ms var(--ease),
+        background 120ms var(--ease),
+        color 120ms var(--ease);
+    }
+
+    .nav-item svg {
+      width: 20px;
+      height: 20px;
+      stroke-width: 1.8;
+    }
+
+    .nav-item span {
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .nav-item.active {
+      color: var(--blue);
+    }
+
+    .nav-item:hover {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .nav-item:active {
+      transform: scale(.96);
+      background: var(--blue);
+      color: white;
+    }
+
+    .device-hero {
+      margin: 4px 0 18px;
+      padding: 20px;
+      border-radius: 24px;
+      background:
+        radial-gradient(circle at 90% 10%, rgba(255,255,255,.22), transparent 25%),
+        linear-gradient(140deg, #0066cc 0%, #2485e7 100%);
+      color: white;
+      box-shadow: 0 14px 32px rgba(0,102,204,.2);
+    }
+
+    .device-hero .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 18px;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #76f09b;
+      box-shadow: 0 0 0 4px rgba(118,240,155,.16);
+    }
+
+    .device-hero h3 {
+      margin: 0;
+      font-size: 26px;
+      letter-spacing: -.02em;
+    }
+
+    .device-hero p {
+      margin: 7px 0 0;
+      color: rgba(255,255,255,.76);
+      font-size: 13px;
+    }
+
+    .primary-btn {
+      width: 100%;
+      min-height: 52px;
+      padding: 0 22px;
+      border-radius: 999px;
+      background: var(--blue);
+      color: white;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition:
+        transform 80ms var(--ease),
+        background 120ms var(--ease);
+    }
+
+    .primary-btn:hover {
+      background: var(--blue-strong);
+    }
+
+    .primary-btn:active {
+      transform: scale(.97);
+    }
+
+    .primary-btn.success {
+      background: var(--success);
+    }
+
+    .setting-card {
+      background: var(--canvas);
+      border: 1px solid var(--line);
+      border-radius: 19px;
+      overflow: hidden;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      min-height: 64px;
+      padding: 12px 15px;
+      gap: 12px;
+    }
+
+    .setting-row + .setting-row {
+      border-top: 1px solid var(--line);
+    }
+
+    .setting-icon {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 11px;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .setting-icon svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .setting-copy {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .setting-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .setting-desc {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .switch {
+      position: relative;
+      width: 50px;
+      height: 30px;
+      border-radius: 999px;
+      background: #d1d1d6;
+      cursor: pointer;
+      transition: background 160ms var(--ease);
+    }
+
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 2px 7px rgba(0,0,0,.18);
+      transition: transform 180ms var(--ease);
+    }
+
+    .switch.on {
+      background: var(--blue);
+    }
+
+    .switch.on::after {
+      transform: translateX(20px);
+    }
+
+    .chip-row {
+      display: flex;
+      gap: 10px;
+      margin: 14px 0 19px;
+    }
+
+    .chip {
+      min-width: 92px;
+      min-height: 36px;
+      padding: 0 17px;
+      border-radius: 999px;
+      background: white;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition:
+        transform 80ms var(--ease),
+        background 120ms var(--ease),
+        color 120ms var(--ease);
+    }
+
+    .chip.active {
+      background: var(--blue);
+      color: white;
+      border-color: var(--blue);
+    }
+
+    .chip:active {
+      transform: scale(.96);
+    }
+
+    .media-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .media-tile {
+      position: relative;
+      aspect-ratio: 1.18;
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--cover);
+      cursor: pointer;
+      transition: transform 80ms var(--ease);
+    }
+
+    .media-tile::before {
+      content: "";
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      left: 12px;
+      top: 12px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.58);
+    }
+
+    .media-tile::after {
+      content: "";
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      width: 33px;
+      height: 20px;
+      border-radius: 6px;
+      background: rgba(29,29,31,.32);
+    }
+
+    .media-tile:active {
+      transform: scale(.96);
+    }
+
+    .floating-copy {
+      position: absolute;
+      z-index: 12;
+      left: 20px;
+      right: 20px;
+      bottom: 24px;
+      min-height: 58px;
+      border-radius: 999px;
+      background: var(--blue);
+      color: white;
+      font-size: 14px;
+      font-weight: 700;
+      box-shadow: 0 16px 34px rgba(0,102,204,.3);
+      cursor: pointer;
+      transition:
+        transform 80ms var(--ease),
+        background 120ms var(--ease);
+    }
+
+    .floating-copy:active {
+      transform: scale(.97);
+    }
+
+    .toast {
+      position: absolute;
+      z-index: 30;
+      left: 50%;
+      bottom: 102px;
+      transform: translate(-50%, 14px);
+      max-width: calc(100% - 40px);
+      padding: 11px 16px;
+      border-radius: 999px;
+      color: white;
+      background: rgba(29,29,31,.86);
+      backdrop-filter: blur(18px);
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition:
+        opacity 180ms var(--ease),
+        transform 180ms var(--ease);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .view {
+      display: none;
+      min-height: 100%;
+    }
+
+    .view.active {
+      display: flex;
+      flex-direction: column;
+      animation: fade-up 220ms var(--ease);
+    }
+
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .back-btn {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      padding: 0 8px 0 0;
+      gap: 3px;
+      color: var(--blue);
+      background: transparent;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .back-btn:active {
+      opacity: .6;
+    }
+
+    .detail-header {
+      padding: 28px 20px 0;
+    }
+
+    .detail-header h1 {
+      margin-top: 8px;
+      font-size: 29px;
+    }
+
+    .copy-progress {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    .copy-progress::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: var(--progress, 0%);
+      background: rgba(255,255,255,.18);
+      transition: width 160ms linear;
+    }
+
+    .app-note {
+      width: min(390px, 100%);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+      padding: 0 8px;
+    }
+
+    .app-note strong {
+      color: var(--ink);
+    }
+
+    @media (max-width: 920px) {
+      .page {
+        padding: 0;
+        display: block;
+        background: white;
+      }
+
+      .stage {
+        width: 100%;
+        display: block;
+      }
+
+      .phone.primary-phone {
+        width: 100%;
+        height: 100dvh;
+        min-height: 680px;
+        border-radius: 0;
+        border: 0;
+        box-shadow: none;
+      }
+
+      .phone.primary-phone::before {
+        display: none;
+      }
+
+      .phone.secondary-phone,
+      .app-note {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 1ms !important;
+        transition-duration: 1ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="stage">
+      <section class="phone primary-phone" aria-label="LinkGallery Android mockup">
+        <div class="screen">
+
+          <section class="view active" data-view="albums">
+            <header class="topbar">
+              <div>
+                <p class="eyebrow">LinkGallery</p>
+                <h1>Albums</h1>
+              </div>
+              <button class="icon-btn" id="newAlbumBtn" aria-label="New album" title="New album">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M12 5v14M5 12h14" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </header>
+
+            <div class="content">
+              <section class="section">
+                <div class="section-title-row">
+                  <h2>Smart Albums</h2>
+                  <button class="section-action">See all</button>
+                </div>
+                <div class="album-grid" id="smartAlbums"></div>
+              </section>
+
+              <section class="section">
+                <div class="section-title-row">
+                  <h2>Device Albums</h2>
+                  <button class="section-action" data-nav="devices">Manage</button>
+                </div>
+                <div class="album-grid" id="deviceAlbums"></div>
+              </section>
+
+              <section class="section">
+                <div class="section-title-row">
+                  <h2>My Albums</h2>
+                </div>
+                <div class="album-grid" id="myAlbums"></div>
+              </section>
+            </div>
+          </section>
+
+          <section class="view" data-view="photos">
+            <header class="topbar">
+              <div>
+                <p class="eyebrow">LinkGallery</p>
+                <h1>Photos</h1>
+                <div class="subline">1,421 items · Nearby devices</div>
+              </div>
+              <button class="icon-btn" aria-label="Select photos" title="Select">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M8 6h11M8 12h11M8 18h11" stroke-linecap="round"/>
+                  <path d="m3.8 6 1.1 1.1L6.9 5M3.8 12l1.1 1.1 2-2.1M3.8 18l1.1 1.1 2-2.1" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </header>
+            <div class="content">
+              <div class="chip-row">
+                <button class="chip active">All</button>
+                <button class="chip">Photos</button>
+                <button class="chip">Videos</button>
+              </div>
+              <div class="media-grid" id="photoGrid"></div>
+            </div>
+          </section>
+
+          <section class="view" data-view="devices">
+            <header class="topbar">
+              <div>
+                <p class="eyebrow">LinkGallery</p>
+                <h1>Devices</h1>
+                <div class="subline">Wi-Fi media service</div>
+              </div>
+              <button class="icon-btn" id="refreshDeviceBtn" aria-label="Refresh devices" title="Refresh">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M20 11a8 8 0 1 0-2.3 5.7" stroke-linecap="round"/>
+                  <path d="M20 5v6h-6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </header>
+
+            <div class="content">
+              <div class="device-hero">
+                <div class="status-row">
+                  <span class="status-dot"></span>
+                  <span id="serviceStatus">Service running</span>
+                </div>
+                <h3>24129PN74C</h3>
+                <p>Connected over Wi-Fi · 108 ms</p>
+              </div>
+
+              <section class="section">
+                <div class="section-title-row">
+                  <h2>Service</h2>
+                </div>
+                <div class="setting-card">
+                  <div class="setting-row">
+                    <div class="setting-icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M4 9a12 12 0 0 1 16 0M7 12a8 8 0 0 1 10 0M10 15a4 4 0 0 1 4 0M12 19h.01" stroke-linecap="round"/>
+                      </svg>
+                    </div>
+                    <div class="setting-copy">
+                      <div class="setting-title">Keep service running</div>
+                      <div class="setting-desc">Allow paired computers to browse media</div>
+                    </div>
+                    <button class="switch on" id="serviceSwitch" aria-label="Toggle service"></button>
+                  </div>
+
+                  <div class="setting-row">
+                    <div class="setting-icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="4" y="5" width="16" height="14" rx="3"/>
+                        <path d="M8 9h8M8 13h5" stroke-linecap="round"/>
+                      </svg>
+                    </div>
+                    <div class="setting-copy">
+                      <div class="setting-title">Paired computer</div>
+                      <div class="setting-desc">Xiang's PC · active now</div>
+                    </div>
+                    <span style="color:var(--blue);font-weight:700">›</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section">
+                <button class="primary-btn" id="pairBtn">Pair another computer</button>
+              </section>
+            </div>
+          </section>
+
+          <section class="view" data-view="detail">
+            <div class="detail-header">
+              <button class="back-btn" id="backBtn">‹ Albums</button>
+              <h1 id="detailTitle">DJI Pocket 3</h1>
+              <div class="subline" id="detailMeta">186 items · Device album</div>
+              <div class="chip-row" id="detailChips">
+                <button class="chip active">All</button>
+                <button class="chip">Photos</button>
+                <button class="chip">Videos</button>
+              </div>
+            </div>
+            <div class="content" style="padding-top:0">
+              <section class="section" style="margin-top:0">
+                <div class="section-title-row">
+                  <h2>3 July 2026</h2>
+                </div>
+                <div class="media-grid" id="detailGrid"></div>
+              </section>
+            </div>
+            <button class="floating-copy" id="copyBtn">
+              <span class="copy-progress"></span>
+              <span id="copyLabel">Copy this album</span>
+            </button>
+          </section>
+
+          <nav class="bottom-nav" id="bottomNav" aria-label="Primary">
+            <button class="nav-item" data-nav="photos">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="3" y="4" width="18" height="16" rx="3"/>
+                <path d="m7 15 3-3 3 3 2-2 2 2M8 8h.01" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span>Photos</span>
+            </button>
+            <button class="nav-item active" data-nav="albums">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="4" y="5" width="16" height="14" rx="3"/>
+                <path d="M8 9h8M8 13h8" stroke-linecap="round"/>
+              </svg>
+              <span>Albums</span>
+            </button>
+            <button class="nav-item" data-nav="devices">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="7" y="2" width="10" height="20" rx="3"/>
+                <path d="M10 18h4" stroke-linecap="round"/>
+              </svg>
+              <span>Devices</span>
+            </button>
+          </nav>
+
+          <div class="toast" id="toast">Done</div>
+        </div>
+      </section>
+
+      <section class="phone secondary-phone" aria-label="Album detail preview">
+        <div class="screen">
+          <div class="detail-header">
+            <button class="back-btn">‹ Albums</button>
+            <h1>DJI Pocket 3</h1>
+            <div class="subline">186 items · Device album</div>
+            <div class="chip-row">
+              <button class="chip active">All</button>
+              <button class="chip">Photos</button>
+              <button class="chip">Videos</button>
+            </div>
+          </div>
+          <div class="content" style="padding-top:0">
+            <section class="section" style="margin-top:0">
+              <div class="section-title-row"><h2>3 July 2026</h2></div>
+              <div class="media-grid" id="staticDetailGrid"></div>
+            </section>
+          </div>
+          <button class="floating-copy">Copy this album</button>
+        </div>
+      </section>
+
+      <aside class="app-note">
+        <strong>LinkGallery Android HTML 效果图</strong><br>
+        小屏设备会自动变成全屏 App；桌面浏览器会展示相册页和相册详情双机预览。
+        底部导航、相册卡片、筛选按钮、设备服务开关与复制进度都可以交互。
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    const colors = [
+      "#b7c9d6", "#d9b8a7", "#9fb6a0", "#c8b6d9",
+      "#d8c58b", "#9bb7c8", "#c5a6a6", "#afc0d2"
+    ];
+
+    const smartAlbums = [
+      { id: "favorites", name: "Favorites", count: 86, color: colors[0], kind: "Smart album" },
+      { id: "videos", name: "Videos", count: 124, color: colors[1], kind: "Smart album" },
+      { id: "screenshots", name: "Screenshots", count: 302, color: colors[2], kind: "Smart album" },
+      { id: "recent", name: "Recent", count: 48, color: colors[3], kind: "Smart album" }
+    ];
+
+    const deviceAlbums = [
+      { id: "camera", name: "Camera", count: 1024, color: colors[4], kind: "Device album" },
+      { id: "dji", name: "DJI Pocket 3", count: 186, color: colors[5], kind: "Device album" },
+      { id: "downloads", name: "Downloads", count: 47, color: colors[6], kind: "Device album" },
+      { id: "wechat", name: "WeChat", count: 93, color: colors[7], kind: "Device album" }
+    ];
+
+    const myAlbums = [
+      { id: "new-zealand", name: "New Zealand", count: 74, color: colors[1], kind: "My album" },
+      { id: "family", name: "Family", count: 128, color: colors[2], kind: "My album" },
+      { id: "projects", name: "Projects", count: 35, color: colors[3], kind: "My album" },
+      { id: "unsorted", name: "Unsorted", count: 18, color: colors[4], kind: "My album" }
+    ];
+
+    const formatCount = value => new Intl.NumberFormat("en-NZ").format(value);
+
+    function albumCard(album) {
+      const button = document.createElement("button");
+      button.className = "album-card";
+      button.innerHTML = `
+        <div class="cover" style="--cover:${album.color}"></div>
+        <div class="album-label">${album.name}</div>
+        <div class="album-count">${formatCount(album.count)} items</div>
+      `;
+      button.addEventListener("click", () => openAlbum(album));
+      return button;
+    }
+
+    function renderAlbums(targetId, albums) {
+      const target = document.getElementById(targetId);
+      albums.forEach(album => target.appendChild(albumCard(album)));
+    }
+
+    function renderMedia(targetId, count = 18) {
+      const target = document.getElementById(targetId);
+      for (let i = 0; i < count; i++) {
+        const tile = document.createElement("button");
+        tile.className = "media-tile";
+        tile.style.setProperty("--cover", colors[i % colors.length]);
+        tile.setAttribute("aria-label", `Media ${i + 1}`);
+        tile.addEventListener("click", () => showToast(`Selected item ${i + 1}`));
+        target.appendChild(tile);
+      }
+    }
+
+    renderAlbums("smartAlbums", smartAlbums);
+    renderAlbums("deviceAlbums", deviceAlbums);
+    renderAlbums("myAlbums", myAlbums);
+    renderMedia("photoGrid", 30);
+    renderMedia("detailGrid", 21);
+    renderMedia("staticDetailGrid", 24);
+
+    const views = [...document.querySelectorAll(".view")];
+    const navItems = [...document.querySelectorAll(".nav-item")];
+    const bottomNav = document.getElementById("bottomNav");
+
+    function setView(name) {
+      views.forEach(view => view.classList.toggle("active", view.dataset.view === name));
+      navItems.forEach(item => item.classList.toggle("active", item.dataset.nav === name));
+      bottomNav.style.display = name === "detail" ? "none" : "grid";
+    }
+
+    document.addEventListener("click", event => {
+      const nav = event.target.closest("[data-nav]");
+      if (nav) setView(nav.dataset.nav);
+    });
+
+    function openAlbum(album) {
+      document.getElementById("detailTitle").textContent = album.name;
+      document.getElementById("detailMeta").textContent =
+        `${formatCount(album.count)} items · ${album.kind}`;
+      setView("detail");
+    }
+
+    document.getElementById("backBtn").addEventListener("click", () => setView("albums"));
+
+    [...document.querySelectorAll(".chip-row")].forEach(row => {
+      row.addEventListener("click", event => {
+        const chip = event.target.closest(".chip");
+        if (!chip) return;
+        row.querySelectorAll(".chip").forEach(item => item.classList.remove("active"));
+        chip.classList.add("active");
+      });
+    });
+
+    const serviceSwitch = document.getElementById("serviceSwitch");
+    serviceSwitch.addEventListener("click", () => {
+      const running = serviceSwitch.classList.toggle("on");
+      document.getElementById("serviceStatus").textContent =
+        running ? "Service running" : "Service stopped";
+      showToast(running ? "Media service started" : "Media service stopped");
+    });
+
+    document.getElementById("refreshDeviceBtn").addEventListener("click", () => {
+      showToast("Device status refreshed");
+    });
+
+    document.getElementById("pairBtn").addEventListener("click", () => {
+      showToast("Pairing request created");
+    });
+
+    document.getElementById("newAlbumBtn").addEventListener("click", () => {
+      showToast("New album action");
+    });
+
+    const copyBtn = document.getElementById("copyBtn");
+    const copyLabel = document.getElementById("copyLabel");
+    const progressLayer = copyBtn.querySelector(".copy-progress");
+    let copying = false;
+
+    copyBtn.addEventListener("click", () => {
+      if (copying) return;
+      copying = true;
+      let progress = 0;
+      copyBtn.classList.remove("success");
+      const timer = setInterval(() => {
+        progress += 4;
+        progressLayer.style.setProperty("--progress", `${progress}%`);
+        copyLabel.textContent = `Copying… ${progress}%`;
+        if (progress >= 100) {
+          clearInterval(timer);
+          copyBtn.classList.add("success");
+          copyLabel.textContent = "Copied ✓";
+          setTimeout(() => {
+            progressLayer.style.setProperty("--progress", "0%");
+            copyBtn.classList.remove("success");
+            copyLabel.textContent = "Copy this album";
+            copying = false;
+          }, 900);
+        }
+      }, 75);
+    });
+
+    const toast = document.getElementById("toast");
+    let toastTimer;
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.classList.add("show");
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+  </script>
+</body>
+</html>

@@ -32,8 +32,8 @@ artifacts/
 # Local tool configuration
 android/local.properties
 *.DotSettings.user
+.worktrees/
 
 # Test output
 TestResults/
 coverage/
-

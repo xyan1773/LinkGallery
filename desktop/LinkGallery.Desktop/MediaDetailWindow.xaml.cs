@@ -309,7 +309,7 @@ public partial class MediaDetailWindow : Window, IDisposable
 
     private void OnNextClick(object sender, RoutedEventArgs e) => Move(1);
 
-    private void OnKeyDown(object sender, KeyEventArgs e)
+    private void OnKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == Key.Left)
         {
