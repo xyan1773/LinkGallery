@@ -1,0 +1,443 @@
+:root {
+  --blue: #0066cc;
+  --blue-strong: #0071e3;
+  --blue-soft: #eaf3ff;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --canvas: #ffffff;
+  --parchment: #f5f5f7;
+  --surface: #fafafc;
+  --line: #e0e0e0;
+  --success: #34c759;
+  --shadow: 0 24px 80px rgba(0,0,0,.15);
+  --shadow-sm: 0 8px 30px rgba(0,0,0,.08);
+  --ease: cubic-bezier(.2,.8,.2,1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 15% 0%, rgba(0,102,204,.07), transparent 26%),
+    radial-gradient(circle at 92% 100%, rgba(52,199,89,.05), transparent 24%),
+    var(--parchment);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  line-height: 1.5;
+  scroll-behavior: smooth;
+  overflow-x: hidden;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+/* Bilingual Support */
+body.lang-zh .en { display: none !important; }
+body.lang-en .zh { display: none !important; }
+
+/* Navbar */
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: rgba(255,255,255,.72);
+  backdrop-filter: saturate(160%) blur(20px);
+  border-bottom: 1px solid rgba(224,224,224,.64);
+  padding: 16px 0;
+}
+
+.nav-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--blue);
+}
+
+.brand-logo {
+  width: 28px;
+  height: 28px;
+}
+
+.brand-text {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  color: var(--ink);
+}
+
+.nav-links {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+}
+
+.nav-links a {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  transition: color 0.2s ease;
+}
+
+.nav-links a:hover {
+  color: var(--ink);
+}
+
+.lang-switcher button {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+
+.lang-switcher button:hover {
+  background: var(--blue-soft);
+  color: var(--blue);
+  border-color: rgba(0,102,204,.18);
+}
+
+/* Hero Section */
+.hero {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 140px 24px 80px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 60px;
+}
+
+.hero-content {
+  max-width: 800px;
+  animation: fade-up 0.8s var(--ease);
+}
+
+.hero-title {
+  font-size: 56px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -.03em;
+  margin-bottom: 24px;
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--blue) 0%, #2485e7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-subtitle {
+  font-size: 20px;
+  color: var(--muted);
+  margin-bottom: 40px;
+  max-width: 700px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.hero-cta {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 24px;
+  min-height: 52px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 120ms var(--ease), background 120ms var(--ease), box-shadow 120ms var(--ease);
+}
+
+.btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-primary {
+  background: var(--blue);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--blue-strong);
+  box-shadow: 0 8px 24px rgba(0,102,204,.25);
+}
+
+.btn-secondary {
+  background: white;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.btn-secondary:hover {
+  background: var(--surface);
+  border-color: rgba(0,0,0,.1);
+}
+
+.coming-soon {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 500;
+  background: rgba(255,255,255,.6);
+  padding: 6px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(224,224,224,.5);
+}
+
+.badge {
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+/* Actual Mockups (Iframe based) */
+.hero-visuals.real-mockups {
+  position: relative;
+  width: 100%;
+  max-width: 1000px;
+  height: 540px;
+  display: flex;
+  justify-content: center;
+  perspective: 1000px;
+  animation: fade-up 1s var(--ease) 0.2s both;
+}
+
+.iframe-container {
+  position: absolute;
+  background: var(--canvas);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  border: 1px solid rgba(255,255,255,.9);
+  overflow: hidden;
+}
+
+.iframe-container iframe {
+  width: 100%;
+  height: 100%;
+  transform-origin: top left;
+}
+
+.desktop-iframe {
+  width: 800px;
+  height: 500px;
+  z-index: 1;
+}
+
+/* The desktop mockup is large (~1480x920 minimum), we need to scale it down into the 800x500 box */
+.desktop-iframe iframe {
+  width: 1480px;
+  height: 925px;
+  transform: scale(0.5405); /* 800 / 1480 */
+}
+
+.mobile-iframe {
+  width: 250px;
+  height: 525px;
+  border-radius: 36px;
+  right: 20px;
+  bottom: -40px;
+  z-index: 2;
+  border: 8px solid white;
+  box-shadow: 0 30px 60px rgba(0,0,0,.2);
+  transform: rotate(5deg) scale(0.95);
+  transition: transform 0.4s var(--ease);
+}
+
+.mobile-iframe:hover {
+  transform: rotate(0deg) scale(1);
+}
+
+/* The mobile mockup is typically ~390x844 minimum */
+.mobile-iframe iframe {
+  width: 390px;
+  height: 853px;
+  transform: scale(0.599); /* (250-16)/390 (accounting for border) */
+  margin-left: -4px; /* Slight offset correction for border */
+}
+
+/* Introduction Section */
+.intro-section {
+  max-width: 1000px;
+  margin: 40px auto 80px;
+  padding: 0 24px;
+}
+
+.intro-content {
+  background: rgba(255,255,255,.6);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.9);
+  padding: 60px 48px;
+  border-radius: 32px;
+  box-shadow: var(--shadow-sm);
+  text-align: center;
+}
+
+.intro-content .section-title {
+  margin-bottom: 32px;
+}
+
+.intro-text p {
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.8;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+/* Features Section */
+.features {
+  max-width: 1200px;
+  margin: 100px auto;
+  padding: 0 24px;
+}
+
+.section-header {
+  text-align: center;
+  margin-bottom: 60px;
+}
+
+.section-title {
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  margin-bottom: 12px;
+}
+
+.section-subtitle {
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 32px;
+}
+
+.feature-card {
+  background: rgba(255,255,255,.6);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.9);
+  padding: 40px 32px;
+  border-radius: 24px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.3s var(--ease), box-shadow 0.3s var(--ease);
+}
+
+.feature-card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow);
+  background: white;
+}
+
+.feature-icon {
+  width: 56px;
+  height: 56px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.feature-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.feature-card h3 {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.feature-card p {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 40px 24px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Animations */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .hero-title {
+    font-size: 42px;
+  }
+  .hero-visuals.real-mockups {
+    height: 400px;
+  }
+  .desktop-iframe {
+    width: 100%;
+    height: 400px;
+  }
+  .desktop-iframe iframe {
+    transform: scale(0.432); /* approx 400/925 */
+  }
+  .mobile-iframe {
+    display: none;
+  }
+  .hero-cta {
+    flex-direction: column;
+  }
+  .intro-content {
+    padding: 40px 24px;
+  }
+}

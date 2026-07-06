@@ -1,0 +1,1814 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f5f5f7" />
+  <title>LinkGallery Desktop HTML Mockup</title>
+  <style>
+    :root {
+      --blue: #0066cc;
+      --blue-strong: #0071e3;
+      --blue-soft: #eaf3ff;
+      --ink: #1d1d1f;
+      --muted: #6e6e73;
+      --canvas: #ffffff;
+      --parchment: #f5f5f7;
+      --surface: #fafafc;
+      --line: #e0e0e0;
+      --dark: #1c1c1e;
+      --success: #34c759;
+      --warning: #ff9f0a;
+      --danger: #ff3b30;
+      --glass-light: rgba(255,255,255,.72);
+      --glass-dark: rgba(28,28,30,.62);
+      --ease: cubic-bezier(.2,.8,.2,1);
+      --sidebar: 240px;
+      --inspector: 330px;
+      --shadow: 0 24px 80px rgba(0,0,0,.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(0,102,204,.07), transparent 26%),
+        radial-gradient(circle at 92% 100%, rgba(52,199,89,.05), transparent 24%),
+        var(--parchment);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    button, input, select {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+    }
+
+    .page-shell {
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: 26px;
+    }
+
+    .window {
+      position: relative;
+      width: min(1480px, calc(100vw - 52px));
+      height: min(920px, calc(100dvh - 52px));
+      min-height: 700px;
+      overflow: hidden;
+      border-radius: 22px;
+      background: var(--canvas);
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255,255,255,.9);
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0,1fr);
+      isolation: isolate;
+    }
+
+    .sidebar {
+      position: relative;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: rgba(245,245,247,.9);
+      backdrop-filter: saturate(145%) blur(22px);
+      border-right: 1px solid rgba(224,224,224,.7);
+      padding: 24px 12px 16px;
+    }
+
+    .brand {
+      padding: 0 12px 20px;
+    }
+
+    .brand-title {
+      margin: 0;
+      font-size: 21px;
+      font-weight: 750;
+      letter-spacing: -.025em;
+    }
+
+    .brand-subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      overflow-y: auto;
+      scrollbar-width: none;
+      padding-right: 1px;
+    }
+
+    .sidebar-scroll::-webkit-scrollbar {
+      display: none;
+    }
+
+    .nav-section {
+      margin-bottom: 18px;
+    }
+
+    .nav-heading {
+      padding: 10px 12px 7px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .065em;
+    }
+
+    .nav-item {
+      width: 100%;
+      min-height: 44px;
+      display: grid;
+      grid-template-columns: 24px minmax(0,1fr) auto;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border-radius: 12px;
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+      text-align: left;
+      transition:
+        transform 80ms var(--ease),
+        background 120ms var(--ease),
+        color 120ms var(--ease);
+    }
+
+    .nav-item + .nav-item {
+      margin-top: 2px;
+    }
+
+    .nav-item:hover {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .nav-item:active {
+      transform: scale(.97);
+      background: var(--blue);
+      color: white;
+    }
+
+    .nav-item.active {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .nav-icon {
+      width: 18px;
+      height: 18px;
+      stroke-width: 1.9;
+    }
+
+    .nav-label {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      font-size: 13px;
+      font-weight: 680;
+    }
+
+    .badge {
+      min-width: 28px;
+      height: 22px;
+      padding: 0 7px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--blue);
+      color: white;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 0 4px rgba(52,199,89,.12);
+    }
+
+    .main {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      background: var(--canvas);
+      overflow: hidden;
+    }
+
+    .view {
+      position: absolute;
+      inset: 0;
+      display: none;
+      grid-template-rows: auto minmax(0,1fr);
+      background: var(--canvas);
+    }
+
+    .view.active {
+      display: grid;
+      animation: enter 220ms var(--ease);
+    }
+
+    @keyframes enter {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .toolbar {
+      position: relative;
+      z-index: 4;
+      min-height: 76px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 12px 28px 12px 32px;
+      background: rgba(255,255,255,.84);
+      backdrop-filter: saturate(160%) blur(20px);
+      border-bottom: 1px solid rgba(224,224,224,.64);
+    }
+
+    .toolbar-title {
+      min-width: 210px;
+    }
+
+    .toolbar h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.05;
+      font-weight: 760;
+      letter-spacing: -.025em;
+    }
+
+    .toolbar-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .toolbar-spacer {
+      flex: 1;
+    }
+
+    .search {
+      position: relative;
+      width: min(360px, 35vw);
+      min-width: 220px;
+    }
+
+    .search input {
+      width: 100%;
+      height: 44px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--ink);
+      outline: none;
+      padding: 0 42px 0 42px;
+      transition:
+        border-color 120ms var(--ease),
+        box-shadow 120ms var(--ease),
+        background 120ms var(--ease);
+    }
+
+    .search input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(0,102,204,.12);
+      background: white;
+    }
+
+    .search svg {
+      position: absolute;
+      left: 15px;
+      top: 13px;
+      width: 18px;
+      height: 18px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+
+    .icon-button,
+    .secondary-button,
+    .primary-button {
+      min-height: 44px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 750;
+      transition:
+        transform 80ms var(--ease),
+        background 120ms var(--ease),
+        color 120ms var(--ease),
+        border-color 120ms var(--ease);
+    }
+
+    .icon-button {
+      width: 44px;
+      display: inline-grid;
+      place-items: center;
+      background: white;
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+      stroke-width: 1.9;
+    }
+
+    .icon-button:hover,
+    .secondary-button:hover {
+      background: var(--blue-soft);
+      color: var(--blue);
+      border-color: rgba(0,102,204,.18);
+    }
+
+    .icon-button:active,
+    .secondary-button:active,
+    .primary-button:active {
+      transform: scale(.97);
+      background: var(--blue);
+      color: white;
+    }
+
+    .secondary-button {
+      padding: 0 18px;
+      background: white;
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+
+    .primary-button {
+      padding: 0 22px;
+      background: var(--blue);
+      color: white;
+    }
+
+    .primary-button:hover {
+      background: var(--blue-strong);
+    }
+
+    .content {
+      min-height: 0;
+      overflow: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #d1d1d6 transparent;
+    }
+
+    .content-inner {
+      padding: 26px 32px 48px;
+    }
+
+    .section {
+      margin-bottom: 30px;
+    }
+
+    .section:last-child {
+      margin-bottom: 0;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 20px;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 21px;
+      font-weight: 760;
+      letter-spacing: -.02em;
+    }
+
+    .section-action {
+      min-height: 38px;
+      padding: 0 12px;
+      border-radius: 999px;
+      color: var(--blue);
+      background: transparent;
+      font-size: 12px;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    .section-action:hover {
+      background: var(--blue-soft);
+    }
+
+    .album-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(145px, 1fr));
+      gap: 20px 16px;
+    }
+
+    .album-card {
+      text-align: left;
+      color: inherit;
+      background: transparent;
+      padding: 0;
+      border-radius: 16px;
+      cursor: pointer;
+      transition: transform 80ms var(--ease);
+    }
+
+    .album-card:active {
+      transform: scale(.98);
+    }
+
+    .album-cover {
+      position: relative;
+      aspect-ratio: 1.5;
+      border-radius: 15px;
+      overflow: hidden;
+      background: var(--cover);
+      transition:
+        outline-color 120ms var(--ease),
+        filter 120ms var(--ease);
+    }
+
+    .album-cover::before {
+      content: "";
+      position: absolute;
+      width: 38px;
+      height: 38px;
+      left: 12px;
+      top: 12px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.56);
+    }
+
+    .album-cover::after {
+      content: "";
+      position: absolute;
+      right: 18px;
+      bottom: 20px;
+      width: 50px;
+      height: 24px;
+      border-radius: 6px;
+      background: rgba(29,29,31,.34);
+    }
+
+    .album-card:hover .album-cover {
+      outline: 2px solid rgba(0,102,204,.26);
+      outline-offset: -2px;
+      filter: brightness(.99);
+    }
+
+    .album-tag {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      min-width: 74px;
+      height: 26px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.9);
+      color: var(--blue);
+      font-size: 9px;
+      font-weight: 850;
+      letter-spacing: .03em;
+      z-index: 2;
+      backdrop-filter: blur(10px);
+    }
+
+    .album-tag.device {
+      color: white;
+      background: rgba(0,0,0,.86);
+    }
+
+    .album-name {
+      margin-top: 9px;
+      font-size: 14px;
+      font-weight: 760;
+      letter-spacing: -.012em;
+    }
+
+    .album-count {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .photos-layout {
+      height: 100%;
+      display: grid;
+      grid-template-columns: minmax(0,1fr) var(--inspector);
+      min-height: 0;
+    }
+
+    .media-pane {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .inspector {
+      position: relative;
+      min-width: 0;
+      background: rgba(250,250,252,.84);
+      backdrop-filter: saturate(150%) blur(20px);
+      border-left: 1px solid rgba(224,224,224,.8);
+      padding: 22px;
+      overflow-y: auto;
+    }
+
+    .inspector-preview {
+      position: relative;
+      aspect-ratio: 1.2;
+      border-radius: 18px;
+      overflow: hidden;
+      background: var(--cover, #b7c9d6);
+      margin-bottom: 20px;
+    }
+
+    .inspector-preview::before {
+      content: "";
+      position: absolute;
+      width: 54px;
+      height: 54px;
+      left: 18px;
+      top: 18px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.52);
+    }
+
+    .inspector-preview::after {
+      content: "";
+      position: absolute;
+      right: 22px;
+      bottom: 22px;
+      width: 80px;
+      height: 34px;
+      border-radius: 9px;
+      background: rgba(29,29,31,.34);
+    }
+
+    .inspector-title {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 760;
+    }
+
+    .inspector-meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .meta-list {
+      margin: 20px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 44px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+    }
+
+    .meta-row span:first-child {
+      color: var(--muted);
+    }
+
+    .media-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .media-tile {
+      position: relative;
+      aspect-ratio: 1.18;
+      border-radius: 11px;
+      overflow: hidden;
+      background: var(--cover);
+      cursor: pointer;
+      border: 0;
+      transition:
+        transform 80ms var(--ease),
+        outline-color 120ms var(--ease);
+    }
+
+    .media-tile::before {
+      content: "";
+      position: absolute;
+      width: 34px;
+      height: 34px;
+      left: 12px;
+      top: 12px;
+      border-radius: 50%;
+      background: rgba(255,255,255,.56);
+    }
+
+    .media-tile::after {
+      content: "";
+      position: absolute;
+      right: 13px;
+      bottom: 13px;
+      width: 42px;
+      height: 22px;
+      border-radius: 6px;
+      background: rgba(29,29,31,.32);
+    }
+
+    .media-tile:hover {
+      outline: 2px solid rgba(0,102,204,.22);
+      outline-offset: -2px;
+    }
+
+    .media-tile:active {
+      transform: scale(.96);
+    }
+
+    .media-tile.selected {
+      outline: 2px solid var(--blue);
+      outline-offset: -2px;
+    }
+
+    .media-tile.selected .check {
+      transform: scale(1);
+      opacity: 1;
+    }
+
+    .check {
+      position: absolute;
+      z-index: 3;
+      right: 10px;
+      top: 10px;
+      width: 25px;
+      height: 25px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      font-size: 13px;
+      font-weight: 900;
+      transform: scale(.6);
+      opacity: 0;
+      transition:
+        transform 180ms var(--ease),
+        opacity 140ms var(--ease);
+    }
+
+    .date-heading {
+      margin: 8px 0 12px;
+      font-size: 17px;
+      font-weight: 760;
+    }
+
+    .segmented {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .segment {
+      min-width: 96px;
+      min-height: 36px;
+      border-radius: 999px;
+      background: white;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 760;
+      cursor: pointer;
+      transition:
+        transform 80ms var(--ease),
+        background 120ms var(--ease),
+        color 120ms var(--ease);
+    }
+
+    .segment.active {
+      background: var(--blue);
+      color: white;
+      border-color: var(--blue);
+    }
+
+    .segment:active {
+      transform: scale(.97);
+    }
+
+    .device-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(280px, 1fr));
+      gap: 18px;
+    }
+
+    .device-card,
+    .settings-card {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: white;
+      padding: 20px;
+    }
+
+    .device-card.connected {
+      border-color: rgba(52,199,89,.28);
+      background:
+        linear-gradient(180deg, rgba(52,199,89,.04), white 50%);
+    }
+
+    .device-card-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .device-icon {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 15px;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .device-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .device-card h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .device-card p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .device-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .setting-row {
+      min-height: 66px;
+      display: grid;
+      grid-template-columns: 42px minmax(0,1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 2px;
+    }
+
+    .setting-row + .setting-row {
+      border-top: 1px solid var(--line);
+    }
+
+    .setting-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .setting-title {
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .setting-subtitle {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .switch {
+      position: relative;
+      width: 50px;
+      height: 30px;
+      border-radius: 999px;
+      background: #d1d1d6;
+      cursor: pointer;
+      transition: background 160ms var(--ease);
+    }
+
+    .switch::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 2px 7px rgba(0,0,0,.17);
+      transition: transform 180ms var(--ease);
+    }
+
+    .switch.on {
+      background: var(--blue);
+    }
+
+    .switch.on::after {
+      transform: translateX(20px);
+    }
+
+    .modal-backdrop {
+      position: absolute;
+      z-index: 40;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0,0,0,.22);
+      backdrop-filter: blur(9px);
+    }
+
+    .modal-backdrop.show {
+      display: grid;
+    }
+
+    .modal {
+      width: min(440px, calc(100% - 40px));
+      padding: 24px;
+      border-radius: 24px;
+      background: rgba(255,255,255,.86);
+      backdrop-filter: saturate(170%) blur(24px);
+      border: 1px solid rgba(255,255,255,.7);
+      box-shadow: 0 28px 90px rgba(0,0,0,.2);
+      animation: modal-in 220ms var(--ease);
+    }
+
+    @keyframes modal-in {
+      from { opacity: 0; transform: scale(.96) translateY(8px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    .modal h2 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .modal p {
+      margin: 8px 0 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .modal input {
+      width: 100%;
+      height: 46px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      padding: 0 14px;
+      outline: none;
+      background: white;
+    }
+
+    .modal input:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(0,102,204,.12);
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .toast {
+      position: absolute;
+      z-index: 80;
+      left: 50%;
+      bottom: 24px;
+      max-width: calc(100% - 48px);
+      transform: translate(-50%, 16px);
+      padding: 12px 18px;
+      border-radius: 999px;
+      color: white;
+      background: rgba(29,29,31,.86);
+      backdrop-filter: blur(18px);
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition:
+        opacity 180ms var(--ease),
+        transform 180ms var(--ease);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .viewer {
+      position: absolute;
+      z-index: 60;
+      inset: 0;
+      display: none;
+      background: #050505;
+      color: white;
+    }
+
+    .viewer.show {
+      display: block;
+    }
+
+    .viewer-stage {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .viewer-photo {
+      width: min(70vw, 880px);
+      aspect-ratio: 1.45;
+      border-radius: 22px;
+      background: var(--viewer-cover, #9bb7c8);
+      position: relative;
+      transition: transform 200ms var(--ease);
+    }
+
+    .viewer-photo::before {
+      content: "";
+      position: absolute;
+      width: 130px;
+      height: 130px;
+      left: 8%;
+      top: 12%;
+      border-radius: 50%;
+      background: rgba(255,255,255,.5);
+    }
+
+    .viewer-photo::after {
+      content: "";
+      position: absolute;
+      width: 34%;
+      height: 22%;
+      right: 10%;
+      bottom: 14%;
+      border-radius: 20px;
+      background: rgba(0,0,0,.28);
+    }
+
+    .viewer-bar {
+      position: absolute;
+      z-index: 2;
+      left: 24px;
+      right: 24px;
+      top: 20px;
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 24px;
+      background: var(--glass-dark);
+      backdrop-filter: saturate(150%) blur(20px);
+      border: 1px solid rgba(255,255,255,.16);
+    }
+
+    .viewer-bar .icon-button {
+      color: white;
+      background: rgba(255,255,255,.1);
+      border-color: rgba(255,255,255,.12);
+    }
+
+    .viewer-name {
+      flex: 1;
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .viewer-name span {
+      display: block;
+      color: rgba(255,255,255,.58);
+      font-size: 10px;
+      font-weight: 500;
+      margin-top: 2px;
+    }
+
+    @media (max-width: 1200px) {
+      :root { --inspector: 280px; }
+      .album-grid { grid-template-columns: repeat(3, minmax(145px, 1fr)); }
+      .media-grid { grid-template-columns: repeat(4, minmax(120px,1fr)); }
+    }
+
+    @media (max-width: 960px) {
+      :root { --sidebar: 82px; }
+      .brand-title, .brand-subtitle, .nav-label, .nav-heading, .badge { display: none; }
+      .brand { padding: 0 8px 18px; text-align: center; }
+      .brand::before {
+        content: "LG";
+        display: inline-grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        background: var(--blue);
+        color: white;
+        font-weight: 800;
+      }
+      .nav-item {
+        display: grid;
+        grid-template-columns: 1fr;
+        justify-items: center;
+        padding: 0;
+      }
+      .nav-icon { width: 20px; height: 20px; }
+      .photos-layout { grid-template-columns: minmax(0,1fr); }
+      .inspector { display: none; }
+      .album-grid { grid-template-columns: repeat(3, minmax(135px,1fr)); }
+    }
+
+    @media (max-width: 720px) {
+      .page-shell { padding: 0; }
+      .window {
+        width: 100vw;
+        height: 100dvh;
+        border-radius: 0;
+        border: 0;
+        grid-template-columns: 72px minmax(0,1fr);
+      }
+      .toolbar {
+        padding: 12px 16px;
+        flex-wrap: wrap;
+      }
+      .toolbar-title { min-width: 150px; }
+      .search { order: 3; width: 100%; }
+      .album-grid { grid-template-columns: repeat(2, minmax(130px,1fr)); }
+      .media-grid { grid-template-columns: repeat(3, minmax(95px,1fr)); }
+      .device-grid { grid-template-columns: 1fr; }
+      .content-inner { padding: 22px 18px 42px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 1ms !important;
+        transition-duration: 1ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page-shell">
+    <section class="window" aria-label="LinkGallery desktop app">
+      <aside class="sidebar">
+        <div class="brand">
+          <h1 class="brand-title">LinkGallery</h1>
+          <div class="brand-subtitle">Your media, nearby.</div>
+        </div>
+
+        <div class="sidebar-scroll">
+          <div class="nav-section">
+            <button class="nav-item" data-view="photos">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="3" y="4" width="18" height="16" rx="3"/>
+                <path d="m7 15 3-3 3 3 2-2 2 2M8 8h.01" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span class="nav-label">Photos</span>
+            </button>
+            <button class="nav-item active" data-view="albums">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="4" y="5" width="16" height="14" rx="3"/>
+                <path d="M8 9h8M8 13h8" stroke-linecap="round"/>
+              </svg>
+              <span class="nav-label">Albums</span>
+              <span class="badge">24</span>
+            </button>
+          </div>
+
+          <div class="nav-section">
+            <div class="nav-heading">SMART ALBUMS</div>
+            <button class="nav-item album-link" data-album="favorites">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z" stroke-linejoin="round"/>
+              </svg>
+              <span class="nav-label">Favorites</span>
+            </button>
+            <button class="nav-item album-link" data-album="videos">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="3" y="5" width="14" height="14" rx="3"/>
+                <path d="m17 10 4-2v8l-4-2" stroke-linejoin="round"/>
+              </svg>
+              <span class="nav-label">Videos</span>
+            </button>
+            <button class="nav-item album-link" data-album="screenshots">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="4" y="4" width="16" height="16" rx="3"/>
+                <path d="M8 8h8v8H8z"/>
+              </svg>
+              <span class="nav-label">Screenshots</span>
+            </button>
+          </div>
+
+          <div class="nav-section">
+            <div class="nav-heading">DEVICE ALBUMS</div>
+            <button class="nav-item album-link" data-album="camera">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 8h3l1.5-2h7L17 8h3v10H4V8Z" stroke-linejoin="round"/>
+                <circle cx="12" cy="13" r="3"/>
+              </svg>
+              <span class="nav-label">Camera</span>
+            </button>
+            <button class="nav-item album-link" data-album="dji">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="5" y="3" width="14" height="18" rx="4"/>
+                <circle cx="12" cy="9" r="3"/>
+                <path d="M9 17h6" stroke-linecap="round"/>
+              </svg>
+              <span class="nav-label">DJI Pocket 3</span>
+            </button>
+            <button class="nav-item album-link" data-album="downloads">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M12 3v12m0 0 4-4m-4 4-4-4" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M5 20h14" stroke-linecap="round"/>
+              </svg>
+              <span class="nav-label">Downloads</span>
+            </button>
+          </div>
+
+          <div class="nav-section">
+            <div class="nav-heading">MY ALBUMS</div>
+            <button class="nav-item album-link" data-album="new-zealand">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 6h6l2 2h8v10H4V6Z" stroke-linejoin="round"/>
+              </svg>
+              <span class="nav-label">New Zealand</span>
+            </button>
+            <button class="nav-item album-link" data-album="family">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8-1a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/>
+                <path d="M3 20v-2a5 5 0 0 1 10 0v2m1-7a4 4 0 0 1 7 2.6V20" stroke-linecap="round"/>
+              </svg>
+              <span class="nav-label">Family</span>
+            </button>
+            <button class="nav-item album-link" data-album="projects">
+              <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="4" y="5" width="16" height="14" rx="3"/>
+                <path d="M8 9h8M8 13h5" stroke-linecap="round"/>
+              </svg>
+              <span class="nav-label">Projects</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="nav-section" style="margin:0">
+          <button class="nav-item" data-view="devices">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <rect x="7" y="2" width="10" height="20" rx="3"/>
+              <path d="M10 18h4" stroke-linecap="round"/>
+            </svg>
+            <span class="nav-label">Devices</span>
+            <span class="status-dot"></span>
+          </button>
+          <button class="nav-item" data-view="settings">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19 13.5v-3l-2-.7-.7-1.7.9-1.9-2.1-2.1-1.9.9-1.7-.7L10.5 2h-3l-.7 2.2-1.7.7-1.9-.9L1.1 6.1 2 8l-.7 1.7L0 10.5v3l2 .7.7 1.7-.9 1.9 2.1 2.1 1.9-.9 1.7.7.7 2.3h3l.7-2.3 1.7-.7 1.9.9 2.1-2.1-.9-1.9.7-1.7 2-.7Z" stroke-linejoin="round" transform="translate(1.5 0) scale(.86)"/>
+            </svg>
+            <span class="nav-label">Settings</span>
+          </button>
+        </div>
+      </aside>
+
+      <section class="main">
+        <section class="view active" data-view-panel="albums">
+          <header class="toolbar">
+            <div class="toolbar-title">
+              <h1>Albums</h1>
+              <div class="toolbar-meta">24 albums</div>
+            </div>
+            <div class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="m16.5 16.5 4 4" stroke-linecap="round"/>
+              </svg>
+              <input id="albumSearch" type="search" placeholder="Search albums" />
+            </div>
+            <div class="toolbar-spacer"></div>
+            <button class="primary-button" id="newAlbumBtn">New album</button>
+          </header>
+
+          <div class="content">
+            <div class="content-inner">
+              <section class="section">
+                <div class="section-header">
+                  <h2 class="section-title">Smart Albums</h2>
+                  <button class="section-action">See all</button>
+                </div>
+                <div class="album-grid" id="smartAlbumGrid"></div>
+              </section>
+
+              <section class="section">
+                <div class="section-header">
+                  <h2 class="section-title">Device Albums</h2>
+                  <button class="section-action" data-view="devices">Manage sources</button>
+                </div>
+                <div class="album-grid" id="deviceAlbumGrid"></div>
+              </section>
+
+              <section class="section">
+                <div class="section-header">
+                  <h2 class="section-title">My Albums</h2>
+                </div>
+                <div class="album-grid" id="myAlbumGrid"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="photos">
+          <header class="toolbar">
+            <div class="toolbar-title">
+              <h1>Photos</h1>
+              <div class="toolbar-meta">1,421 items · Connected</div>
+            </div>
+            <div class="search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="m16.5 16.5 4 4" stroke-linecap="round"/>
+              </svg>
+              <input id="photoSearch" type="search" placeholder="Search media" />
+            </div>
+            <div class="toolbar-spacer"></div>
+            <button class="secondary-button" id="selectBtn">Select</button>
+            <button class="icon-button" title="Grid size" aria-label="Grid size">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="4" y="4" width="6" height="6" rx="1"/>
+                <rect x="14" y="4" width="6" height="6" rx="1"/>
+                <rect x="4" y="14" width="6" height="6" rx="1"/>
+                <rect x="14" y="14" width="6" height="6" rx="1"/>
+              </svg>
+            </button>
+          </header>
+
+          <div class="photos-layout">
+            <div class="media-pane content">
+              <div class="content-inner">
+                <div class="date-heading">3 July 2026</div>
+                <div class="media-grid" id="photoGrid"></div>
+                <div class="date-heading" style="margin-top:28px">2 July 2026</div>
+                <div class="media-grid" id="photoGrid2"></div>
+              </div>
+            </div>
+
+            <aside class="inspector">
+              <div class="inspector-preview" id="inspectorPreview"></div>
+              <h2 class="inspector-title" id="inspectorTitle">IMG_1421.HEIC</h2>
+              <div class="inspector-meta">3 July 2026 · 16:42</div>
+              <div class="meta-list">
+                <div class="meta-row"><span>Type</span><strong>HEIC photo</strong></div>
+                <div class="meta-row"><span>Dimensions</span><strong>4032 × 3024</strong></div>
+                <div class="meta-row"><span>Size</span><strong>3.8 MB</strong></div>
+                <div class="meta-row"><span>Source</span><strong>24129PN74C</strong></div>
+              </div>
+              <button class="primary-button" id="copySelectedBtn" style="width:100%">Copy to computer</button>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="album-detail">
+          <header class="toolbar">
+            <button class="secondary-button" id="backToAlbums">‹ Albums</button>
+            <div class="toolbar-title">
+              <h1 id="albumDetailTitle">DJI Pocket 3</h1>
+              <div class="toolbar-meta" id="albumDetailMeta">186 items · Device album</div>
+            </div>
+            <div class="toolbar-spacer"></div>
+            <button class="secondary-button" id="selectAlbumItems">Select</button>
+            <button class="primary-button" id="copyAlbumBtn">Copy album</button>
+          </header>
+
+          <div class="content">
+            <div class="content-inner">
+              <div class="segmented" id="detailSegments">
+                <button class="segment active">All</button>
+                <button class="segment">Photos</button>
+                <button class="segment">Videos</button>
+              </div>
+              <div class="date-heading">3 July 2026</div>
+              <div class="media-grid" id="albumMediaGrid"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="devices">
+          <header class="toolbar">
+            <div class="toolbar-title">
+              <h1>Devices</h1>
+              <div class="toolbar-meta">2 nearby sources</div>
+            </div>
+            <div class="toolbar-spacer"></div>
+            <button class="secondary-button" id="manualConnectBtn">Enter IP manually</button>
+            <button class="primary-button" id="discoverBtn">Find devices</button>
+          </header>
+
+          <div class="content">
+            <div class="content-inner">
+              <div class="device-grid">
+                <article class="device-card connected">
+                  <div class="device-card-head">
+                    <div class="device-icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="7" y="2" width="10" height="20" rx="3"/>
+                        <path d="M10 18h4" stroke-linecap="round"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <h3>24129PN74C</h3>
+                      <p>Connected over Wi-Fi · 108 ms</p>
+                    </div>
+                  </div>
+                  <div class="device-actions">
+                    <button class="primary-button" data-view="photos">Browse photos</button>
+                    <button class="secondary-button" id="disconnectBtn">Disconnect</button>
+                  </div>
+                </article>
+
+                <article class="device-card">
+                  <div class="device-card-head">
+                    <div class="device-icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="5" y="3" width="14" height="18" rx="4"/>
+                        <circle cx="12" cy="9" r="3"/>
+                        <path d="M9 17h6" stroke-linecap="round"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <h3>DJI Pocket 3</h3>
+                      <p>Available · Direct Wi-Fi</p>
+                    </div>
+                  </div>
+                  <div class="device-actions">
+                    <button class="primary-button" id="connectDjiBtn">Connect</button>
+                    <button class="secondary-button">Details</button>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="settings">
+          <header class="toolbar">
+            <div class="toolbar-title">
+              <h1>Settings</h1>
+              <div class="toolbar-meta">Desktop preferences</div>
+            </div>
+          </header>
+
+          <div class="content">
+            <div class="content-inner" style="max-width:820px">
+              <article class="settings-card">
+                <div class="setting-row">
+                  <div class="setting-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M4 6h6l2 2h8v10H4V6Z" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="setting-title">Download folder</div>
+                    <div class="setting-subtitle">C:\Users\Xiang\Pictures\LinkGallery</div>
+                  </div>
+                  <button class="secondary-button" id="chooseFolderBtn">Choose</button>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M5 12h14M12 5v14" stroke-linecap="round"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="setting-title">Preserve album folders</div>
+                    <div class="setting-subtitle">Create destination folders using album names</div>
+                  </div>
+                  <button class="switch on" id="folderSwitch" aria-label="Toggle album folders"></button>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M8 4h8v4H8zM5 10h14v10H5z" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="setting-title">Thumbnail cache</div>
+                    <div class="setting-subtitle">1.2 GB · 4,821 cached previews</div>
+                  </div>
+                  <button class="secondary-button" id="clearCacheBtn">Clear</button>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path d="M4 12h16M12 4v16" stroke-linecap="round"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="setting-title">Reduce motion</div>
+                    <div class="setting-subtitle">Use simpler transitions and remove scale effects</div>
+                  </div>
+                  <button class="switch" id="motionSwitch" aria-label="Toggle reduce motion"></button>
+                </div>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <div class="modal-backdrop" id="albumModal">
+          <form class="modal" id="albumForm">
+            <h2>Create album</h2>
+            <p>Create a custom album. Original files will remain on their source devices.</p>
+            <input id="albumNameInput" placeholder="Album name" autocomplete="off" />
+            <div class="modal-actions">
+              <button type="button" class="secondary-button" id="cancelAlbumBtn">Cancel</button>
+              <button type="submit" class="primary-button">Create album</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="viewer" id="viewer">
+          <div class="viewer-stage">
+            <div class="viewer-photo" id="viewerPhoto"></div>
+          </div>
+          <div class="viewer-bar">
+            <button class="icon-button" id="closeViewer" aria-label="Close viewer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <div class="viewer-name">
+              <div id="viewerName">IMG_1421.HEIC</div>
+              <span>3 July 2026 · 16:42</span>
+            </div>
+            <button class="icon-button" id="zoomOut" aria-label="Zoom out">−</button>
+            <button class="icon-button" id="zoomIn" aria-label="Zoom in">+</button>
+            <button class="icon-button" id="viewerCopy" aria-label="Copy">⇩</button>
+          </div>
+        </div>
+
+        <div class="toast" id="toast">Done</div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const colors = [
+      "#b7c9d6", "#d9b8a7", "#9fb6a0", "#c8b6d9",
+      "#d8c58b", "#9bb7c8", "#c5a6a6", "#afc0d2"
+    ];
+
+    const smartAlbums = [
+      { id: "favorites", name: "Favorites", count: 86, color: colors[0], kind: "smart" },
+      { id: "videos", name: "Videos", count: 124, color: colors[1], kind: "smart" },
+      { id: "screenshots", name: "Screenshots", count: 302, color: colors[2], kind: "smart" },
+      { id: "recent", name: "Recently Added", count: 48, color: colors[3], kind: "smart" }
+    ];
+
+    const deviceAlbums = [
+      { id: "camera", name: "Camera", count: 1024, color: colors[4], kind: "device" },
+      { id: "dji", name: "DJI Pocket 3", count: 186, color: colors[5], kind: "device" },
+      { id: "downloads", name: "Downloads", count: 47, color: colors[6], kind: "device" },
+      { id: "wechat", name: "WeChat", count: 93, color: colors[7], kind: "device" }
+    ];
+
+    const myAlbums = [
+      { id: "new-zealand", name: "New Zealand", count: 74, color: colors[1], kind: "custom" },
+      { id: "family", name: "Family", count: 128, color: colors[2], kind: "custom" },
+      { id: "projects", name: "Projects", count: 35, color: colors[3], kind: "custom" },
+      { id: "unsorted", name: "Unsorted", count: 18, color: colors[4], kind: "custom" }
+    ];
+
+    const allAlbums = [...smartAlbums, ...deviceAlbums, ...myAlbums];
+    const formatCount = value => new Intl.NumberFormat("en-NZ").format(value);
+
+    function albumCard(album) {
+      const button = document.createElement("button");
+      button.className = "album-card";
+      button.dataset.name = album.name.toLowerCase();
+      const tag = album.kind === "smart"
+        ? '<span class="album-tag">SMART</span>'
+        : album.kind === "device"
+          ? '<span class="album-tag device">DEVICE</span>'
+          : "";
+      button.innerHTML = `
+        <div class="album-cover" style="--cover:${album.color}">
+          ${tag}
+        </div>
+        <div class="album-name">${album.name}</div>
+        <div class="album-count">${formatCount(album.count)} items</div>
+      `;
+      button.addEventListener("click", () => openAlbum(album));
+      return button;
+    }
+
+    function renderAlbums(targetId, albums) {
+      const target = document.getElementById(targetId);
+      target.innerHTML = "";
+      albums.forEach(album => target.appendChild(albumCard(album)));
+    }
+
+    renderAlbums("smartAlbumGrid", smartAlbums);
+    renderAlbums("deviceAlbumGrid", deviceAlbums);
+    renderAlbums("myAlbumGrid", myAlbums);
+
+    function makeMediaTile(index, target, prefix = "IMG") {
+      const button = document.createElement("button");
+      button.className = "media-tile";
+      button.style.setProperty("--cover", colors[index % colors.length]);
+      button.dataset.name = `${prefix}_${String(1421 + index).padStart(4, "0")}.HEIC`;
+      button.dataset.color = colors[index % colors.length];
+      button.innerHTML = '<span class="check">✓</span>';
+      button.addEventListener("click", () => mediaClick(button, index));
+      target.appendChild(button);
+    }
+
+    function renderMedia(targetId, count, offset = 0) {
+      const target = document.getElementById(targetId);
+      target.innerHTML = "";
+      for (let i = 0; i < count; i++) makeMediaTile(i + offset, target);
+    }
+
+    renderMedia("photoGrid", 20);
+    renderMedia("photoGrid2", 15, 20);
+    renderMedia("albumMediaGrid", 30, 4);
+
+    let currentView = "albums";
+    let selectionMode = false;
+    let selected = new Set();
+    const viewPanels = [...document.querySelectorAll("[data-view-panel]")];
+    const mainNavItems = [...document.querySelectorAll(".sidebar > .sidebar-scroll .nav-item[data-view], .sidebar > .nav-section .nav-item[data-view]")];
+
+    function setView(name) {
+      currentView = name;
+      viewPanels.forEach(panel => panel.classList.toggle("active", panel.dataset.viewPanel === name));
+      document.querySelectorAll(".nav-item[data-view]").forEach(item => {
+        item.classList.toggle("active", item.dataset.view === name);
+      });
+      if (name !== "photos") {
+        selectionMode = false;
+        selected.clear();
+        updateSelectionUI();
+      }
+    }
+
+    document.addEventListener("click", event => {
+      const nav = event.target.closest("[data-view]");
+      if (nav && !nav.classList.contains("album-card")) {
+        setView(nav.dataset.view);
+      }
+    });
+
+    function openAlbum(album) {
+      document.getElementById("albumDetailTitle").textContent = album.name;
+      const kindLabel = album.kind === "device" ? "Device album" :
+        album.kind === "smart" ? "Smart album" : "My album";
+      document.getElementById("albumDetailMeta").textContent =
+        `${formatCount(album.count)} items · ${kindLabel}`;
+      setView("album-detail");
+    }
+
+    document.querySelectorAll(".album-link").forEach(item => {
+      item.addEventListener("click", event => {
+        event.stopPropagation();
+        const album = allAlbums.find(a => a.id === item.dataset.album);
+        if (album) openAlbum(album);
+      });
+    });
+
+    document.getElementById("backToAlbums").addEventListener("click", () => setView("albums"));
+
+    function mediaClick(button, index) {
+      if (selectionMode) {
+        const key = button.dataset.name;
+        if (selected.has(key)) selected.delete(key);
+        else selected.add(key);
+        button.classList.toggle("selected", selected.has(key));
+        updateSelectionUI();
+        return;
+      }
+
+      document.getElementById("viewerName").textContent = button.dataset.name;
+      document.getElementById("viewerPhoto").style.setProperty("--viewer-cover", button.dataset.color);
+      document.getElementById("viewer").classList.add("show");
+      document.getElementById("inspectorTitle").textContent = button.dataset.name;
+      document.getElementById("inspectorPreview").style.setProperty("--cover", button.dataset.color);
+    }
+
+    function updateSelectionUI() {
+      const button = document.getElementById("selectBtn");
+      button.textContent = selectionMode ? "Cancel" : "Select";
+      document.querySelectorAll(".media-tile").forEach(tile => {
+        if (!selectionMode) tile.classList.remove("selected");
+      });
+      const copy = document.getElementById("copySelectedBtn");
+      copy.textContent = selected.size ? `Copy ${selected.size} selected` : "Copy to computer";
+    }
+
+    document.getElementById("selectBtn").addEventListener("click", () => {
+      selectionMode = !selectionMode;
+      if (!selectionMode) selected.clear();
+      updateSelectionUI();
+    });
+
+    document.getElementById("selectAlbumItems").addEventListener("click", event => {
+      selectionMode = !selectionMode;
+      event.currentTarget.textContent = selectionMode ? "Cancel" : "Select";
+      if (!selectionMode) {
+        selected.clear();
+        document.querySelectorAll("#albumMediaGrid .media-tile").forEach(tile => tile.classList.remove("selected"));
+      }
+    });
+
+    document.getElementById("detailSegments").addEventListener("click", event => {
+      const segment = event.target.closest(".segment");
+      if (!segment) return;
+      event.currentTarget.querySelectorAll(".segment").forEach(item => item.classList.remove("active"));
+      segment.classList.add("active");
+      showToast(`Showing ${segment.textContent.toLowerCase()}`);
+    });
+
+    document.getElementById("albumSearch").addEventListener("input", event => {
+      const query = event.target.value.trim().toLowerCase();
+      document.querySelectorAll(".album-card").forEach(card => {
+        card.style.display = card.dataset.name.includes(query) ? "" : "none";
+      });
+    });
+
+    document.getElementById("photoSearch").addEventListener("input", event => {
+      const query = event.target.value.trim().toLowerCase();
+      document.querySelectorAll(".media-tile").forEach(tile => {
+        tile.style.display = tile.dataset.name.toLowerCase().includes(query) ? "" : "none";
+      });
+    });
+
+    const albumModal = document.getElementById("albumModal");
+    const albumNameInput = document.getElementById("albumNameInput");
+
+    document.getElementById("newAlbumBtn").addEventListener("click", () => {
+      albumModal.classList.add("show");
+      setTimeout(() => albumNameInput.focus(), 50);
+    });
+
+    document.getElementById("cancelAlbumBtn").addEventListener("click", () => {
+      albumModal.classList.remove("show");
+    });
+
+    albumModal.addEventListener("click", event => {
+      if (event.target === albumModal) albumModal.classList.remove("show");
+    });
+
+    document.getElementById("albumForm").addEventListener("submit", event => {
+      event.preventDefault();
+      const name = albumNameInput.value.trim();
+      if (!name) {
+        albumNameInput.focus();
+        return;
+      }
+      const album = {
+        id: `custom-${Date.now()}`,
+        name,
+        count: 0,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        kind: "custom"
+      };
+      myAlbums.push(album);
+      renderAlbums("myAlbumGrid", myAlbums);
+      albumNameInput.value = "";
+      albumModal.classList.remove("show");
+      showToast(`Album "${name}" created`);
+    });
+
+    document.querySelectorAll(".switch").forEach(toggle => {
+      toggle.addEventListener("click", () => {
+        toggle.classList.toggle("on");
+      });
+    });
+
+    const viewer = document.getElementById("viewer");
+    const viewerPhoto = document.getElementById("viewerPhoto");
+    let zoom = 1;
+
+    document.getElementById("closeViewer").addEventListener("click", () => {
+      viewer.classList.remove("show");
+      zoom = 1;
+      viewerPhoto.style.transform = `scale(${zoom})`;
+    });
+
+    document.getElementById("zoomIn").addEventListener("click", () => {
+      zoom = Math.min(2, zoom + .15);
+      viewerPhoto.style.transform = `scale(${zoom})`;
+    });
+
+    document.getElementById("zoomOut").addEventListener("click", () => {
+      zoom = Math.max(.65, zoom - .15);
+      viewerPhoto.style.transform = `scale(${zoom})`;
+    });
+
+    document.getElementById("viewerCopy").addEventListener("click", () => showToast("Copy task created"));
+    document.getElementById("copySelectedBtn").addEventListener("click", () => simulateCopy(document.getElementById("copySelectedBtn"), selected.size ? `Copying ${selected.size} items…` : "Copying…"));
+    document.getElementById("copyAlbumBtn").addEventListener("click", () => simulateCopy(document.getElementById("copyAlbumBtn"), "Copying album…"));
+    document.getElementById("discoverBtn").addEventListener("click", () => simulateTemporaryLabel(document.getElementById("discoverBtn"), "Searching…", "Devices found"));
+    document.getElementById("connectDjiBtn").addEventListener("click", () => simulateTemporaryLabel(document.getElementById("connectDjiBtn"), "Connecting…", "Connected ✓"));
+    document.getElementById("manualConnectBtn").addEventListener("click", () => showToast("Manual connection dialog"));
+    document.getElementById("disconnectBtn").addEventListener("click", () => showToast("Device disconnected"));
+    document.getElementById("chooseFolderBtn").addEventListener("click", () => showToast("Folder picker opened"));
+    document.getElementById("clearCacheBtn").addEventListener("click", () => simulateTemporaryLabel(document.getElementById("clearCacheBtn"), "Clearing…", "Cleared ✓"));
+
+    function simulateTemporaryLabel(button, working, done) {
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = working;
+      setTimeout(() => {
+        button.textContent = done;
+        setTimeout(() => {
+          button.textContent = original;
+          button.disabled = false;
+        }, 850);
+      }, 700);
+    }
+
+    function simulateCopy(button, workingText) {
+      if (button.dataset.busy === "true") return;
+      const original = button.textContent;
+      button.dataset.busy = "true";
+      let progress = 0;
+      const timer = setInterval(() => {
+        progress += 8;
+        button.textContent = `${workingText.replace("…","")} ${progress}%`;
+        if (progress >= 100) {
+          clearInterval(timer);
+          button.style.background = "var(--success)";
+          button.textContent = "Copied ✓";
+          setTimeout(() => {
+            button.style.background = "";
+            button.textContent = original;
+            button.dataset.busy = "false";
+          }, 900);
+        }
+      }, 100);
+    }
+
+    const toast = document.getElementById("toast");
+    let toastTimer;
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.classList.add("show");
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+  </script>
+  <script>
+    const images = [
+      'https://images.unsplash.com/photo-1506744626753-1fa28f673b37?auto=format&fit=crop&w=400&q=80',
+      'https://images.unsplash.com/photo-1472214103451-9374bd1c798e?auto=format&fit=crop&w=400&q=80',
+      'https://images.unsplash.com/photo-1433086966358-54859d0ed716?auto=format&fit=crop&w=400&q=80',
+      'https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=400&q=80',
+      'https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?auto=format&fit=crop&w=400&q=80',
+      'https://images.unsplash.com/photo-1465146344425-f00d5f5c8f07?auto=format&fit=crop&w=400&q=80',
+      'https://images.unsplash.com/photo-1518495973542-4542c06a5843?auto=format&fit=crop&w=400&q=80',
+      'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=400&q=80'
+    ];
+    document.querySelectorAll('.album-cover, .media-tile, .cover, .inspector-preview').forEach((el, index) => {
+      const img = images[index % images.length];
+      el.style.backgroundImage = `url('${img}')`;
+      el.style.backgroundSize = 'cover';
+      el.style.backgroundPosition = 'center';
+    });
+
+    // Prevent any click actions (view switching) but allow CSS :active states
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.nav-item')) return; // Allow navigation bar clicks
+      e.stopPropagation();
+      e.preventDefault();
+    }, true);
+  </script>
+</body>
+</html>

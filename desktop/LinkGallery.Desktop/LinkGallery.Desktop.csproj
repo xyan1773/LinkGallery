@@ -3,7 +3,12 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Resources\photo_link_icon.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Resources\photo_link_icon.ico" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\LinkGallery.Application\LinkGallery.Application.csproj" />
     <ProjectReference Include="..\LinkGallery.Infrastructure\LinkGallery.Infrastructure.csproj" />

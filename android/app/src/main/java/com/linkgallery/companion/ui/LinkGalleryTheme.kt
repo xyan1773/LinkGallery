@@ -5,24 +5,36 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
+internal val LgBlue = Color(0xFF0066CC)
+internal val LgBlueStrong = Color(0xFF0071E3)
+internal val LgBlueSoft = Color(0xFFEAF3FF)
+internal val LgInk = Color(0xFF1D1D1F)
+internal val LgMuted = Color(0xFF6E6E73)
+internal val LgCanvas = Color(0xFFFFFFFF)
+internal val LgParchment = Color(0xFFF5F5F7)
+internal val LgLine = Color(0xFFE0E0E0)
+internal val LgSuccess = Color(0xFF34C759)
+internal val LgDanger = Color(0xFFFF3B30)
+
 private val LinkGalleryLightColors = lightColorScheme(
-    primary = Color(0xFF0F7B6C),
+    primary = LgBlue,
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFDDF3EE),
-    onPrimaryContainer = Color(0xFF052E2A),
-    secondary = Color(0xFF415A77),
+    primaryContainer = LgBlueSoft,
+    onPrimaryContainer = LgInk,
+    secondary = Color(0xFF5AC8FA),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFDDE6F2),
-    onSecondaryContainer = Color(0xFF102033),
-    tertiary = Color(0xFF8A5A12),
+    secondaryContainer = Color(0xFFE7F7FE),
+    onSecondaryContainer = LgInk,
+    tertiary = LgSuccess,
     onTertiary = Color.White,
-    background = Color(0xFFF7F8FA),
-    onBackground = Color(0xFF17202A),
-    surface = Color.White,
-    onSurface = Color(0xFF17202A),
-    surfaceVariant = Color(0xFFE8EDF2),
-    onSurfaceVariant = Color(0xFF637083),
-    error = Color(0xFFB42318),
+    background = LgParchment,
+    onBackground = LgInk,
+    surface = LgCanvas,
+    onSurface = LgInk,
+    surfaceVariant = Color(0xFFFAFAFC),
+    onSurfaceVariant = LgMuted,
+    outline = LgLine,
+    error = LgDanger,
 )
 
 @Composable
