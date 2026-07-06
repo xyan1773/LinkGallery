@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
@@ -944,10 +944,11 @@ public partial class MainWindow : Window, IDisposable
         foreach (var item in items)
         {
             var date = item.TakenAt.LocalDateTime.Date;
-            var dateHeader = previousDate != date
-                ? date.ToString("d MMMM yyyy", CultureInfo.InvariantCulture)
-                : null;
-            TimelineRows.Add(new MediaRow(item, dateHeader));
+            var dateGroup = IsChinese
+                ? date.ToString("yyyy年M月d日", CultureInfo.InvariantCulture)
+                : date.ToString("d MMMM yyyy", CultureInfo.InvariantCulture);
+            var dateHeader = previousDate != date ? dateGroup : null;
+            TimelineRows.Add(new MediaRow(item, dateHeader, dateGroup));
             previousDate = date;
         }
 
@@ -2264,16 +2265,20 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        e.Cancel = true;
         switch (_closeBehavior)
         {
             case CloseBehavior.HideToTray:
+                e.Cancel = true;
                 HideToTray();
                 break;
             case CloseBehavior.QuitApp:
-                QuitApplication();
+                _isQuitting = true;
+                _notifyIcon?.Dispose();
+                _notifyIcon = null;
+                Dispose();
                 break;
             default:
+                e.Cancel = true;
                 ShowClosePrompt();
                 break;
         }
@@ -2416,11 +2421,11 @@ public partial class MainWindow : Window, IDisposable
     {
         private ImageSource? _thumbnail;
 
-        public MediaRow(MediaItem item, string? dateHeader)
+        public MediaRow(MediaItem item, string? dateHeader, string dateGroup)
         {
             Item = item;
             DateHeader = dateHeader;
-            DateGroup = item.TakenAt.LocalDateTime.Date.ToString("d MMMM yyyy", CultureInfo.InvariantCulture);
+            DateGroup = dateGroup;
             PlaceholderBrush = CreatePlaceholderBrush($"{item.DeviceId}:{item.RemoteId}:{item.FileName}");
             TypeLabel = item.Type == MediaType.Image ? "图片" : "视频";
             FileName = item.FileName;

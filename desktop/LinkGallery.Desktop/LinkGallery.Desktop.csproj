@@ -7,7 +7,7 @@
     <ApplicationIcon>Resources\photo_link_icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="Resources\photo_link_icon.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="Resources\photo_link_icon.ico" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\LinkGallery.Application\LinkGallery.Application.csproj" />
