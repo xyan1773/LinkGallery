@@ -1,6 +1,28 @@
 [CmdletBinding()]
 param()
 
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$dotenvPath = Join-Path $repositoryRoot '.env'
+if (Test-Path -LiteralPath $dotenvPath) {
+    foreach ($line in Get-Content -LiteralPath $dotenvPath) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith('#')) {
+            continue
+        }
+
+        $parts = $trimmed.Split('=', 2)
+        if ($parts.Count -ne 2) {
+            throw "Invalid .env entry: $trimmed"
+        }
+
+        $name = $parts[0].Trim()
+        $value = $parts[1].Trim().Trim('"').Trim("'")
+        if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) {
+            [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+        }
+    }
+}
+
 $dotnetRoot = if ($env:DOTNET_ROOT) {
     $env:DOTNET_ROOT
 } elseif (Test-Path -LiteralPath 'E:\tools\dotnet8\dotnet.exe') {

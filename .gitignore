@@ -33,6 +33,8 @@ artifacts/
 android/local.properties
 *.DotSettings.user
 .worktrees/
+.env
+.env.local
 
 # Test output
 TestResults/
