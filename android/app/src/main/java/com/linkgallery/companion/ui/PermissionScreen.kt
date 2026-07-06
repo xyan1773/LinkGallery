@@ -65,7 +65,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -199,21 +201,18 @@ internal fun LinkGalleryApp(
                 tonalElevation = 0.dp,
             ) {
                 AppTab.entries.forEach { tab ->
-                    NavigationBarItem(
-                        selected = selectedTab == tab,
-                        onClick = { selectedTab = tab },
-                        label = { Text(tab.label(strings)) },
-                        icon = { Text(tab.symbol, fontWeight = FontWeight.SemiBold) },
-                        modifier = Modifier.testTag(tab.testTag),
-                        label = { Text(tab.label(strings)) },
-                        icon = { Text(tab.symbol, fontWeight = FontWeight.SemiBold) },
-                        modifier = Modifier.testTag(tab.testTag),
-                    )
+                NavigationBarItem(
+                    selected = selectedTab == tab,
+                    onClick = { selectedTab = tab },
+                    label = { Text(tab.label(strings)) },
+                    icon = { Text(tab.symbol, fontWeight = FontWeight.SemiBold) },
+                    modifier = Modifier.testTag(tab.testTag),
+                )
                 }
             }
         },
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
@@ -827,6 +826,148 @@ private fun PairingCodeDialog(code: String?, onDismiss: () -> Unit, strings: UiS
                     modifier = Modifier.testTag("pairing_code"),
                 )
                 Spacer(Modifier.height(8.dp))
+                Text(strings.pairingCodeHelp)
+            }
+        },
+    )
+}
+
+@Composable
+private fun SettingRow(title: String, detail: String, trailing: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 10.dp)
+            .border(1.dp, LgLine, RoundedCornerShape(19.dp)),
+        colors = CardDefaults.cardColors(containerColor = LgCanvas),
+        shape = RoundedCornerShape(19.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(detail, color = LgMuted, style = MaterialTheme.typography.bodySmall)
+            }
+            trailing()
+        }
+    }
+}
+
+@Composable
+private fun LinkGallerySwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val thumbOffset by animateFloatAsState(
+        targetValue = if (checked) 20f else 0f,
+        animationSpec = tween(180, easing = LgEase),
+        label = "switch-thumb",
+    )
+    val background = if (checked) LgSuccess else LgLine
+    Box(
+        modifier = Modifier
+            .size(width = 50.dp, height = 30.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(background)
+            .clickable { onCheckedChange(!checked) }
+            .padding(3.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            modifier = Modifier
+                .offset(x = thumbOffset.dp)
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(Color.White),
+        )
+    }
+}
+
+@Composable
+private fun FloatingCopyButton(onToast: (String) -> Unit, strings: UiStrings, modifier: Modifier = Modifier) {
+    var copying by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0f) }
+    LaunchedEffect(copying) {
+        if (copying) {
+            progress = 0f
+            while (progress < 100f) {
+                delay(90)
+                progress += 4f
+            }
+            onToast(strings.copyComplete)
+            delay(900)
+            copying = false
+            progress = 0f
+        }
+    }
+
+    PressScale(targetScale = 0.97f) { pressModifier ->
+        Box(
+            modifier = modifier
+                .then(pressModifier)
+                .fillMaxWidth()
+                .height(58.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(if (progress >= 100f) LgSuccess else LgBlue)
+                .clickable(enabled = !copying) { copying = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .fillMaxWidth((progress / 100f).coerceIn(0f, 1f))
+                    .background(Color.White.copy(alpha = 0.16f)),
+            )
+            Text(
+                text = when {
+                    progress >= 100f -> strings.copied
+                    copying -> strings.t("Copying... ${progress.toInt()}%", "正在复制… ${progress.toInt()}%")
+                    else -> strings.copySelected
+                },
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToastOverlay(message: String?, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = message != null,
+        enter = fadeIn(tween(180, easing = LgEase)) +
+            slideInVertically(tween(180, easing = LgEase)) { 14 },
+        exit = fadeOut(tween(180, easing = LgEase)) +
+            slideOutVertically(tween(180, easing = LgEase)) { 14 },
+        modifier = modifier.padding(bottom = 18.dp),
+    ) {
+        Text(
+            text = message.orEmpty(),
+            color = Color.White,
+            modifier = Modifier
+                .background(LgInk.copy(alpha = 0.86f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 16.dp, vertical = 11.dp),
+        )
+    }
+}
+
+@Composable
+private fun PressScale(
+    targetScale: Float,
+    content: @Composable (Modifier) -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) targetScale else 1f,
+        animationSpec = tween(80, easing = LgEase),
+        label = "press-scale",
+    )
+    content(
+        Modifier
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
                 interactionSource = interaction,
                 indication = null,
                 onClick = {},
