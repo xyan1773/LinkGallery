@@ -300,6 +300,9 @@ class ApiController(
 
         val cursor = parameters["cursor"]?.singleOrNull()
             ?: if ("cursor" in parameters) return invalidParameter("cursor") else null
+        val albumId = parameters["albumId"]?.singleOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: if ("albumId" in parameters) return invalidParameter("albumId") else null
         val beforeSortTime = parameters["beforeSortTime"]?.singleOrNull()
             ?: if ("beforeSortTime" in parameters) return invalidParameter("beforeSortTime") else null
         val beforeId = parameters["beforeId"]?.singleOrNull()
@@ -337,7 +340,13 @@ class ApiController(
         return try {
             when (
                 val result = mediaRepository.getPage(
-                    MediaQuery(cursor = cursor, before = before, limit = limit, types = types),
+                    MediaQuery(
+                        cursor = cursor,
+                        before = before,
+                        limit = limit,
+                        types = types,
+                        albumId = albumId,
+                    ),
                 )
             ) {
                 is MediaPageResult.Success -> ApiResponse(200, Json.mediaPage(result.page))

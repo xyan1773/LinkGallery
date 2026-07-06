@@ -129,6 +129,11 @@ public sealed class HttpReadOnlyMediaSource :
             parameters.Add($"type={Uri.EscapeDataString(string.Join(',', query.Types.Select(ToApiType)))}");
         }
 
+        if (!string.IsNullOrWhiteSpace(query.AlbumId))
+        {
+            parameters.Add($"albumId={Uri.EscapeDataString(query.AlbumId)}");
+        }
+
         var dto = await GetJsonAsync<MediaPageDto>(
             $"media?{string.Join('&', parameters)}",
             cancellationToken).ConfigureAwait(false);
@@ -426,6 +431,7 @@ public sealed class HttpReadOnlyMediaSource :
             DurationMilliseconds = dto.DurationMilliseconds,
             TakenAt = dto.TakenAt,
             ModifiedAt = dto.ModifiedAt,
+            AlbumId = dto.AlbumId,
             AlbumName = dto.AlbumName,
             RelativePath = dto.RelativePath,
             Generation = dto.Generation,
@@ -516,6 +522,7 @@ public sealed class HttpReadOnlyMediaSource :
         long? DurationMilliseconds,
         DateTimeOffset TakenAt,
         DateTimeOffset ModifiedAt,
+        string? AlbumId,
         string? AlbumName,
         string? RelativePath,
         long? Generation,

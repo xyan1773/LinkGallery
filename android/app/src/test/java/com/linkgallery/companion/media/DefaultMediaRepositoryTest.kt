@@ -34,13 +34,39 @@ class DefaultMediaRepositoryTest {
         assertEquals(1920, page.items[0].width)
         assertEquals("Camera", page.items[0].albumName)
         assertFalse(page.items[0].id.contains("DCIM"))
-        assertTrue(page.nextCursor?.startsWith("lgc2_") == true)
+        assertTrue(page.nextCursor?.startsWith("lgc3_") == true)
         assertTrue(page.hasMore)
         assertEquals(3, page.total)
         assertEquals(3, source.lastRequest?.limit)
 
         repository.getPage(MediaQuery(cursor = page.nextCursor, limit = 2))
         assertEquals(MediaStoreCursor(30_500, 2), source.lastRequest?.after)
+    }
+
+    @Test
+    fun `album cursor is scoped and cannot be reused for another album`() = runSuspend {
+        val source = FakeDataSource(
+            rows = listOf(
+                row(id = 4, albumId = "camera"),
+                row(id = 3, albumId = "camera"),
+                row(id = 2, albumId = "screenshots"),
+                row(id = 1, albumId = "screenshots"),
+            ),
+        )
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+
+        val camera = repository.getPage(MediaQuery(limit = 1, albumId = "camera"))
+            as MediaPageResult.Success
+        assertEquals("camera", camera.page.items.single().albumId)
+        assertTrue(
+            repository.getPage(
+                MediaQuery(
+                    cursor = camera.page.nextCursor,
+                    limit = 1,
+                    albumId = "screenshots",
+                ),
+            ) is MediaPageResult.InvalidCursor,
+        )
     }
 
     @Test
@@ -293,11 +319,12 @@ class DefaultMediaRepositoryTest {
             lastRequest = request
             return rows
                 .filter { it.type in request.types }
+                .filter { request.albumId == null || it.albumId == request.albumId }
                 .keysetPage(request.after, request.limit)
         }
 
-        override fun count(types: Set<MediaType>): Int =
-            rows.count { it.type in types }
+        override fun count(types: Set<MediaType>, albumId: String?): Int =
+            rows.count { it.type in types && (albumId == null || it.albumId == albumId) }
 
         override fun libraryState(): MediaLibraryState = MediaLibraryState(
             libraryVersion = "library-test",
@@ -380,6 +407,7 @@ class DefaultMediaRepositoryTest {
             type: MediaType = MediaType.IMAGE,
             size: Long = 4_096,
             generation: Long? = null,
+            albumId: String? = "camera",
         ) = MediaStoreRow(
             mediaStoreId = id,
             fileName = "photo-$id.jpg",
@@ -392,6 +420,7 @@ class DefaultMediaRepositoryTest {
             durationMilliseconds = if (type == MediaType.VIDEO) 12_000 else null,
             albumName = "Camera",
             relativePath = "DCIM/Camera/",
+            albumId = albumId,
             generationAdded = generation,
             generationModified = generation,
         )

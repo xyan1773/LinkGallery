@@ -73,6 +73,7 @@ data class MediaQuery(
     val before: MediaStoreCursor? = null,
     val limit: Int = 100,
     val types: Set<MediaType> = MediaType.entries.toSet(),
+    val albumId: String? = null,
 ) {
     init {
         require(cursor == null || before == null) { "Use either cursor or before, not both." }

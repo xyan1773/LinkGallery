@@ -95,17 +95,19 @@ class DefaultMediaRepository(
             return MediaPageResult.PermissionDenied(missingPermissions)
         }
 
-        val cursor = query.before ?: query.cursor?.let(tokenCodec::decodeCursor)
+        val scope = OpaqueMediaTokenCodec.cursorScope(query.albumId, query.types)
+        val cursor = query.before ?: query.cursor?.let { tokenCodec.decodeCursor(it, scope) }
         if (query.cursor != null && cursor == null) {
             return MediaPageResult.InvalidCursor
         }
 
-        val total = dataSource.count(query.types)
+        val total = dataSource.count(query.types, query.albumId)
         val rows = dataSource.query(
             MediaStoreRequest(
                 after = cursor,
                 limit = query.limit + 1,
                 types = query.types,
+                albumId = query.albumId,
             ),
         )
         val hasNextPage = rows.size > query.limit
@@ -114,7 +116,7 @@ class DefaultMediaRepository(
             MediaPage(
                 items = pageRows.map(::toRecord),
                 nextCursor = if (hasNextPage) {
-                    pageRows.lastOrNull()?.let(tokenCodec::encodeCursor)
+                    pageRows.lastOrNull()?.let { tokenCodec.encodeCursor(it, scope) }
                 } else {
                     null
                 },
@@ -208,6 +210,7 @@ class DefaultMediaRepository(
             width = row.width,
             height = row.height,
             durationMilliseconds = row.durationMilliseconds,
+            albumId = row.albumId,
             albumName = row.albumName,
             relativePath = row.relativePath,
             generation = row.generation,

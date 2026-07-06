@@ -12,6 +12,8 @@ public interface IPairedDeviceStore
 
     Task UpsertAddressAsync(DeviceAddress address, CancellationToken cancellationToken);
 
+    Task RemovePairedDeviceAsync(string deviceId, CancellationToken cancellationToken);
+
     Task UpdateProbeSuccessAsync(
         PairedDevice device,
         string host,

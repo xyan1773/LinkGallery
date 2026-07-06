@@ -12,6 +12,7 @@ data class MediaRecord(
     val width: Int? = null,
     val height: Int? = null,
     val durationMilliseconds: Long? = null,
+    val albumId: String? = null,
     val albumName: String? = null,
     val relativePath: String? = null,
     val generation: Long? = null,

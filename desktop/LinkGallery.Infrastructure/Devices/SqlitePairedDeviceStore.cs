@@ -179,6 +179,19 @@ public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task RemovePairedDeviceAsync(
+        string deviceId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM paired_devices WHERE device_id = $deviceId;";
+        command.Parameters.AddWithValue("$deviceId", deviceId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task UpdateProbeSuccessAsync(
         PairedDevice device,
         string host,

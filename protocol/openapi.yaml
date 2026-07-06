@@ -11,24 +11,38 @@ servers:
 security:
   - bearerAuth: []
 paths:
-  /pair/request:
+  /public/info:
+    get:
+      summary: Get the stable public identity used for discovery and pairing
+      operationId: getPublicDeviceInfo
+      security: []
+      responses:
+        "200":
+          description: Public device identity and pairing availability
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicDeviceInfo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /pair/start:
     post:
       summary: Start pairing with this phone
-      operationId: requestPairing
+      operationId: startPairing
       security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PairingRequest"
+              $ref: "#/components/schemas/PairStartRequest"
       responses:
-        "202":
-          description: Pairing is waiting for confirmation on the phone
+        "200":
+          description: Pairing session started
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PairingChallenge"
+                $ref: "#/components/schemas/PairStartResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
   /pair/confirm:
@@ -41,21 +55,45 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PairingConfirmation"
+              $ref: "#/components/schemas/PairConfirmRequest"
       responses:
         "200":
           description: Pairing completed
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PairingResult"
+                $ref: "#/components/schemas/PairConfirmResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
+  /pair/cancel:
+    post:
+      summary: Cancel a pending pairing session
+      operationId: cancelPairing
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairCancelRequest"
+      responses:
+        "200":
+          description: Pairing session cancelled
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /pair/revoke:
+    post:
+      summary: Revoke the bearer token used for this request
+      operationId: revokePairing
+      responses:
+        "200":
+          description: Pairing credential revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /device:
     get:
       summary: Get information about this phone
       operationId: getDevice
-      security: []
       responses:
         "200":
           description: Device information
@@ -71,7 +109,6 @@ paths:
     get:
       summary: Get a page of media metadata
       operationId: getMediaPage
-      security: []
       parameters:
         - name: cursor
           in: query
@@ -110,6 +147,14 @@ paths:
           schema:
             type: string
             example: image,video
+        - name: albumId
+          in: query
+          description: >
+            Stable MediaStore album identifier. When supplied, only media in that
+            album is returned and the opaque cursor is bound to this filter.
+          schema:
+            type: string
+            minLength: 1
       responses:
         "200":
           description: A page of media metadata
@@ -127,7 +172,6 @@ paths:
     get:
       summary: Get the current media library synchronization state
       operationId: getMediaSyncState
-      security: []
       responses:
         "200":
           description: Current library version, opaque latest cursor, and item count
@@ -143,7 +187,6 @@ paths:
     get:
       summary: Get media metadata changes after an opaque synchronization cursor
       operationId: getMediaChanges
-      security: []
       parameters:
         - name: after
           in: query
@@ -175,7 +218,6 @@ paths:
     get:
       summary: Get a lightweight page of current media IDs and generations
       operationId: getMediaManifest
-      security: []
       parameters:
         - name: cursor
           in: query
@@ -366,55 +408,105 @@ components:
           type: string
         message:
           type: string
-    PairingRequest:
+    PublicDeviceInfo:
       type: object
-      required: [desktopDeviceId, desktopName, desktopPublicKey, oneTimeToken]
-      properties:
-        desktopDeviceId:
-          type: string
-        desktopName:
-          type: string
-        desktopPublicKey:
-          type: string
-          description: Base64 encoded public key
-        oneTimeToken:
-          type: string
-          description: Short-lived secret encoded in the QR code
-    PairingChallenge:
-      type: object
-      required: [sessionId, confirmationCode, expiresAt]
-      properties:
-        sessionId:
-          type: string
-        confirmationCode:
-          type: string
-          pattern: "^[0-9]{6}$"
-        expiresAt:
-          type: string
-          format: date-time
-    PairingConfirmation:
-      type: object
-      required: [sessionId, confirmationCode]
-      properties:
-        sessionId:
-          type: string
-        confirmationCode:
-          type: string
-          pattern: "^[0-9]{6}$"
-    PairingResult:
-      type: object
-      required: [deviceId, devicePublicKey, accessToken, expiresAt]
+      required:
+        - deviceId
+        - deviceName
+        - manufacturer
+        - model
+        - apiVersion
+        - serverVersion
+        - instanceId
+        - pairingAvailable
+        - certificateFingerprint
       properties:
         deviceId:
           type: string
-        devicePublicKey:
+        deviceName:
           type: string
-          description: Base64 encoded public key
+        manufacturer:
+          type: string
+        model:
+          type: string
+        apiVersion:
+          type: integer
+        serverVersion:
+          type: string
+        instanceId:
+          type: string
+        pairingAvailable:
+          type: boolean
+        certificateFingerprint:
+          type: string
+    PairStartRequest:
+      type: object
+      required:
+        - desktopId
+        - desktopName
+        - identityPublicKey
+        - ephemeralPublicKey
+        - nonce
+      properties:
+        desktopId:
+          type: string
+        desktopName:
+          type: string
+        desktopModel:
+          type: string
+          nullable: true
+        identityPublicKey:
+          type: string
+        ephemeralPublicKey:
+          type: string
+        nonce:
+          type: string
+    PairStartResponse:
+      type: object
+      required:
+        - pairingSessionId
+        - phoneNonce
+        - expiresAtEpochMillis
+        - attemptsRemaining
+        - codeLength
+      properties:
+        pairingSessionId:
+          type: string
+        phoneNonce:
+          type: string
+        expiresAtEpochMillis:
+          type: integer
+          format: int64
+        attemptsRemaining:
+          type: integer
+        codeLength:
+          type: integer
+    PairConfirmRequest:
+      type: object
+      required: [pairingSessionId, verificationCode]
+      properties:
+        pairingSessionId:
+          type: string
+        verificationCode:
+          type: string
+          pattern: "^[0-9]{6}$"
+    PairConfirmResponse:
+      type: object
+      required: [paired, accessToken, tokenType]
+      properties:
+        paired:
+          type: boolean
         accessToken:
           type: string
-        expiresAt:
+        tokenType:
           type: string
-          format: date-time
+          enum: [Bearer]
+    PairCancelRequest:
+      type: object
+      required: [pairingSessionId]
+      properties:
+        pairingSessionId:
+          type: string
     DeviceInfo:
       type: object
       required: [id, name, platform, mediaCount]
@@ -468,6 +560,9 @@ components:
         modifiedAt:
           type: string
           format: date-time
+        albumId:
+          type: string
+          nullable: true
         albumName:
           type: string
           nullable: true

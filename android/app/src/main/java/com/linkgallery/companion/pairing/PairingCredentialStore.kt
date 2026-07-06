@@ -11,6 +11,7 @@ interface PairingCredentialStore {
     fun save(credential: PairedCredential)
     fun findByTokenHash(tokenHash: String): PairedCredential?
     fun revokeByTokenHash(tokenHash: String): Boolean
+    fun list(): List<PairedCredential>
 }
 
 class InMemoryPairingCredentialStore : PairingCredentialStore {
@@ -24,6 +25,8 @@ class InMemoryPairingCredentialStore : PairingCredentialStore {
 
     override fun revokeByTokenHash(tokenHash: String): Boolean =
         credentials.remove(tokenHash) != null
+
+    override fun list(): List<PairedCredential> = credentials.values.toList()
 
     fun containsTokenHash(tokenHash: String): Boolean = credentials.containsKey(tokenHash)
 }

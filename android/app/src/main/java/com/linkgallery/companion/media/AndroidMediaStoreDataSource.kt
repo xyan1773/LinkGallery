@@ -33,8 +33,8 @@ class AndroidMediaStoreDataSource(
         }.orEmpty()
     }
 
-    override fun count(types: Set<MediaType>): Int {
-        val (selection, arguments) = selectionFor(types)
+    override fun count(types: Set<MediaType>, albumId: String?): Int {
+        val (selection, arguments) = selectionFor(types, albumId)
         return contentResolver.query(
             COLLECTION,
             arrayOf(ID),
@@ -224,13 +224,21 @@ class AndroidMediaStoreDataSource(
 
     private fun selectionFor(
         types: Set<MediaType>,
+        albumId: String? = null,
     ): Pair<String, List<String>> {
         val arguments = mutableListOf<String>()
         val mediaTypePlaceholders = types.joinToString(",") { type ->
             arguments += type.mediaStoreValue.toString()
             "?"
         }
-        return "$MEDIA_TYPE IN ($mediaTypePlaceholders)" to arguments
+        val selection = buildString {
+            append("$MEDIA_TYPE IN ($mediaTypePlaceholders)")
+            if (albumId != null) {
+                append(" AND $BUCKET_ID = ?")
+                arguments += albumId
+            }
+        }
+        return selection to arguments
     }
 
     private fun Cursor.toRow(): MediaStoreRow {
@@ -249,6 +257,7 @@ class AndroidMediaStoreDataSource(
             width = nullableInt(WIDTH),
             height = nullableInt(HEIGHT),
             durationMilliseconds = if (type == MediaType.VIDEO) nullableLong(DURATION) else null,
+            albumId = nullableString(BUCKET_ID),
             albumName = nullableString(BUCKET_DISPLAY_NAME),
             relativePath = nullableString(RELATIVE_PATH),
             generationAdded = nullableLongIfPresent(GENERATION_ADDED),
@@ -309,6 +318,7 @@ class AndroidMediaStoreDataSource(
         const val WIDTH = MediaStore.MediaColumns.WIDTH
         const val HEIGHT = MediaStore.MediaColumns.HEIGHT
         const val DURATION = MediaStore.Video.VideoColumns.DURATION
+        const val BUCKET_ID = MediaStore.Images.ImageColumns.BUCKET_ID
         const val BUCKET_DISPLAY_NAME = MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME
         const val RELATIVE_PATH = MediaStore.MediaColumns.RELATIVE_PATH
         const val MEDIA_TYPE = MediaStore.Files.FileColumns.MEDIA_TYPE
@@ -323,6 +333,7 @@ class AndroidMediaStoreDataSource(
             WIDTH,
             HEIGHT,
             DURATION,
+            BUCKET_ID,
             BUCKET_DISPLAY_NAME,
             RELATIVE_PATH,
             MEDIA_TYPE,
@@ -364,6 +375,10 @@ internal fun MediaStoreRequest.toMediaStoreQuerySpec(): MediaStoreQuerySpec {
     """.trimIndent().replace(Regex("\\s+"), " ")
     val selection = buildString {
         append("${MediaStore.Files.FileColumns.MEDIA_TYPE} IN ($typePlaceholders)")
+        albumId?.let {
+            append(" AND ${MediaStore.Images.ImageColumns.BUCKET_ID} = ?")
+            arguments += it
+        }
         after?.let { cursor ->
             append(" AND ((")
             append("${MediaStore.Images.ImageColumns.DATE_TAKEN} IS NOT NULL")

@@ -133,6 +133,32 @@ public sealed class SqlitePairedDeviceStoreTests
         Assert.AreEqual("phone-1", updated.DeviceId);
     }
 
+    [TestMethod]
+    public async Task RemovePairedDeviceDeletesDeviceAndSavedAddresses()
+    {
+        using var store = new SqlitePairedDeviceStore(_databasePath);
+        var device = Device(status: PairedDeviceStatus.Online);
+        await store.UpsertPairedDeviceAsync(device, CancellationToken.None);
+        await store.UpsertAddressAsync(
+            new DeviceAddress
+            {
+                DeviceId = device.DeviceId,
+                Host = device.LastHost!,
+                Port = device.LastPort!.Value,
+                Source = DeviceAddressSource.Manual,
+            },
+            CancellationToken.None);
+
+        await store.RemovePairedDeviceAsync(device.DeviceId, CancellationToken.None);
+
+        Assert.IsEmpty(await store.ListPairedDevicesAsync(CancellationToken.None));
+        await using var connection = new SqliteConnection($"Data Source={_databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM device_addresses;";
+        Assert.AreEqual(0L, (long)(await command.ExecuteScalarAsync())!);
+    }
+
     private static PairedDevice Device(PairedDeviceStatus status) => new()
     {
         DeviceId = "phone-1",

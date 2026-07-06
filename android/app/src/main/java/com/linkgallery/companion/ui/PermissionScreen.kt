@@ -62,6 +62,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.linkgallery.companion.LinkGalleryServiceState
 import com.linkgallery.companion.media.AndroidMediaPermissionGateway
 import com.linkgallery.companion.media.MediaPageResult
 import com.linkgallery.companion.media.MediaQuery
@@ -92,6 +94,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val LgEase = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
@@ -100,6 +103,8 @@ private val LgEase = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
 fun PermissionScreen(
     connectionGuide: ConnectionGuide,
     mediaRepository: MediaRepository? = null,
+    serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
+    onServiceRunningChange: (Boolean) -> Unit = {},
     onOpenPairingWindow: () -> Long = { 0L },
     activePairingCodeProvider: () -> String? = { "428913" },
 ) {
@@ -125,6 +130,8 @@ fun PermissionScreen(
         connectionGuide = connectionGuide,
         mediaRepository = mediaRepository,
         permissionGranted = permissionGranted,
+        serviceState = serviceState,
+        onServiceRunningChange = onServiceRunningChange,
         onPermissionRequest = { launcher.launch(permissions) },
         onOpenPairingWindow = onOpenPairingWindow,
         activePairingCodeProvider = activePairingCodeProvider,
@@ -137,6 +144,8 @@ internal fun LinkGalleryApp(
     mediaRepository: MediaRepository?,
     permissionGranted: Boolean,
     onPermissionRequest: () -> Unit,
+    serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
+    onServiceRunningChange: (Boolean) -> Unit = {},
     onOpenPairingWindow: () -> Long = { 0L },
     activePairingCodeProvider: () -> String? = { "428913" },
 ) {
@@ -180,7 +189,9 @@ internal fun LinkGalleryApp(
         } else if (mediaRepository == null) {
             GalleryState.Empty
         } else {
-            when (val result = mediaRepository.getPage(MediaQuery(limit = 80))) {
+            when (val result = withContext(Dispatchers.IO) {
+                mediaRepository.getPage(MediaQuery(limit = 200))
+            }) {
                 is MediaPageResult.Success -> if (result.page.items.isEmpty()) {
                     GalleryState.Empty
                 } else {
@@ -270,6 +281,8 @@ internal fun LinkGalleryApp(
                         )
                         AppTab.Connection -> DevicesPage(
                             connectionGuide = connectionGuide,
+                            serviceState = serviceState,
+                            onServiceRunningChange = onServiceRunningChange,
                             permissionGranted = permissionGranted,
                             onPair = {
                                 onOpenPairingWindow()
@@ -293,7 +306,7 @@ internal fun LinkGalleryApp(
 
     if (showPairing) {
         PairingCodeDialog(
-            code = activePairingCodeProvider(),
+            code = serviceState.pairingCode ?: activePairingCodeProvider(),
             onDismiss = { showPairing = false },
             strings = strings,
         )
@@ -328,6 +341,60 @@ private fun AlbumsPage(
     val smartAlbums = remember(mediaItems, strings.uiLanguage) { buildSmartAlbums(mediaItems, strings) }
     val deviceAlbums = remember(mediaItems, strings.uiLanguage) { buildDeviceAlbums(mediaItems, strings) }
     val customAlbums = remember(mediaItems) { emptyList<AlbumUi>() }
+    val scope = rememberCoroutineScope()
+    var activeAlbum by remember { mutableStateOf<AlbumUi?>(null) }
+    var activeAlbumItems by remember { mutableStateOf<List<MediaRecord>>(emptyList()) }
+    var albumLoading by remember { mutableStateOf(false) }
+
+    if (activeAlbum != null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+        ) {
+            TopBar(
+                title = activeAlbum!!.name,
+                subtitle = strings.itemCount(activeAlbumItems.size),
+                action = strings.back,
+                onAction = {
+                    activeAlbum = null
+                    activeAlbumItems = emptyList()
+                },
+            )
+            if (albumLoading) {
+                StateCard(strings.loadingMedia, strings.preparingFirstPage)
+            } else if (activeAlbumItems.isEmpty()) {
+                StateCard(strings.noMediaFound, strings.albumMayBeEmpty)
+            } else {
+                MediaGrid(
+                    items = activeAlbumItems,
+                    selectedFilter = MediaFilter.All,
+                    mediaRepository = mediaRepository,
+                    onToast = onToast,
+                    strings = strings,
+                )
+            }
+        }
+        return
+    }
+
+    fun openAlbum(album: AlbumUi) {
+        if (album.albumId == null || mediaRepository == null) {
+            onToast(strings.albumUnavailable)
+            return
+        }
+        activeAlbum = album
+        albumLoading = true
+        scope.launch {
+            activeAlbumItems = when (val result = withContext(Dispatchers.IO) {
+                mediaRepository.getPage(MediaQuery(limit = 200, albumId = album.albumId))
+            }) {
+                is MediaPageResult.Success -> result.page.items
+                else -> emptyList()
+            }
+            albumLoading = false
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -348,7 +415,14 @@ private fun AlbumsPage(
             Spacer(Modifier.height(18.dp))
         }
 
-        AlbumSection(strings.smartAlbums, strings.seeAll, smartAlbums, mediaRepository = mediaRepository, strings = strings)
+        AlbumSection(
+            strings.smartAlbums,
+            strings.seeAll,
+            smartAlbums,
+            mediaRepository = mediaRepository,
+            strings = strings,
+            onAlbumClick = ::openAlbum,
+        )
         Spacer(Modifier.height(20.dp))
         AlbumSection(
             title = strings.deviceAlbums,
@@ -356,6 +430,7 @@ private fun AlbumsPage(
             albums = deviceAlbums,
             mediaRepository = mediaRepository,
             onAction = onManageDevices,
+            onAlbumClick = ::openAlbum,
             strings = strings,
         )
         Spacer(Modifier.height(20.dp))
@@ -365,6 +440,7 @@ private fun AlbumsPage(
             albums = customAlbums,
             mediaRepository = mediaRepository,
             emptyMessage = strings.noCustomAlbums,
+            onAlbumClick = ::openAlbum,
             strings = strings,
         )
     }
@@ -434,6 +510,8 @@ private fun PhotosPage(
 @Composable
 private fun DevicesPage(
     connectionGuide: ConnectionGuide,
+    serviceState: LinkGalleryServiceState,
+    onServiceRunningChange: (Boolean) -> Unit,
     permissionGranted: Boolean,
     onPair: () -> Unit,
     onToast: (String) -> Unit,
@@ -441,8 +519,16 @@ private fun DevicesPage(
     language: UiLanguage,
     onLanguageChange: (UiLanguage) -> Unit,
 ) {
-    var serviceRunning by remember { mutableStateOf(true) }
     var showSettings by remember { mutableStateOf(false) }
+    val serviceAddress = remember(serviceState.addresses, serviceState.port, connectionGuide.address) {
+        val address = serviceState.addresses.firstOrNull()
+        val port = serviceState.port
+        if (address != null && port != null) {
+            "http://$address:$port/api/v1/"
+        } else {
+            connectionGuide.address
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -490,10 +576,10 @@ private fun DevicesPage(
                         Modifier
                             .size(9.dp)
                             .clip(CircleShape)
-                            .background(LgSuccess),
+                            .background(if (serviceState.running) LgSuccess else LgMuted),
                     )
                     Text(
-                        text = if (serviceRunning) strings.serviceRunning else strings.serviceStopped,
+                        text = if (serviceState.running) strings.serviceRunning else strings.serviceStopped,
                         color = Color.White,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(start = 8.dp),
@@ -507,7 +593,7 @@ private fun DevicesPage(
                     modifier = Modifier.padding(top = 18.dp),
                 )
                 Text(
-                    text = connectionGuide.address,
+                    text = serviceAddress,
                     color = Color.White.copy(alpha = 0.88f),
                     modifier = Modifier
                         .padding(top = 8.dp)
@@ -521,9 +607,9 @@ private fun DevicesPage(
             detail = strings.allowPairedComputers,
             trailing = {
                 LinkGallerySwitch(
-                    checked = serviceRunning,
+                    checked = serviceState.running,
                     onCheckedChange = {
-                        serviceRunning = it
+                        onServiceRunningChange(it)
                         onToast(if (it) strings.mediaServiceStarted else strings.mediaServiceStopped)
                     },
                 )
@@ -531,7 +617,10 @@ private fun DevicesPage(
         )
         SettingRow(
             title = strings.pairedComputer,
-            detail = strings.noPairedDesktop,
+            detail = serviceState.pairedDesktopNames
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString()
+                ?: strings.noPairedDesktop,
             trailing = {
                 Text(strings.pair, color = LgBlue, fontWeight = FontWeight.SemiBold)
             },
@@ -572,6 +661,7 @@ private fun AlbumSection(
     strings: UiStrings,
     emptyMessage: String? = null,
     onAction: () -> Unit = {},
+    onAlbumClick: (AlbumUi) -> Unit = {},
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -597,14 +687,19 @@ private fun AlbumSection(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         items(albums) { album ->
-            AlbumCard(album, mediaRepository, strings)
+            AlbumCard(album, mediaRepository, strings, onAlbumClick)
         }
     }
 }
 
 @Composable
-private fun AlbumCard(album: AlbumUi, mediaRepository: MediaRepository?, strings: UiStrings) {
-    Column {
+private fun AlbumCard(
+    album: AlbumUi,
+    mediaRepository: MediaRepository?,
+    strings: UiStrings,
+    onClick: (AlbumUi) -> Unit,
+) {
+    Column(modifier = Modifier.clickable { onClick(album) }) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -660,7 +755,7 @@ private fun MediaGrid(
         MediaFilter.Photos -> items.filter { it.type == MediaType.IMAGE }
         MediaFilter.Videos -> items.filter { it.type == MediaType.VIDEO }
     }
-    val grouped = filtered.groupBy {
+    val grouped = filtered.sortedByDescending { it.takenAt }.groupBy {
         it.takenAt.atZone(ZoneId.systemDefault()).toLocalDate()
     }
     LazyVerticalGrid(
@@ -1029,6 +1124,8 @@ private data class AlbumUi(
     val color: Color,
     val tag: String? = null,
     val cover: MediaRecord? = null,
+    val albumId: String? = null,
+    val relativePath: String? = null,
 )
 
 private fun buildSmartAlbums(items: List<MediaRecord>, strings: UiStrings): List<AlbumUi> {
@@ -1055,12 +1152,26 @@ private fun buildSmartAlbums(items: List<MediaRecord>, strings: UiStrings): List
 private fun buildDeviceAlbums(items: List<MediaRecord>, strings: UiStrings): List<AlbumUi> {
     val colors = listOf(LgSuccess, LgBlue, Color(0xFF8E8E93), Color(0xFF5856D6))
     return items
-        .groupBy { it.albumName?.takeIf(String::isNotBlank) ?: strings.unsorted }
+        .groupBy {
+            it.albumId
+                ?: it.relativePath?.takeIf(String::isNotBlank)
+                ?: "__unsorted"
+        }
         .toList()
-        .sortedByDescending { (_, albumItems) -> albumItems.size }
+        .sortedByDescending { (_, albumItems) -> albumItems.maxOf { it.takenAt } }
         .take(8)
-        .mapIndexed { index, (name, albumItems) ->
-            AlbumUi(name, albumItems.size, colors[index % colors.size], strings.deviceTag, albumItems.firstOrNull())
+        .mapIndexed { index, (_, albumItems) ->
+            val newestFirst = albumItems.sortedByDescending { it.takenAt }
+            val first = newestFirst.first()
+            AlbumUi(
+                name = first.albumName?.takeIf(String::isNotBlank) ?: strings.unsorted,
+                count = albumItems.size,
+                color = colors[index % colors.size],
+                tag = strings.deviceTag,
+                cover = first,
+                albumId = first.albumId,
+                relativePath = first.relativePath,
+            )
         }
 }
 
@@ -1075,6 +1186,7 @@ private class UiStrings(val uiLanguage: UiLanguage) {
 
     val photos get() = t("Photos", "照片")
     val albums get() = t("Albums", "相册")
+    val back get() = t("Back", "返回")
     val devices get() = t("Devices", "设备")
     val settings get() = t("Settings", "设置")
     val newAlbum get() = t("New album", "新建相册")
@@ -1092,6 +1204,14 @@ private class UiStrings(val uiLanguage: UiLanguage) {
     val noCustomAlbums get() = t("No custom albums yet", "还没有自定义相册")
     val noAlbumsYet get() = t("No albums yet", "还没有相册")
     val noMediaFound get() = t("No media found", "没有找到媒体")
+    val albumMayBeEmpty get() = t(
+        "This album may be empty or its media was moved on the phone.",
+        "这个相册可能为空，或其中的媒体已在手机上移动。",
+    )
+    val albumUnavailable get() = t(
+        "This smart album will be available after indexing.",
+        "此智能相册将在索引完成后可用。",
+    )
     val galleryCursorInvalid get() = t("Gallery cursor is invalid.", "图库分页游标无效。")
     val keepOpenForWindows get() = t("Keep the app open while Windows connects.", "请保持应用打开，等待电脑连接。")
     val loadingMedia get() = t("Loading media...", "正在加载媒体…")

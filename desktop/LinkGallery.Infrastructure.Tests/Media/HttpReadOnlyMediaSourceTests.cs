@@ -167,7 +167,7 @@ public sealed class HttpReadOnlyMediaSourceTests
                     """),
                 "/api/v1/media" => Json(
                     """
-                    {"items":[{"id":"m1","fileName":"IMG.jpg","type":"image","fileSize":2048,"width":100,"height":80,"durationMilliseconds":null,"takenAt":"2026-06-30T01:00:00Z","modifiedAt":"2026-06-30T01:01:00Z","albumName":"Camera","relativePath":"DCIM/Camera","thumbnailUrl":"/api/v1/media/m1/thumbnail?size=256","sourceDevice":null,"sourceApplication":null,"isEditedExport":false}],"nextCursor":"cursor-2","hasMore":true,"total":42}
+                    {"items":[{"id":"m1","fileName":"IMG.jpg","type":"image","fileSize":2048,"width":100,"height":80,"durationMilliseconds":null,"takenAt":"2026-06-30T01:00:00Z","modifiedAt":"2026-06-30T01:01:00Z","albumId":"camera-1","albumName":"Camera","relativePath":"DCIM/Camera","thumbnailUrl":"/api/v1/media/m1/thumbnail?size=256","sourceDevice":null,"sourceApplication":null,"isEditedExport":false}],"nextCursor":"cursor-2","hasMore":true,"total":42}
                     """),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
@@ -177,7 +177,10 @@ public sealed class HttpReadOnlyMediaSourceTests
 
         var device = await source.GetDeviceInfoAsync(CancellationToken.None);
         var page = await source.GetMediaPageAsync(
-            new MediaQuery(Limit: 50, Types: new HashSet<MediaType> { MediaType.Image }),
+            new MediaQuery(
+                Limit: 50,
+                Types: new HashSet<MediaType> { MediaType.Image },
+                AlbumId: "camera-1"),
             CancellationToken.None);
 
         Assert.AreEqual("Pixel", device.Name);
@@ -189,9 +192,11 @@ public sealed class HttpReadOnlyMediaSourceTests
         Assert.AreEqual(42, page.Total);
         Assert.AreEqual("phone-1", page.Items[0].DeviceId);
         Assert.AreEqual(MediaType.Image, page.Items[0].Type);
+        Assert.AreEqual("camera-1", page.Items[0].AlbumId);
         Assert.AreEqual("/api/v1/media/m1/thumbnail?size=256", page.Items[0].ThumbnailUrl);
         StringAssert.Contains(handler.LastRequestUri?.Query, "limit=50");
         StringAssert.Contains(handler.LastRequestUri?.Query, "type=image");
+        StringAssert.Contains(handler.LastRequestUri?.Query, "albumId=camera-1");
     }
 
     [TestMethod]

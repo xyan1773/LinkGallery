@@ -95,7 +95,8 @@ public interface IMediaThumbnailCache
 public sealed record MediaQuery(
     string? Cursor = null,
     int Limit = 100,
-    IReadOnlySet<MediaType>? Types = null);
+    IReadOnlySet<MediaType>? Types = null,
+    string? AlbumId = null);
 
 public sealed record MediaPage(
     IReadOnlyList<MediaItem> Items,

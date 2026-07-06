@@ -108,6 +108,7 @@ internal object Json {
         "durationMilliseconds" to value.durationMilliseconds?.toString().orNull(),
         "takenAt" to string(value.takenAt.toString()),
         "modifiedAt" to string(value.modifiedAt.toString()),
+        "albumId" to nullableString(value.albumId),
         "albumName" to nullableString(value.albumName),
         "relativePath" to nullableString(value.relativePath),
         "generation" to value.generation?.toString().orNull(),

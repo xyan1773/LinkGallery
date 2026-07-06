@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -13,10 +14,13 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using LinkGallery.Application.Media;
+using LinkGallery.Application.Devices;
 using LinkGallery.Application.Transfers;
+using LinkGallery.Domain.Devices;
 using LinkGallery.Domain.Media;
 using LinkGallery.Domain.Transfers;
 using LinkGallery.Infrastructure.Media;
+using LinkGallery.Infrastructure.Devices;
 using LinkGallery.Infrastructure.Transfers;
 using Microsoft.Win32;
 using Brush = System.Windows.Media.Brush;
@@ -31,6 +35,7 @@ namespace LinkGallery.Desktop;
 public partial class MainWindow : Window, IDisposable
 {
     private const int PageSize = 100;
+    private const int DecodedThumbnailCapacity = 128;
     private static readonly JsonSerializerOptions PreferencesJsonOptions = new() { WriteIndented = true };
     private static readonly ThumbnailSize TimelineThumbnailSize = new(256, 256);
     private enum UiLanguage
@@ -51,12 +56,22 @@ public partial class MainWindow : Window, IDisposable
         public string? Language { get; set; }
 
         public string? CloseBehavior { get; set; }
+
+        public string? DesktopId { get; set; }
     }
 
     private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly SemaphoreSlim _thumbnailConcurrency = new(6, 6);
+    private readonly SemaphoreSlim _queryGate = new(1, 1);
+    private readonly Dictionary<DecodedThumbnailKey, ImageSource> _decodedThumbnails = [];
+    private readonly Queue<DecodedThumbnailKey> _decodedThumbnailOrder = [];
     private readonly SqliteMediaIndex _mediaIndex;
+    private readonly BackgroundIndexGate _backgroundIndexGate = new();
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
+    private readonly SqlitePairedDeviceStore _pairedDeviceStore;
+    private readonly WindowsAccessTokenStore _accessTokenStore;
+    private readonly HttpPairingClient _pairingClient;
+    private readonly DiscoveryManager _discoveryManager = new();
     private readonly LocalCopyCatalog _localCopies;
     private readonly ThumbnailCacheReader _thumbnailCache;
     private readonly string _dataDirectory;
@@ -67,21 +82,26 @@ public partial class MainWindow : Window, IDisposable
     private readonly PersistentTransferCoordinator _transferCoordinator;
     private readonly DispatcherTimer _transferRefreshTimer;
     private readonly DispatcherTimer _toastTimer;
-    private readonly List<AlbumRow> _customAlbums = [];
     private string _downloadDirectory;
     private bool _preserveAlbumFolders = true;
     private bool _reduceMotion;
     private UiLanguage _language = UiLanguage.English;
     private CloseBehavior _closeBehavior = CloseBehavior.AskEveryTime;
+    private string _desktopId = Guid.NewGuid().ToString("N");
     private Forms.NotifyIcon? _notifyIcon;
     private bool _isQuitting;
     private bool _isSelectionMode;
+    private bool _transferGatePaused;
     private MediaRow? _viewerRow;
     private double _viewerZoom = 1;
     private CancellationTokenSource? _connectionCancellation;
     private CancellationTokenSource? _backgroundSyncCancellation;
+    private CancellationTokenSource? _queryCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
+    private string? _activeAccessToken;
+    private PairedDevice? _activePairedDevice;
+    private Uri? _activeApiAddress;
     private string? _remoteNextCursor;
     private bool _hasMoreRemoteItems;
     private bool _hasMoreIndexedItems;
@@ -98,8 +118,14 @@ public partial class MainWindow : Window, IDisposable
         _dataDirectory = dataDirectory;
         _preferencesPath = Path.Combine(dataDirectory, "preferences.json");
         LoadPreferences();
+        SavePreferences();
         _mediaIndex = new SqliteMediaIndex(Path.Combine(dataDirectory, "media-index.db"));
-        _synchronizer = new IncrementalMediaIndexSynchronizer(_mediaIndex);
+        _synchronizer = new IncrementalMediaIndexSynchronizer(
+            _mediaIndex,
+            gate: _backgroundIndexGate);
+        _pairedDeviceStore = new SqlitePairedDeviceStore(Path.Combine(dataDirectory, "devices.db"));
+        _accessTokenStore = new WindowsAccessTokenStore(Path.Combine(dataDirectory, "credentials"));
+        _pairingClient = new HttpPairingClient(_httpClient);
         _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
         _thumbnailCacheDirectory = Path.Combine(dataDirectory, "cache", "thumbnails");
         _thumbnailCache = new ThumbnailCacheReader(_thumbnailCacheDirectory);
@@ -121,6 +147,7 @@ public partial class MainWindow : Window, IDisposable
         _toastTimer.Tick += OnToastTimerTick;
         InitializeComponent();
         DataContext = this;
+        PopulateDateFilters();
         ConfigureMediaGroups(TimelineRows);
         ConfigureMediaGroups(AlbumDetailRows);
         _downloadDirectory = ResolveDefaultDownloadDirectory();
@@ -133,6 +160,67 @@ public partial class MainWindow : Window, IDisposable
     private bool IsChinese => _language == UiLanguage.Chinese;
 
     private string L(string english, string chinese) => IsChinese ? chinese : english;
+
+    private void PopulateDateFilters()
+    {
+        DateFilterComboBox.Items.Clear();
+        DateFilterComboBox.Items.Add(new ComboBoxItem { Content = L("All dates", "全部日期"), Tag = "all" });
+        var now = DateTime.Today;
+        for (var year = now.Year; year >= now.Year - 4; year--)
+        {
+            DateFilterComboBox.Items.Add(new ComboBoxItem
+            {
+                Content = IsChinese ? $"{year} 年" : year.ToString(CultureInfo.InvariantCulture),
+                Tag = $"year:{year}",
+            });
+        }
+        for (var offset = 0; offset < 24; offset++)
+        {
+            var month = now.AddMonths(-offset);
+            DateFilterComboBox.Items.Add(new ComboBoxItem
+            {
+                Content = month.ToString(IsChinese ? "yyyy 年 M 月" : "MMMM yyyy", CultureInfo.CurrentCulture),
+                Tag = $"month:{month:yyyy-MM}",
+            });
+        }
+        DateFilterComboBox.SelectedIndex = 0;
+    }
+
+    private HashSet<MediaType>? GetSelectedMediaTypes() =>
+        ((TypeFilterComboBox.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        {
+            "image" => new HashSet<MediaType> { MediaType.Image },
+            "video" => new HashSet<MediaType> { MediaType.Video },
+            _ => null,
+        };
+
+    private (DateTimeOffset? FromInclusive, DateTimeOffset? ToExclusive) GetSelectedDateRange()
+    {
+        var tag = (DateFilterComboBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        if (tag?.StartsWith("year:", StringComparison.Ordinal) == true &&
+            int.TryParse(tag.AsSpan(5), CultureInfo.InvariantCulture, out var year))
+        {
+            return (LocalBoundary(year, 1), LocalBoundary(year + 1, 1));
+        }
+        if (tag?.StartsWith("month:", StringComparison.Ordinal) == true &&
+            DateTime.TryParseExact(
+                tag.AsSpan(6),
+                "yyyy-MM",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var month))
+        {
+            var next = month.AddMonths(1);
+            return (LocalBoundary(month.Year, month.Month), LocalBoundary(next.Year, next.Month));
+        }
+        return (null, null);
+    }
+
+    private static DateTimeOffset LocalBoundary(int year, int month)
+    {
+        var local = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        return new DateTimeOffset(local, TimeZoneInfo.Local.GetUtcOffset(local));
+    }
 
     private void ApplyLanguage()
     {
@@ -175,6 +263,7 @@ public partial class MainWindow : Window, IDisposable
         DeviceCardSubtitleText.Text = L("Connected", "已连接");
         BrowseDevicePhotosButton.Content = L("Browse photos", "浏览照片");
         DisconnectButton.Content = L("Disconnect", "断开连接");
+        ForgetDeviceButton.Content = L("Forget device", "忘记设备");
         ManualConnectionTitleText.Text = L("Manual connection", "手动连接");
         ManualConnectionSubtitleText.Text = L("Enter the phone API address, then connect.", "输入手机 API 地址后连接。");
         ConnectButton.Content = L("Connect", "连接");
@@ -263,6 +352,11 @@ public partial class MainWindow : Window, IDisposable
             {
                 _closeBehavior = closeBehavior;
             }
+
+            if (!string.IsNullOrWhiteSpace(preferences?.DesktopId))
+            {
+                _desktopId = preferences.DesktopId;
+            }
         }
         catch (JsonException)
         {
@@ -281,6 +375,7 @@ public partial class MainWindow : Window, IDisposable
             {
                 Language = _language.ToString(),
                 CloseBehavior = _closeBehavior.ToString(),
+                DesktopId = _desktopId,
             };
             var json = JsonSerializer.Serialize(preferences, PreferencesJsonOptions);
             File.WriteAllText(_preferencesPath, json);
@@ -418,6 +513,9 @@ public partial class MainWindow : Window, IDisposable
     {
         var view = CollectionViewSource.GetDefaultView(rows);
         view.GroupDescriptions.Clear();
+        view.SortDescriptions.Clear();
+        view.SortDescriptions.Add(
+            new SortDescription("Item.TakenAt", ListSortDirection.Descending));
         view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(MediaRow.DateGroup)));
     }
 
@@ -428,6 +526,7 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             await _transferCoordinator.StartAsync();
+            await _pairedDeviceStore.InitializeAsync();
             RefreshTransferRows();
             _transferRefreshTimer.Start();
             await LoadIndexedPageAsync(
@@ -435,6 +534,16 @@ public partial class MainWindow : Window, IDisposable
                 L("No media in local cache", "本地缓存中还没有媒体"),
                 CancellationToken.None);
             UpdateIndexedStatus();
+            var savedDevice = (await _pairedDeviceStore.ListPairedDevicesAsync(CancellationToken.None))
+                .FirstOrDefault(device =>
+                    device.AutoConnect &&
+                    !string.IsNullOrWhiteSpace(device.LastHost) &&
+                    device.LastPort.HasValue);
+            if (savedDevice is not null)
+            {
+                AddressTextBox.Text = $"{savedDevice.LastHost}:{savedDevice.LastPort}";
+                OnConnectClick(ConnectButton, new RoutedEventArgs());
+            }
         }
         catch (Exception exception)
         {
@@ -642,7 +751,11 @@ public partial class MainWindow : Window, IDisposable
             SetEmptyState(L($"Connecting to {endpoint}...", $"正在连接 {endpoint}…"));
             _connectionCancellation = new CancellationTokenSource();
             var cancellationToken = _connectionCancellation.Token;
-            var httpSource = new HttpReadOnlyMediaSource(_httpClient, apiAddress);
+            var authorization = await ResolveAuthorizationAsync(apiAddress, cancellationToken);
+            var httpSource = new HttpReadOnlyMediaSource(
+                _httpClient,
+                apiAddress,
+                accessToken: authorization.AccessToken);
             var cacheRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LinkGallery",
@@ -650,14 +763,38 @@ public partial class MainWindow : Window, IDisposable
             _source = new CachingReadOnlyMediaSource(
                 httpSource,
                 cacheRoot,
-                apiAddress.AbsoluteUri);
+                apiAddress.AbsoluteUri,
+                mediaIndex: _mediaIndex);
 
             var device = await GetDeviceInfoWithTimeoutAsync(_source, cancellationToken);
             _activeDeviceId = device.Id;
+            _activeAccessToken = authorization.AccessToken;
+            _activePairedDevice = authorization.PairedDevice;
+            _activeApiAddress = apiAddress;
             _transferSourceResolver.SetSource(device.Id, _source);
+            authorization.PairedDevice.LastConnectedAt = DateTimeOffset.UtcNow;
+            authorization.PairedDevice.LastSeenAt = DateTimeOffset.UtcNow;
+            authorization.PairedDevice.Status = PairedDeviceStatus.Online;
+            authorization.PairedDevice.LastHost = apiAddress.Host;
+            authorization.PairedDevice.LastPort = apiAddress.Port;
+            authorization.PairedDevice.AutoConnect = true;
+            await _pairedDeviceStore.UpsertPairedDeviceAsync(
+                authorization.PairedDevice,
+                cancellationToken);
+            await _pairedDeviceStore.UpsertAddressAsync(
+                new DeviceAddress
+                {
+                    DeviceId = authorization.PairedDevice.DeviceId,
+                    Host = apiAddress.Host,
+                    Port = apiAddress.Port,
+                    Source = DeviceAddressSource.Manual,
+                    LastSuccessAt = DateTimeOffset.UtcNow,
+                },
+                cancellationToken);
 
             ShowDevice(device);
             DisconnectButton.IsEnabled = true;
+            ForgetDeviceButton.IsEnabled = true;
             StatusText.Text = L(
                 $"Connected to {device.Name} · Loading first media page",
                 $"已连接 {device.Name} · 正在加载第一页媒体");
@@ -688,6 +825,90 @@ public partial class MainWindow : Window, IDisposable
             SetLoading(false);
         }
     }
+
+    private async Task<DeviceAuthorization> ResolveAuthorizationAsync(
+        Uri apiAddress,
+        CancellationToken cancellationToken)
+    {
+        var publicInfo = await new HttpPublicDeviceInfoClient(_httpClient)
+            .GetAsync(apiAddress, cancellationToken);
+        var paired = (await _pairedDeviceStore.ListPairedDevicesAsync(cancellationToken))
+            .FirstOrDefault(device =>
+                string.Equals(device.DeviceId, publicInfo.DeviceId, StringComparison.Ordinal));
+        if (paired is not null)
+        {
+            if (!string.Equals(
+                    paired.CertificateFingerprint,
+                    publicInfo.CertificateFingerprint,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    L(
+                        "The device identity changed. Remove the saved pairing before reconnecting.",
+                        "设备身份已变化，请先移除保存的配对后再重新连接。"));
+            }
+
+            var savedToken = await _accessTokenStore.ReadAsync(
+                paired.CredentialKey,
+                cancellationToken);
+            if (!string.IsNullOrWhiteSpace(savedToken))
+            {
+                return new DeviceAuthorization(savedToken, paired);
+            }
+        }
+
+        if (!publicInfo.PairingAvailable)
+        {
+            throw new InvalidOperationException(
+                L(
+                    "Open LinkGallery on the phone and tap “Pair another computer”, then try again.",
+                    "请在手机上打开 LinkGallery，点击“配对另一台电脑”，然后重试。"));
+        }
+
+        var identity = new PairingIdentity(
+            _desktopId,
+            Environment.MachineName,
+            "Windows",
+            Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
+            Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
+            Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)));
+        var session = await _pairingClient.StartAsync(apiAddress, identity, cancellationToken);
+        var dialog = new PairingCodeWindow(session.CodeLength) { Owner = this };
+        if (dialog.ShowDialog() != true)
+        {
+            throw new OperationCanceledException("Pairing was cancelled.", cancellationToken);
+        }
+
+        var credential = await _pairingClient.ConfirmAsync(
+            apiAddress,
+            session.PairingSessionId,
+            dialog.VerificationCode,
+            cancellationToken);
+        var credentialKey = await _accessTokenStore.SaveAsync(
+            credential.AccessToken,
+            cancellationToken);
+        var device = new PairedDevice
+        {
+            DeviceId = publicInfo.DeviceId,
+            DisplayName = publicInfo.DeviceName,
+            Manufacturer = publicInfo.Manufacturer,
+            Model = publicInfo.Model,
+            IdentityPublicKey = publicInfo.CertificateFingerprint,
+            CertificateFingerprint = publicInfo.CertificateFingerprint,
+            CredentialKey = credentialKey,
+            LastHost = apiAddress.Host,
+            LastPort = apiAddress.Port,
+            LastInstanceId = publicInfo.InstanceId,
+            LastSeenAt = DateTimeOffset.UtcNow,
+            LastConnectedAt = DateTimeOffset.UtcNow,
+            AutoConnect = true,
+            Status = PairedDeviceStatus.Online,
+        };
+        await _pairedDeviceStore.UpsertPairedDeviceAsync(device, cancellationToken);
+        return new DeviceAuthorization(credential.AccessToken, device);
+    }
+
+    private sealed record DeviceAuthorization(string AccessToken, PairedDevice PairedDevice);
 
     private static async Task<LinkGallery.Domain.Devices.Device> GetDeviceInfoWithTimeoutAsync(
         CachingReadOnlyMediaSource source,
@@ -785,6 +1006,7 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             var sync = await _synchronizer.SynchronizeAsync(source, progress, cancellationToken);
+            await RefreshDeviceAlbumsFromIndexAsync(cancellationToken);
             var syncMode = sync.WasFullScan ? L("full index", "完整索引") : L("incremental update", "增量更新");
             StatusText.Text = L(
                 $"Connected · {syncMode} {sync.ItemsReceived:N0} items ({sync.PagesFetched:N0} pages) · Showing {TimelineRows.Count:N0} items",
@@ -893,8 +1115,10 @@ public partial class MainWindow : Window, IDisposable
         string emptyMessage,
         CancellationToken cancellationToken)
     {
-        if (_isLoadingPage || (!reset && !_hasMoreIndexedItems))
+        await _queryGate.WaitAsync(cancellationToken);
+        if (!reset && !_hasMoreIndexedItems)
         {
+            _queryGate.Release();
             return;
         }
 
@@ -909,17 +1133,23 @@ public partial class MainWindow : Window, IDisposable
                 _indexedOffset = 0;
             }
 
+            var (fromInclusive, toExclusive) = GetSelectedDateRange();
             var items = await _mediaIndex.SearchAsync(
-                _activeDeviceId,
-                SearchTextBox.Text,
-                PageSize,
-                _indexedOffset,
+                new MediaIndexQuery(
+                    DeviceId: _activeDeviceId,
+                    SearchText: SearchTextBox.Text,
+                    Types: GetSelectedMediaTypes(),
+                    FromInclusive: fromInclusive,
+                    ToExclusive: toExclusive,
+                    Limit: PageSize,
+                    Offset: _indexedOffset),
                 cancellationToken);
             _indexedOffset += items.Count;
             var visibleItems = ShouldRequireCachedThumbnailForIndexedMedia()
                 ? items.Where(HasCachedThumbnail).ToArray()
                 : items;
             AppendTimelineItems(visibleItems);
+            await RefreshDeviceAlbumsFromIndexAsync(cancellationToken);
             _hasMoreIndexedItems = items.Count == PageSize;
             UpdateTimelineFooter();
             TimelineList.Visibility = TimelineRows.Count == 0
@@ -935,6 +1165,7 @@ public partial class MainWindow : Window, IDisposable
         finally
         {
             _isLoadingPage = false;
+            _queryGate.Release();
         }
     }
 
@@ -1003,7 +1234,7 @@ public partial class MainWindow : Window, IDisposable
 
         SmartAlbumRows.Add(CreateAlbumRow(
             L("Favorites", "收藏"),
-            CountMatches(mediaItems, "favorite"),
+            0,
             0,
             0,
             new SolidColorBrush(Color.FromRgb(0xB7, 0xC9, 0xD6)),
@@ -1046,12 +1277,6 @@ public partial class MainWindow : Window, IDisposable
             }
         }
 
-        foreach (var album in _customAlbums)
-        {
-            MyAlbumRows.Add(album);
-            SidebarMyAlbumRows.Add(album);
-        }
-
         SidebarVideosButton.Visibility = isConnected ? Visibility.Visible : Visibility.Collapsed;
         SidebarScreenshotsButton.Visibility = isConnected ? Visibility.Visible : Visibility.Collapsed;
         SidebarDeviceAlbumsHeading.Visibility = isConnected && SidebarDeviceAlbumRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -1069,7 +1294,9 @@ public partial class MainWindow : Window, IDisposable
         int imageCount,
         int videoCount,
         System.Windows.Media.Brush? coverBrush = null,
-        string kind = "Device") =>
+        string kind = "Device",
+        string? albumId = null,
+        string? relativePath = null) =>
         new(
             name,
             count,
@@ -1080,7 +1307,49 @@ public partial class MainWindow : Window, IDisposable
             count == 1
                 ? L("1 item", "1 项")
                 : L($"{count:N0} items", $"{count:N0} 项"),
-            L($"{imageCount:N0} photos · {videoCount:N0} videos", $"{imageCount:N0} 张照片 · {videoCount:N0} 个视频"));
+            L($"{imageCount:N0} photos · {videoCount:N0} videos", $"{imageCount:N0} 张照片 · {videoCount:N0} 个视频"),
+            albumId,
+            relativePath);
+
+    private async Task RefreshDeviceAlbumsFromIndexAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_activeDeviceId)) return;
+        var indexedAlbums = await _mediaIndex.GetAlbumsAsync(
+            _activeDeviceId,
+            searchText: null,
+            limit: 500,
+            offset: 0,
+            cancellationToken);
+        AlbumRows.Clear();
+        DeviceAlbumRows.Clear();
+        SidebarDeviceAlbumRows.Clear();
+        foreach (var indexed in indexedAlbums)
+        {
+            var row = CreateAlbumRow(
+                indexed.DisplayName,
+                indexed.MediaCount,
+                indexed.PhotoCount,
+                indexed.VideoCount,
+                AlbumCoverBrush(indexed.AlbumId),
+                "Device",
+                indexed.AlbumId,
+                indexed.RelativePath);
+            AlbumRows.Add(row);
+            DeviceAlbumRows.Add(row);
+            if (SidebarDeviceAlbumRows.Count < 3)
+            {
+                SidebarDeviceAlbumRows.Add(row);
+            }
+        }
+        var visibility = DeviceAlbumRows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        SidebarDeviceAlbumsHeading.Visibility = visibility;
+        SidebarDeviceAlbumsList.Visibility = visibility;
+        DeviceAlbumsHeader.Visibility = visibility;
+        DeviceAlbumsList.Visibility = visibility;
+        AlbumBadgeText.Text =
+            (SmartAlbumRows.Count + DeviceAlbumRows.Count + MyAlbumRows.Count)
+            .ToString(CultureInfo.InvariantCulture);
+    }
 
     private static int CountMatches(MediaItem[] mediaItems, string text) =>
         mediaItems.Count(item => MatchesText(item, text));
@@ -1129,6 +1398,13 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
+        var decodedKey = DecodedThumbnailKey.Create(row.Item, TimelineThumbnailSize);
+        if (_decodedThumbnails.TryGetValue(decodedKey, out var decoded))
+        {
+            row.Thumbnail = decoded;
+            return;
+        }
+
         if (row.IsThumbnailLoading)
         {
             if (row.ThumbnailLoadCancellation?.IsCancellationRequested != true)
@@ -1162,6 +1438,7 @@ public partial class MainWindow : Window, IDisposable
 
                 if (image is not null)
                 {
+                    RememberDecodedThumbnail(decodedKey, image);
                     row.Thumbnail = image;
                 }
             }
@@ -1187,6 +1464,16 @@ public partial class MainWindow : Window, IDisposable
             }
 
             loadCancellation.Dispose();
+        }
+    }
+
+    private void RememberDecodedThumbnail(DecodedThumbnailKey key, ImageSource image)
+    {
+        if (!_decodedThumbnails.TryAdd(key, image)) return;
+        _decodedThumbnailOrder.Enqueue(key);
+        while (_decodedThumbnailOrder.Count > DecodedThumbnailCapacity)
+        {
+            _decodedThumbnails.Remove(_decodedThumbnailOrder.Dequeue());
         }
     }
 
@@ -1312,12 +1599,51 @@ public partial class MainWindow : Window, IDisposable
     private void OnCancelManualConnectionClick(object sender, RoutedEventArgs e) =>
         SetManualConnectionOpen(false);
 
-    private void OnFindDevicesClick(object sender, RoutedEventArgs e)
+    private async void OnFindDevicesClick(object sender, RoutedEventArgs e)
     {
-        StatusText.Text = L(
-            "Device discovery is not implemented yet. Use manual IP for now.",
-            "设备搜索接口还没有完成，先使用手动 IP 连接。");
-        ShowToast(L("Device discovery issue pending", "设备搜索接口待实现"));
+        FindDevicesButton.IsEnabled = false;
+        StatusText.Text = L("Searching the local network…", "正在搜索局域网设备…");
+        try
+        {
+            var discovered = await UdpDiscoveryClient.DiscoverAsync(
+                _desktopId,
+                TimeSpan.FromSeconds(2),
+                CancellationToken.None);
+            foreach (var device in discovered)
+            {
+                _discoveryManager.Merge(device);
+            }
+            var selected = _discoveryManager.Devices
+                .SelectMany(device => device.Addresses.Select(address => (device, address)))
+                .OrderByDescending(candidate => candidate.device.PairingAvailable)
+                .ThenByDescending(candidate => candidate.address.Source == DeviceAddressSource.Udp)
+                .FirstOrDefault();
+            if (selected.device is null)
+            {
+                StatusText.Text = L(
+                    "No LinkGallery device was found. You can still enter an IP address.",
+                    "未发现 LinkGallery 设备，你仍可手动输入 IP 地址。");
+                ShowToast(L("No devices found", "未发现设备"));
+                return;
+            }
+
+            AddressTextBox.Text = $"{selected.address.Host}:{selected.address.Port}";
+            StatusText.Text = L(
+                $"Found {selected.device.DisplayName}; connecting…",
+                $"已发现 {selected.device.DisplayName}，正在连接…");
+            OnConnectClick(ConnectButton, new RoutedEventArgs());
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = L(
+                $"Discovery failed: {exception.Message}",
+                $"设备发现失败：{exception.Message}");
+            ShowToast(L("Device discovery failed", "设备发现失败"));
+        }
+        finally
+        {
+            FindDevicesButton.IsEnabled = true;
+        }
     }
 
     private void OnAlbumCardClick(object sender, MouseButtonEventArgs e)
@@ -1349,12 +1675,12 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnBackToAlbumsClick(object sender, RoutedEventArgs e) => ShowPage("Albums");
 
-    private void OnAlbumFilterClick(object sender, RoutedEventArgs e)
+    private async void OnAlbumFilterClick(object sender, RoutedEventArgs e)
     {
         if (sender is System.Windows.Controls.Button { Tag: string filter })
         {
             _activeAlbumFilter = filter;
-            RefreshAlbumDetailRows();
+            await RefreshAlbumDetailRowsAsync(CancellationToken.None);
             UpdatePageSubtitle("AlbumDetail");
             ShowToast(L($"Showing {filter.ToLowerInvariant()}", $"正在显示{FilterLabel(filter)}"));
         }
@@ -1369,9 +1695,9 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnNewAlbumClick(object sender, RoutedEventArgs e)
     {
-        AlbumNameInput.Text = "";
-        AlbumModal.Visibility = Visibility.Visible;
-        AlbumNameInput.Focus();
+        ShowToast(L(
+            "My Albums is planned in issue #106",
+            "“我的相册”已在 issue #106 中规划"));
     }
 
     private void OnCancelAlbumClick(object sender, RoutedEventArgs e) =>
@@ -1379,25 +1705,10 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnCreateAlbumClick(object sender, RoutedEventArgs e)
     {
-        var name = AlbumNameInput.Text.Trim();
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            ShowToast(L("Album name required", "请输入相册名称"));
-            return;
-        }
-
-        if (_customAlbums.Any(album => string.Equals(album.Name, name, StringComparison.OrdinalIgnoreCase)))
-        {
-            ShowToast(L("Album already exists", "相册已存在"));
-            return;
-        }
-
-        var album = CreateAlbumRow(name, 0, 0, 0, AlbumCoverBrush(name), "My");
-        _customAlbums.Add(album);
-        RefreshAlbumRows();
         AlbumModal.Visibility = Visibility.Collapsed;
-        UpdatePageSubtitle("Albums");
-        ShowToast(L($"Album \"{name}\" created", $"已创建相册“{name}”"));
+        ShowToast(L(
+            "My Albums is planned in issue #106",
+            "“我的相册”已在 issue #106 中规划"));
     }
 
     private async void OnCopyAlbumClick(object sender, RoutedEventArgs e)
@@ -1420,15 +1731,22 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void OpenAlbum(AlbumRow album)
+    private async void OpenAlbum(AlbumRow album)
     {
+        if (album.Kind == "SmartFavorites")
+        {
+            ShowToast(L(
+                "Favorites is planned in issue #105",
+                "收藏功能已在 issue #105 中规划"));
+            return;
+        }
         _activeAlbum = album;
         _activeAlbumFilter = "All";
-        RefreshAlbumDetailRows();
         ShowPage("AlbumDetail");
+        await RefreshAlbumDetailRowsAsync(CancellationToken.None);
     }
 
-    private void RefreshAlbumDetailRows()
+    private async Task RefreshAlbumDetailRowsAsync(CancellationToken cancellationToken)
     {
         AlbumDetailRows.Clear();
         if (_activeAlbum is null)
@@ -1438,13 +1756,31 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        IEnumerable<MediaRow> rows = TimelineRows.Where(row => IsInAlbum(row.Item, _activeAlbum));
-        rows = _activeAlbumFilter switch
+        var selectedTypes = _activeAlbumFilter switch
         {
-            "Photos" => rows.Where(static row => row.Item.Type == MediaType.Image),
-            "Videos" => rows.Where(static row => row.Item.Type == MediaType.Video),
-            _ => rows,
+            "Photos" => new HashSet<MediaType> { MediaType.Image },
+            "Videos" => new HashSet<MediaType> { MediaType.Video },
+            _ => null,
         };
+        var indexedItems = await _mediaIndex.SearchAsync(
+            new MediaIndexQuery(
+                DeviceId: _activeDeviceId,
+                SearchText: null,
+                Types: selectedTypes,
+                FromInclusive: null,
+                ToExclusive: null,
+                Limit: 500,
+                Offset: 0,
+                AlbumId: _activeAlbum.Kind == "Device" ? _activeAlbum.AlbumId : null),
+            cancellationToken);
+        var rows = indexedItems
+            .Where(item => IsInAlbum(item, _activeAlbum))
+            .Select(item => new MediaRow(
+                item,
+                dateHeader: null,
+                IsChinese
+                    ? item.TakenAt.LocalDateTime.ToString("yyyy年M月d日", CultureInfo.InvariantCulture)
+                    : item.TakenAt.LocalDateTime.ToString("d MMMM yyyy", CultureInfo.InvariantCulture)));
 
         foreach (var row in rows)
         {
@@ -1468,14 +1804,18 @@ public partial class MainWindow : Window, IDisposable
     private static bool IsInAlbum(MediaItem item, AlbumRow album) =>
         album.Kind switch
         {
-            "SmartFavorites" => MatchesText(item, "favorite"),
+            "SmartFavorites" => false,
             "SmartVideos" => item.Type == MediaType.Video,
             "SmartScreenshots" => MatchesText(item, "screenshot"),
             "SmartRecent" => item.TakenAt >= DateTimeOffset.Now.AddDays(-30),
+            _ when !string.IsNullOrWhiteSpace(album.AlbumId) =>
+                string.Equals(item.AlbumId, album.AlbumId, StringComparison.Ordinal),
             _ => string.Equals(
-                string.IsNullOrWhiteSpace(item.AlbumName) ? "Unsorted" : item.AlbumName,
-                album.Name,
-                StringComparison.OrdinalIgnoreCase),
+                    string.IsNullOrWhiteSpace(item.AlbumName) ? "Unsorted" : item.AlbumName,
+                    album.Name,
+                    StringComparison.OrdinalIgnoreCase) &&
+                (string.IsNullOrWhiteSpace(album.RelativePath) ||
+                 string.Equals(item.RelativePath, album.RelativePath, StringComparison.OrdinalIgnoreCase)),
         };
 
     private void ShowPage(string page)
@@ -1504,6 +1844,8 @@ public partial class MainWindow : Window, IDisposable
         };
         UpdatePageSubtitle(page);
         SearchChrome.Visibility = page is "Gallery" or "Albums" ? Visibility.Visible : Visibility.Collapsed;
+        SearchButton.Visibility = page is "Gallery" or "Albums" ? Visibility.Visible : Visibility.Collapsed;
+        FilterPanel.Visibility = page == "Gallery" ? Visibility.Visible : Visibility.Collapsed;
         SearchPlaceholderText.Text = page == "Gallery"
             ? L("Search media", "搜索媒体")
             : L("Search albums", "搜索相册");
@@ -1776,6 +2118,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void OpenMediaViewer(MediaRow row)
     {
+        _backgroundIndexGate.Pause("viewer");
         _viewerRow = row;
         _viewerZoom = 1;
         ViewerPhotoScale.ScaleX = 1;
@@ -1790,6 +2133,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnCloseViewerClick(object sender, RoutedEventArgs e)
     {
+        _backgroundIndexGate.Resume("viewer");
         ViewerOverlay.Visibility = Visibility.Collapsed;
         _viewerRow = null;
         _viewerZoom = 1;
@@ -1936,15 +2280,40 @@ public partial class MainWindow : Window, IDisposable
     {
         try
         {
+            _queryCancellation?.Cancel();
+            _queryCancellation?.Dispose();
+            _queryCancellation = new CancellationTokenSource();
             await LoadIndexedPageAsync(
                 reset: true,
                 L("No matching media in local index", "本地索引中没有匹配的媒体"),
-                CancellationToken.None);
+                _queryCancellation.Token);
             UpdateIndexedStatus();
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception exception)
         {
             StatusText.Text = L($"Cannot read local index: {exception.Message}", $"无法读取本地索引：{exception.Message}");
+        }
+    }
+
+    private async void OnSearchFilterChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || _currentPage != "Gallery") return;
+        _queryCancellation?.Cancel();
+        _queryCancellation?.Dispose();
+        _queryCancellation = new CancellationTokenSource();
+        try
+        {
+            await LoadIndexedPageAsync(
+                reset: true,
+                L("No matching media in local index", "本地索引中没有匹配的媒体"),
+                _queryCancellation.Token);
+            UpdateIndexedStatus();
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -1970,6 +2339,8 @@ public partial class MainWindow : Window, IDisposable
             }
 
             TimelineList.Items.Refresh();
+            _decodedThumbnails.Clear();
+            _decodedThumbnailOrder.Clear();
             UpdateSettingsSummary();
             StatusText.Text = L("Thumbnail cache cleared", "缩略图缓存已清理");
         }
@@ -2204,6 +2575,18 @@ public partial class MainWindow : Window, IDisposable
     {
         var now = DateTimeOffset.UtcNow;
         var jobs = _transferCoordinator.GetJobs();
+        var transferActive = jobs.Any(job =>
+            !job.IsTerminal && job.Status != TransferStatus.Paused);
+        if (transferActive && !_transferGatePaused)
+        {
+            _backgroundIndexGate.Pause("transfer");
+            _transferGatePaused = true;
+        }
+        else if (!transferActive && _transferGatePaused)
+        {
+            _backgroundIndexGate.Resume("transfer");
+            _transferGatePaused = false;
+        }
         var activeIds = jobs.Select(job => job.Id).ToHashSet();
         for (var index = TransferRows.Count - 1; index >= 0; index--)
         {
@@ -2257,6 +2640,41 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
+    private async void OnForgetDeviceClick(object sender, RoutedEventArgs e)
+    {
+        var device = _activePairedDevice;
+        var accessToken = _activeAccessToken;
+        var apiAddress = _activeApiAddress;
+        if (device is null)
+        {
+            return;
+        }
+
+        ForgetDeviceButton.IsEnabled = false;
+        var remoteRevoked = false;
+        if (apiAddress is not null && !string.IsNullOrWhiteSpace(accessToken))
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try
+            {
+                await _pairingClient.RevokeAsync(apiAddress, accessToken, timeout.Token);
+                remoteRevoked = true;
+            }
+            catch (Exception exception) when (
+                exception is HttpRequestException or TaskCanceledException)
+            {
+                // Local removal must remain available while the phone is offline.
+            }
+        }
+
+        await _accessTokenStore.DeleteAsync(device.CredentialKey, CancellationToken.None);
+        await _pairedDeviceStore.RemovePairedDeviceAsync(device.DeviceId, CancellationToken.None);
+        Disconnect(clearTimeline: true);
+        ShowToast(remoteRevoked
+            ? L("Pairing revoked and device forgotten", "已撤销配对并忘记设备")
+            : L("Device forgotten locally; the phone was unavailable", "已在本机忘记设备；手机当前不可用"));
+    }
+
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         if (_isQuitting)
@@ -2296,9 +2714,11 @@ public partial class MainWindow : Window, IDisposable
         _transferCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _transferStore.Dispose();
         _thumbnailConcurrency.Dispose();
+        _queryGate.Dispose();
         _httpClient.Dispose();
         _localCopies.Dispose();
         _mediaIndex.Dispose();
+        _pairedDeviceStore.Dispose();
         _notifyIcon?.Dispose();
         _notifyIcon = null;
         _disposed = true;
@@ -2314,14 +2734,22 @@ public partial class MainWindow : Window, IDisposable
         _connectionCancellation?.Cancel();
         _connectionCancellation?.Dispose();
         _connectionCancellation = null;
+        _queryCancellation?.Cancel();
+        _queryCancellation?.Dispose();
+        _queryCancellation = null;
         _source?.Dispose();
         _source = null;
         _activeDeviceId = null;
+        _activeAccessToken = null;
+        _activePairedDevice = null;
+        _activeApiAddress = null;
         _remoteNextCursor = null;
         _hasMoreRemoteItems = false;
         _hasMoreIndexedItems = false;
         _isLoadingPage = false;
         _loadedRemoteIds.Clear();
+        _decodedThumbnails.Clear();
+        _decodedThumbnailOrder.Clear();
         DevicePanel.Visibility = Visibility.Collapsed;
         DeviceCardsGrid.Visibility = Visibility.Collapsed;
         ConnectedDeviceCard.Visibility = Visibility.Collapsed;
@@ -2340,6 +2768,7 @@ public partial class MainWindow : Window, IDisposable
         EmptyText.Text = L("Enter a phone address to connect", "输入手机地址开始连接");
         EmptyText.Visibility = Visibility.Visible;
         DisconnectButton.IsEnabled = false;
+        ForgetDeviceButton.IsEnabled = false;
         SetLoading(false);
     }
 
@@ -2358,6 +2787,8 @@ public partial class MainWindow : Window, IDisposable
         ConnectButton.IsEnabled = !isLoading;
         AddressTextBox.IsEnabled = !isLoading;
         DisconnectButton.IsEnabled = isLoading || DevicePanel.Visibility == Visibility.Visible;
+        ForgetDeviceButton.IsEnabled =
+            !isLoading && DevicePanel.Visibility == Visibility.Visible && _activePairedDevice is not null;
         if (status is not null)
         {
             StatusText.Text = status;
@@ -2415,6 +2846,22 @@ public partial class MainWindow : Window, IDisposable
                     "无法连接手机。请检查 IP、端口、Wi-Fi 和手机服务状态；仍可浏览本地索引。"),
             _ => L($"Connection failed: {exception.Message}", $"连接失败：{exception.Message}"),
         };
+    }
+
+    private readonly record struct DecodedThumbnailKey(
+        string DeviceId,
+        string RemoteId,
+        long Version,
+        int Width,
+        int Height)
+    {
+        public static DecodedThumbnailKey Create(MediaItem item, ThumbnailSize size) =>
+            new(
+                item.DeviceId,
+                item.RemoteId,
+                item.Generation ?? item.ModifiedAt.ToUnixTimeMilliseconds(),
+                size.Width,
+                size.Height);
     }
 
     public sealed class MediaRow : INotifyPropertyChanged
@@ -2531,7 +2978,9 @@ public partial class MainWindow : Window, IDisposable
         System.Windows.Media.Brush? coverBrush = null,
         string kind = "Device",
         string? countText = null,
-        string? typeSummary = null)
+        string? typeSummary = null,
+        string? albumId = null,
+        string? relativePath = null)
     {
         public string Name { get; } = name;
 
@@ -2543,6 +2992,10 @@ public partial class MainWindow : Window, IDisposable
             coverBrush ?? new SolidColorBrush(Color.FromRgb(0xEA, 0xF3, 0xFF));
 
         public string Kind { get; } = kind;
+
+        public string? AlbumId { get; } = albumId;
+
+        public string? RelativePath { get; } = relativePath;
     }
 
     public sealed class TransferRow : INotifyPropertyChanged

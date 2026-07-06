@@ -16,6 +16,7 @@ data class MediaStoreRequest(
     val after: MediaStoreCursor?,
     val limit: Int,
     val types: Set<MediaType>,
+    val albumId: String? = null,
 )
 
 data class MediaStoreRow(
@@ -30,6 +31,7 @@ data class MediaStoreRow(
     val durationMilliseconds: Long?,
     val albumName: String?,
     val relativePath: String?,
+    val albumId: String? = null,
     val generationAdded: Long? = null,
     val generationModified: Long? = null,
 ) {
@@ -80,7 +82,7 @@ private fun MediaStoreRow.isBefore(cursor: MediaStoreCursor): Boolean =
 interface MediaStoreDataSource {
     fun query(request: MediaStoreRequest): List<MediaStoreRow>
 
-    fun count(types: Set<MediaType>): Int
+    fun count(types: Set<MediaType>, albumId: String? = null): Int
 
     fun libraryState(): MediaLibraryState =
         MediaLibraryState("test-library", MediaSyncCursor(0, 0))

@@ -291,6 +291,17 @@ public sealed class SqliteMediaIndexTests
             100,
             0,
             CancellationToken.None);
+        var selectedAlbum = await index.SearchAsync(
+            new MediaIndexQuery(
+                DeviceId: source.Device.Id,
+                SearchText: null,
+                Types: null,
+                FromInclusive: null,
+                ToExclusive: null,
+                Limit: 100,
+                Offset: 0,
+                AlbumId: "pictures/screenshots"),
+            CancellationToken.None);
 
         Assert.HasCount(2, albums);
         CollectionAssert.AreEquivalent(
@@ -298,6 +309,8 @@ public sealed class SqliteMediaIndexTests
             albums.Select(album => album.AlbumId).ToArray());
         Assert.AreEqual(3, albums.Sum(album => album.MediaCount));
         Assert.IsTrue(albums.All(album => album.CoverMediaId is not null));
+        Assert.HasCount(2, selectedAlbum);
+        Assert.IsTrue(selectedAlbum.All(item => item.AlbumId == "pictures/screenshots"));
     }
 
     [TestMethod]

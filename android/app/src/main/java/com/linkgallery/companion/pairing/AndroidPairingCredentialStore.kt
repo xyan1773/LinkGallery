@@ -22,6 +22,8 @@ class AndroidPairingCredentialStore(context: Context) : PairingCredentialStore {
         return true
     }
 
+    override fun list(): List<PairedCredential> = entries()
+
     private fun entries(): List<PairedCredential> =
         preferences.getStringSet(KEY_CREDENTIALS, emptySet()).orEmpty().mapNotNull(::decode)
 

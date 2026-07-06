@@ -97,6 +97,22 @@ class ApiControllerTest {
     }
 
     @Test
+    fun mediaResponsePassesAlbumScopeToRepository() {
+        val repository = RecordingMediaRepository(
+            MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),
+        )
+
+        val response = runSuspend {
+            controller(repository = repository)
+                .handle("GET", "/api/v1/media?albumId=camera-1&limit=20")
+        }
+
+        assertEquals(200, response.status)
+        assertEquals("camera-1", repository.lastQuery?.albumId)
+        assertEquals(20, repository.lastQuery?.limit)
+    }
+
+    @Test
     fun syncStateAndChangesResponsesUseOpaqueCursorContract() {
         val repository = FakeMediaRepository(
             pageResult = MediaPageResult.Success(MediaPage(emptyList(), null, false, 0)),

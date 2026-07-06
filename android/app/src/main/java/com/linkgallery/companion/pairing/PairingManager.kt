@@ -116,6 +116,8 @@ class PairingManager(
     private var activeSession: PairingSession? = null
     private var lockedUntilEpochMillis: Long = 0
 
+    fun pairedCredentials(): List<PairedCredential> = credentialStore.list()
+
     override fun openPairingWindow(nowMillis: Long): PairingWindow = synchronized(lock) {
         val next = PairingWindow(nowMillis, nowMillis + windowDurationMillis)
         window = next
