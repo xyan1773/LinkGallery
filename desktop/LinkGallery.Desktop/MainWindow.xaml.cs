@@ -148,8 +148,6 @@ public partial class MainWindow : Window, IDisposable
         InitializeComponent();
         DataContext = this;
         PopulateDateFilters();
-        ConfigureMediaGroups(TimelineRows);
-        ConfigureMediaGroups(AlbumDetailRows);
         _downloadDirectory = ResolveDefaultDownloadDirectory();
         UpdateSettingsSummary();
         UpdateSwitchVisuals();
@@ -490,7 +488,11 @@ public partial class MainWindow : Window, IDisposable
 
     public ObservableCollection<MediaRow> TimelineRows { get; } = [];
 
+    public ObservableCollection<MediaGroupRow> TimelineGroups { get; } = [];
+
     public ObservableCollection<MediaRow> AlbumDetailRows { get; } = [];
+
+    public ObservableCollection<MediaGroupRow> AlbumDetailGroups { get; } = [];
 
     public ObservableCollection<AlbumRow> AlbumRows { get; } = [];
 
@@ -508,16 +510,6 @@ public partial class MainWindow : Window, IDisposable
 
     private AlbumRow? _activeAlbum;
     private string _activeAlbumFilter = "All";
-
-    private static void ConfigureMediaGroups(ObservableCollection<MediaRow> rows)
-    {
-        var view = CollectionViewSource.GetDefaultView(rows);
-        view.GroupDescriptions.Clear();
-        view.SortDescriptions.Clear();
-        view.SortDescriptions.Add(
-            new SortDescription("Item.TakenAt", ListSortDirection.Descending));
-        view.GroupDescriptions.Add(new PropertyGroupDescription(nameof(MediaRow.DateGroup)));
-    }
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
@@ -939,6 +931,7 @@ public partial class MainWindow : Window, IDisposable
                 timeout.Token);
 
             TimelineRows.Clear();
+            TimelineGroups.Clear();
             RefreshAlbumRows();
             _loadedRemoteIds.Clear();
             AppendTimelineItems(DeduplicateRemoteItems(page.Items));
@@ -946,7 +939,7 @@ public partial class MainWindow : Window, IDisposable
             _hasMoreRemoteItems = page.HasMore || page.NextCursor is not null;
             _hasMoreIndexedItems = false;
             UpdateTimelineFooter();
-            TimelineList.Visibility = TimelineRows.Count == 0
+            TimelineScrollViewer.Visibility = TimelineRows.Count == 0
                 ? Visibility.Collapsed
                 : Visibility.Visible;
             EmptyText.Text = L("No photos or videos are available on the phone", "手机中没有可显示的照片或视频");
@@ -1105,7 +1098,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void SetEmptyState(string message)
     {
-        TimelineList.Visibility = Visibility.Collapsed;
+        TimelineScrollViewer.Visibility = Visibility.Collapsed;
         EmptyText.Text = message;
         EmptyText.Visibility = Visibility.Visible;
     }
@@ -1128,6 +1121,7 @@ public partial class MainWindow : Window, IDisposable
             if (reset)
             {
                 TimelineRows.Clear();
+                TimelineGroups.Clear();
                 RefreshAlbumRows();
                 _hasMoreIndexedItems = true;
                 _indexedOffset = 0;
@@ -1152,7 +1146,7 @@ public partial class MainWindow : Window, IDisposable
             await RefreshDeviceAlbumsFromIndexAsync(cancellationToken);
             _hasMoreIndexedItems = items.Count == PageSize;
             UpdateTimelineFooter();
-            TimelineList.Visibility = TimelineRows.Count == 0
+            TimelineScrollViewer.Visibility = TimelineRows.Count == 0
                 ? Visibility.Collapsed
                 : Visibility.Visible;
             EmptyText.Text = TimelineRows.Count == 0 && ShouldRequireCachedThumbnailForIndexedMedia()
@@ -1183,11 +1177,30 @@ public partial class MainWindow : Window, IDisposable
             previousDate = date;
         }
 
+        RefreshTimelineGroups();
         RefreshAlbumRows();
     }
 
-    private bool ShouldRequireCachedThumbnailForIndexedMedia() =>
-        _source is null || _source.IsOffline;
+    private void RefreshTimelineGroups() =>
+        RefreshMediaGroups(TimelineRows, TimelineGroups);
+
+    private void RefreshAlbumDetailGroups() =>
+        RefreshMediaGroups(AlbumDetailRows, AlbumDetailGroups);
+
+    private static void RefreshMediaGroups(
+        IEnumerable<MediaRow> rows,
+        ObservableCollection<MediaGroupRow> target)
+    {
+        target.Clear();
+        foreach (var group in rows
+                     .OrderByDescending(static row => row.Item.TakenAt)
+                     .GroupBy(static row => row.DateGroup))
+        {
+            target.Add(new MediaGroupRow(group.Key, group));
+        }
+    }
+
+    private static bool ShouldRequireCachedThumbnailForIndexedMedia() => false;
 
     private bool HasCachedThumbnail(MediaItem item)
     {
@@ -1392,7 +1405,7 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnTimelineItemLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is not ListBoxItem { DataContext: MediaRow row } ||
+        if (sender is not FrameworkElement { DataContext: MediaRow row } ||
             row.Thumbnail is not null)
         {
             return;
@@ -1502,7 +1515,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnTimelineItemUnloaded(object sender, RoutedEventArgs e)
     {
-        if (sender is ListBoxItem { DataContext: MediaRow row } &&
+        if (sender is FrameworkElement { DataContext: MediaRow row } &&
             row.Thumbnail is null &&
             row.IsThumbnailLoading)
         {
@@ -1517,7 +1530,7 @@ public partial class MainWindow : Window, IDisposable
     {
         if (sender is System.Windows.Controls.Button { DataContext: MediaRow row })
         {
-            TimelineList.SelectedItem = row;
+            SelectSingleRow(row);
             OpenSelectedMedia();
         }
     }
@@ -1525,8 +1538,7 @@ public partial class MainWindow : Window, IDisposable
     private void OnSelectModeClick(object sender, RoutedEventArgs e)
     {
         _isSelectionMode = !_isSelectionMode;
-        TimelineList.SelectedItems.Clear();
-        AlbumDetailList.SelectedItems.Clear();
+        ClearSelectedRows();
 
         UpdateSelectionUi();
     }
@@ -1725,7 +1737,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnAlbumDetailDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (AlbumDetailList.SelectedItem is MediaRow row)
+        if (GetSelectedRows().FirstOrDefault() is MediaRow row)
         {
             OpenMediaViewer(row);
         }
@@ -1749,6 +1761,7 @@ public partial class MainWindow : Window, IDisposable
     private async Task RefreshAlbumDetailRowsAsync(CancellationToken cancellationToken)
     {
         AlbumDetailRows.Clear();
+        AlbumDetailGroups.Clear();
         if (_activeAlbum is null)
         {
             AlbumDetailEmptyText.Visibility = Visibility.Visible;
@@ -1787,6 +1800,7 @@ public partial class MainWindow : Window, IDisposable
             AlbumDetailRows.Add(row);
         }
 
+        RefreshAlbumDetailGroups();
         AlbumFilterAllButton.Style = _activeAlbumFilter == "All"
             ? (Style)FindResource("LgSegmentButtonActive")
             : (Style)FindResource("LgSegmentButton");
@@ -1949,53 +1963,75 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnMediaTilePreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not ListBoxItem { DataContext: MediaRow row })
+        if (sender is not FrameworkElement { DataContext: MediaRow row })
         {
             return;
         }
 
         if (_isSelectionMode)
         {
-            var list = _currentPage == "AlbumDetail" ? AlbumDetailList : TimelineList;
-            if (list.SelectedItems.Contains(row))
-            {
-                list.SelectedItems.Remove(row);
-            }
-            else
-            {
-                list.SelectedItems.Add(row);
-            }
+            row.IsSelected = !row.IsSelected;
 
             UpdateSelectionUi();
             e.Handled = true;
             return;
         }
 
-        if (_currentPage == "AlbumDetail")
+        SelectSingleRow(row);
+        if (sender is FrameworkElement element)
         {
-            AlbumDetailList.SelectedItem = row;
-        }
-        else
-        {
-            TimelineList.SelectedItem = row;
+            element.Focus();
+            Keyboard.Focus(element);
         }
 
         UpdateSelectionUi();
         e.Handled = true;
     }
 
+    private void OnMediaTileKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key is not (Key.Enter or Key.Return) ||
+            sender is not FrameworkElement { DataContext: MediaRow row })
+        {
+            return;
+        }
+
+        SelectSingleRow(row);
+        UpdateSelectionUi();
+        OpenMediaViewer(row);
+        e.Handled = true;
+    }
+
     private MediaRow[] GetSelectedRows()
     {
-        var list = _currentPage == "AlbumDetail" ? AlbumDetailList : TimelineList;
-        return list.SelectedItems.OfType<MediaRow>().ToArray();
+        var rows = _currentPage == "AlbumDetail" ? AlbumDetailRows : TimelineRows;
+        return rows.Where(static row => row.IsSelected).ToArray();
     }
 
     private void ResetSelectionMode()
     {
         _isSelectionMode = false;
-        TimelineList.SelectedItems.Clear();
-        AlbumDetailList.SelectedItems.Clear();
+        ClearSelectedRows();
         UpdateSelectionUi();
+    }
+
+    private void SelectSingleRow(MediaRow row)
+    {
+        ClearSelectedRows();
+        row.IsSelected = true;
+    }
+
+    private void ClearSelectedRows()
+    {
+        foreach (var row in TimelineRows)
+        {
+            row.IsSelected = false;
+        }
+
+        foreach (var row in AlbumDetailRows)
+        {
+            row.IsSelected = false;
+        }
     }
 
     private void UpdateSelectionUi()
@@ -2077,8 +2113,7 @@ public partial class MainWindow : Window, IDisposable
             return;
         }
 
-        TimelineList.SelectedItems.Clear();
-        AlbumDetailList.SelectedItems.Clear();
+        ClearSelectedRows();
     }
 
     private static string FormatMediaKind(MediaItem item)
@@ -2226,7 +2261,7 @@ public partial class MainWindow : Window, IDisposable
             AppendTimelineItems(DeduplicateRemoteItems(page.Items));
             _remoteNextCursor = page.NextCursor;
             _hasMoreRemoteItems = page.HasMore || page.NextCursor is not null;
-            TimelineList.Visibility = TimelineRows.Count == 0
+            TimelineScrollViewer.Visibility = TimelineRows.Count == 0
                 ? Visibility.Collapsed
                 : Visibility.Visible;
             EmptyText.Visibility = TimelineRows.Count == 0
@@ -2338,7 +2373,6 @@ public partial class MainWindow : Window, IDisposable
                 row.Thumbnail = null;
             }
 
-            TimelineList.Items.Refresh();
             _decodedThumbnails.Clear();
             _decodedThumbnailOrder.Clear();
             UpdateSettingsSummary();
@@ -2620,6 +2654,9 @@ public partial class MainWindow : Window, IDisposable
             SyncStateText.Text = L(
                 $"{completed:N0}/{jobs.Count:N0} copied · {failed:N0} failed · {FormatSize(remainingBytes)} left",
                 $"已复制 {completed:N0}/{jobs.Count:N0} · 失败 {failed:N0} · 剩余 {FormatSize(remainingBytes)}");
+            TransferStatusText.Text = TransferRows.FirstOrDefault(row => row.StatusText.Length > 0)?.StatusText
+                ?? L("Completed", "已完成");
+            ImportSummaryText.Text = $"{completed:N0}/{jobs.Count:N0} 瀹屾垚 · completed";
         }
     }
 
@@ -2757,11 +2794,12 @@ public partial class MainWindow : Window, IDisposable
         DevicesEmptyText.Visibility = Visibility.Visible;
         UpdateOnlineIndicators();
         SyncStateText.Text = L("Local cache", "本地缓存");
-        TimelineList.Visibility = Visibility.Collapsed;
+        TimelineScrollViewer.Visibility = Visibility.Collapsed;
         SetTimelineFooter(null);
         if (clearTimeline)
         {
             TimelineRows.Clear();
+            TimelineGroups.Clear();
             RefreshAlbumRows();
         }
 
@@ -2867,6 +2905,8 @@ public partial class MainWindow : Window, IDisposable
     public sealed class MediaRow : INotifyPropertyChanged
     {
         private ImageSource? _thumbnail;
+        private bool _isSelected;
+        private double _aspectRatio;
 
         public MediaRow(MediaItem item, string? dateHeader, string dateGroup)
         {
@@ -2878,6 +2918,11 @@ public partial class MainWindow : Window, IDisposable
             FileName = item.FileName;
             Details = FormatDetails(item);
             TakenAt = item.TakenAt.LocalDateTime.ToString("HH:mm", CultureInfo.CurrentCulture);
+            AspectRatio = CalculateAspectRatio(item);
+            IsVideo = item.Type == MediaType.Video;
+            DurationText = item.DurationMilliseconds.HasValue
+                ? FormatDuration(item.DurationMilliseconds.Value)
+                : string.Empty;
             AlbumName = item.AlbumName ?? "未分类";
         }
 
@@ -2903,9 +2948,44 @@ public partial class MainWindow : Window, IDisposable
 
         public string AlbumName { get; }
 
+        public double AspectRatio
+        {
+            get => _aspectRatio;
+            private set
+            {
+                var ratio = Math.Clamp(value, 0.35, 3.5);
+                if (Math.Abs(_aspectRatio - ratio) < 0.001)
+                {
+                    return;
+                }
+
+                _aspectRatio = ratio;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AspectRatio)));
+            }
+        }
+
+        public bool IsVideo { get; }
+
+        public string DurationText { get; }
+
         public bool IsThumbnailLoading { get; set; }
 
         public CancellationTokenSource? ThumbnailLoadCancellation { get; set; }
+
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set
+            {
+                if (_isSelected == value)
+                {
+                    return;
+                }
+
+                _isSelected = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
+            }
+        }
 
         public ImageSource? Thumbnail
         {
@@ -2918,6 +2998,11 @@ public partial class MainWindow : Window, IDisposable
                 }
 
                 _thumbnail = value;
+                if (value is { Width: > 0, Height: > 0 })
+                {
+                    AspectRatio = value.Width / value.Height;
+                }
+
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
             }
         }
@@ -2933,6 +3018,24 @@ public partial class MainWindow : Window, IDisposable
             return item.Width.HasValue && item.Height.HasValue
                 ? $"{item.Width} × {item.Height}"
                 : FormatSize(item.FileSize);
+        }
+
+        private static double CalculateAspectRatio(MediaItem item)
+        {
+            if (item.Width is > 0 && item.Height is > 0)
+            {
+                return Math.Clamp(item.Width.Value / (double)item.Height.Value, 0.35, 3.5);
+            }
+
+            return 1;
+        }
+
+        private static string FormatDuration(long durationMilliseconds)
+        {
+            var duration = TimeSpan.FromMilliseconds(durationMilliseconds);
+            return duration.TotalHours >= 1
+                ? duration.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
+                : duration.ToString(@"m\:ss", CultureInfo.InvariantCulture);
         }
 
         private static string FormatSize(long bytes)
@@ -2968,6 +3071,19 @@ public partial class MainWindow : Window, IDisposable
             brush.Freeze();
             return brush;
         }
+    }
+
+    public sealed class MediaGroupRow
+    {
+        public MediaGroupRow(string date, IEnumerable<MediaRow> rows)
+        {
+            Date = date;
+            Rows = new ObservableCollection<MediaRow>(rows);
+        }
+
+        public string Date { get; }
+
+        public ObservableCollection<MediaRow> Rows { get; }
     }
 
     public sealed class AlbumRow(
@@ -3106,5 +3222,121 @@ public partial class MainWindow : Window, IDisposable
         }
 
         return $"{value:0.#} {units[unit]}";
+    }
+}
+
+public sealed class JustifiedGalleryPanel : System.Windows.Controls.Panel
+{
+    private const double TargetRowHeight = 168;
+    private const double MinimumRowHeight = 96;
+    private const double MaximumSparseRowHeight = 280;
+    private const double ItemGap = 6;
+    private const double FallbackWidth = 960;
+
+    public static readonly DependencyProperty AspectRatioProperty = DependencyProperty.RegisterAttached(
+        "AspectRatio",
+        typeof(double),
+        typeof(JustifiedGalleryPanel),
+        new FrameworkPropertyMetadata(
+            1d,
+            FrameworkPropertyMetadataOptions.AffectsParentMeasure |
+            FrameworkPropertyMetadataOptions.AffectsParentArrange));
+
+    public static void SetAspectRatio(UIElement element, double value) =>
+        element.SetValue(AspectRatioProperty, value);
+
+    public static double GetAspectRatio(UIElement element) =>
+        element.GetValue(AspectRatioProperty) is double ratio
+            ? Math.Clamp(ratio, 0.35, 3.5)
+            : 1;
+
+    protected override System.Windows.Size MeasureOverride(System.Windows.Size availableSize)
+    {
+        var width = ResolveWidth(availableSize.Width);
+        var rows = BuildRows(width);
+        foreach (var row in rows)
+        {
+            for (var index = row.StartIndex; index < row.EndIndex; index++)
+            {
+                var child = InternalChildren[index];
+                child.Measure(new System.Windows.Size(GetAspectRatio(child) * row.Height, row.Height));
+            }
+        }
+
+        return new System.Windows.Size(width, rows.Count == 0 ? 0 : rows[^1].Bottom);
+    }
+
+    protected override System.Windows.Size ArrangeOverride(System.Windows.Size finalSize)
+    {
+        var width = ResolveWidth(finalSize.Width);
+        var rows = BuildRows(width);
+        foreach (var row in rows)
+        {
+            var x = 0d;
+            for (var index = row.StartIndex; index < row.EndIndex; index++)
+            {
+                var child = InternalChildren[index];
+                var childWidth = index == row.EndIndex - 1 && row.StretchToWidth
+                    ? Math.Max(0, width - x)
+                    : GetAspectRatio(child) * row.Height;
+                child.Arrange(new Rect(x, row.Top, childWidth, row.Height));
+                x += childWidth + ItemGap;
+            }
+        }
+
+        return finalSize;
+    }
+
+    private List<GalleryRow> BuildRows(double width)
+    {
+        var rows = new List<GalleryRow>();
+        if (InternalChildren.Count == 0 || width <= 0)
+        {
+            return rows;
+        }
+
+        var start = 0;
+        var ratioSum = 0d;
+        var y = 0d;
+        for (var index = 0; index < InternalChildren.Count; index++)
+        {
+            ratioSum += GetAspectRatio(InternalChildren[index]);
+            var count = index - start + 1;
+            var filledWidthAtTarget = ratioSum * TargetRowHeight + Math.Max(0, count - 1) * ItemGap;
+            var shouldCloseRow = filledWidthAtTarget >= width || index == InternalChildren.Count - 1;
+            if (!shouldCloseRow)
+            {
+                continue;
+            }
+
+            var isLastRow = index == InternalChildren.Count - 1;
+            var gaps = Math.Max(0, count - 1) * ItemGap;
+            var justifiedHeight = (width - gaps) / Math.Max(0.1, ratioSum);
+            var stretch = !isLastRow || count > 1;
+            var height = isLastRow
+                ? count == 1
+                    ? TargetRowHeight
+                    : Math.Clamp(justifiedHeight, MinimumRowHeight, MaximumSparseRowHeight)
+                : Math.Max(MinimumRowHeight, justifiedHeight);
+            rows.Add(new GalleryRow(start, index + 1, y, height, stretch));
+            y += height + ItemGap;
+            start = index + 1;
+            ratioSum = 0;
+        }
+
+        return rows;
+    }
+
+    private static double ResolveWidth(double width) =>
+        double.IsNaN(width) || double.IsInfinity(width) || width <= 0 ? FallbackWidth : width;
+
+    private readonly record struct GalleryRow(
+        int StartIndex,
+        int EndIndex,
+        double Top,
+        double Height,
+        bool StretchToWidth)
+    {
+        public double Bottom => Top + Height;
     }
 }

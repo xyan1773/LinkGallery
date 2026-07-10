@@ -1,6 +1,7 @@
 ﻿<Window x:Class="LinkGallery.Desktop.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:LinkGallery.Desktop"
         Title="LinkGallery"
         Width="1480"
         Height="920"
@@ -13,6 +14,7 @@
         Closing="OnWindowClosing"
         MouseLeftButtonDown="OnWindowMouseLeftButtonDown">
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <Style x:Key="SidebarLabel" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -256,6 +258,28 @@
                                                FontSize="12"
                                                Foreground="{StaticResource LgBrushMuted}"
                                                Text="Local cache" />
+                                    <TextBlock x:Name="TransferStatusText"
+                                               AutomationProperties.AutomationId="TransferStatusText"
+                                               Width="1"
+                                               Height="1"
+                                               Opacity="0" />
+                                    <TextBlock x:Name="ImportSummaryText"
+                                               AutomationProperties.AutomationId="ImportSummaryText"
+                                               Width="1"
+                                               Height="1"
+                                               Opacity="0" />
+                                    <Button x:Name="PauseAllButton"
+                                            AutomationProperties.AutomationId="PauseAllButton"
+                                            Width="1"
+                                            Height="1"
+                                            Opacity="0"
+                                            Click="OnPauseAllClick" />
+                                    <Button x:Name="ResumeAllButton"
+                                            AutomationProperties.AutomationId="ResumeAllButton"
+                                            Width="1"
+                                            Height="1"
+                                            Opacity="0"
+                                            Click="OnResumeAllClick" />
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -410,6 +434,7 @@
                                     Click="OnNewAlbumClick"
                                     Style="{StaticResource LgCommandButton}" />
                             <Button x:Name="EnterIpButton"
+                                    AutomationProperties.AutomationId="EnterIpButton"
                                     Margin="12,0,0,0"
                                     Content="Enter IP manually"
                                     Click="OnEnterIpClick"
@@ -491,105 +516,100 @@
                                        Background="{StaticResource LgBrushSurfaceAlt}"
                                        Foreground="{StaticResource LgBrushMuted}"
                                        Visibility="Collapsed" />
-                            <ListBox x:Name="TimelineList"
-                                     AutomationProperties.AutomationId="TimelineList"
-                                     ItemsSource="{Binding TimelineRows}"
-                                     SelectionMode="Extended"
-                                     BorderThickness="0"
-                                     Background="Transparent"
-                                     KeyDown="OnTimelineKeyDown"
-                                     MouseDoubleClick="OnTimelineDoubleClick"
-                                     SelectionChanged="OnTimelineSelectionChanged"
-                                     ScrollViewer.ScrollChanged="OnTimelineScrollChanged"
-                                     ScrollViewer.CanContentScroll="True"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                     VirtualizingPanel.IsVirtualizing="True"
-                                     VirtualizingPanel.IsVirtualizingWhenGrouping="True"
-                                     VirtualizingPanel.VirtualizationMode="Recycling"
-                                     VirtualizingPanel.CacheLength="1,2"
-                                     VirtualizingPanel.CacheLengthUnit="Page"
-                                     Visibility="Collapsed">
-                                <ListBox.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <VirtualizingStackPanel />
-                                    </ItemsPanelTemplate>
-                                </ListBox.ItemsPanel>
-                                <ListBox.GroupStyle>
-                                    <GroupStyle>
-                                        <GroupStyle.Panel>
-                                            <ItemsPanelTemplate>
-                                                <WrapPanel />
-                                            </ItemsPanelTemplate>
-                                        </GroupStyle.Panel>
-                                        <GroupStyle.ContainerStyle>
-                                            <Style TargetType="{x:Type GroupItem}">
-                                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                                <Setter Property="Template">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType="{x:Type GroupItem}">
-                                                            <StackPanel Margin="0,0,0,28">
-                                                                <TextBlock Margin="0,0,0,12"
-                                                                           FontSize="18"
-                                                                           FontWeight="SemiBold"
-                                                                           Foreground="{StaticResource LgBrushInk}"
-                                                                           Text="{Binding Name}" />
-                                                                <ItemsPresenter />
-                                                            </StackPanel>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </GroupStyle.ContainerStyle>
-                                    </GroupStyle>
-                                </ListBox.GroupStyle>
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="AutomationProperties.AutomationId" Value="{Binding RemoteId}" />
-                                        <Setter Property="AutomationProperties.Name" Value="{Binding FileName}" />
-                                        <Setter Property="Padding" Value="0" />
-                                        <Setter Property="Margin" Value="0,0,10,10" />
-                                        <Setter Property="Background" Value="Transparent" />
-                                        <Setter Property="BorderBrush" Value="Transparent" />
-                                        <Setter Property="BorderThickness" Value="2" />
-                                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                        <Setter Property="Template">
-                                            <Setter.Value>
-                                                <ControlTemplate TargetType="ListBoxItem">
-                                                    <Border Background="{TemplateBinding Background}"
-                                                            BorderBrush="{TemplateBinding BorderBrush}"
-                                                            BorderThickness="{TemplateBinding BorderThickness}"
-                                                            CornerRadius="12">
-                                                        <ContentPresenter />
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsSelected" Value="True">
-                                                            <Setter Property="BorderBrush" Value="#FF6FA8BF" />
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Setter.Value>
-                                        </Setter>
-                                        <EventSetter Event="PreviewMouseLeftButtonUp" Handler="OnMediaTilePreviewMouseLeftButtonUp" />
-                                        <EventSetter Event="Loaded" Handler="OnTimelineItemLoaded" />
-                                        <EventSetter Event="Unloaded" Handler="OnTimelineItemUnloaded" />
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Width="176" Height="176"
-                                                Margin="0"
-                                                Background="{StaticResource LgBrushSurfaceAlt}"
-                                                CornerRadius="11"
-                                                ClipToBounds="True"
-                                                SizeChanged="OnMediaTileSizeChanged">
-                                            <Grid>
-                                                <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                            <ScrollViewer x:Name="TimelineScrollViewer"
+                                          AutomationProperties.AutomationId="TimelineList"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          ScrollChanged="OnTimelineScrollChanged"
+                                          Visibility="Collapsed">
+                                <ItemsControl x:Name="TimelineList"
+                                              ItemsSource="{Binding TimelineGroups}"
+                                              KeyDown="OnTimelineKeyDown"
+                                              MouseDoubleClick="OnTimelineDoubleClick">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,0,0,28">
+                                                <TextBlock Margin="0,0,0,12"
+                                                           FontSize="18"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource LgBrushInk}"
+                                                           Text="{Binding Date}" />
+                                                <ItemsControl ItemsSource="{Binding Rows}">
+                                                    <ItemsControl.ItemContainerStyle>
+                                                        <Style TargetType="ContentPresenter">
+                                                            <Setter Property="AutomationProperties.AutomationId" Value="{Binding RemoteId}" />
+                                                            <Setter Property="AutomationProperties.Name" Value="{Binding FileName}" />
+                                                            <Setter Property="local:JustifiedGalleryPanel.AspectRatio" Value="{Binding AspectRatio}" />
+                                                        </Style>
+                                                    </ItemsControl.ItemContainerStyle>
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <local:JustifiedGalleryPanel />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Button AutomationProperties.AutomationId="{Binding RemoteId}"
+                                                                    AutomationProperties.Name="{Binding FileName}"
+                                                                    Background="Transparent"
+                                                                    BorderThickness="2"
+                                                                    Padding="0"
+                                                                    HorizontalContentAlignment="Stretch"
+                                                                    VerticalContentAlignment="Stretch"
+                                                                    Focusable="True"
+                                                                    PreviewKeyDown="OnMediaTileKeyDown"
+                                                                    Loaded="OnTimelineItemLoaded"
+                                                                    Unloaded="OnTimelineItemUnloaded"
+                                                                    PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp"
+                                                                    SizeChanged="OnMediaTileSizeChanged">
+                                                                <Button.Style>
+                                                                    <Style TargetType="Button">
+                                                                        <Setter Property="BorderBrush" Value="Transparent" />
+                                                                        <Setter Property="Template">
+                                                                            <Setter.Value>
+                                                                                <ControlTemplate TargetType="Button">
+                                                                                    <Border Background="{TemplateBinding Background}"
+                                                                                            BorderBrush="{TemplateBinding BorderBrush}"
+                                                                                            BorderThickness="{TemplateBinding BorderThickness}"
+                                                                                            CornerRadius="12"
+                                                                                            ClipToBounds="True">
+                                                                                        <ContentPresenter HorizontalAlignment="Stretch"
+                                                                                                          VerticalAlignment="Stretch" />
+                                                                                    </Border>
+                                                                                </ControlTemplate>
+                                                                            </Setter.Value>
+                                                                        </Setter>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                                <Setter Property="BorderBrush" Value="#FF6FA8BF" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Button.Style>
+                                                                <Grid Background="{Binding PlaceholderBrush}">
+                                                                    <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                                                    <Border HorizontalAlignment="Right"
+                                                                            VerticalAlignment="Bottom"
+                                                                            Margin="0,0,7,7"
+                                                                            Padding="6,2"
+                                                                            Background="#99000000"
+                                                                            CornerRadius="5"
+                                                                            Visibility="{Binding IsVideo, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                                        <TextBlock FontSize="10"
+                                                                                   FontWeight="SemiBold"
+                                                                                   Foreground="White"
+                                                                                   Text="{Binding DurationText}" />
+                                                                    </Border>
+                                                                </Grid>
+                                                            </Button>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
                         </Grid>
                     </Grid>
 
@@ -722,101 +742,93 @@
                                        Foreground="{StaticResource LgBrushMuted}"
                                        Text="No media in this album"
                                        Visibility="Collapsed" />
-                            <ListBox x:Name="AlbumDetailList"
-                                     AutomationProperties.AutomationId="AlbumDetailList"
-                                     ItemsSource="{Binding AlbumDetailRows}"
-                                     SelectionMode="Extended"
-                                     BorderThickness="0"
-                                     Background="Transparent"
-                                     MouseDoubleClick="OnAlbumDetailDoubleClick"
-                                     SelectionChanged="OnTimelineSelectionChanged"
-                                     ScrollViewer.CanContentScroll="True"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                     VirtualizingPanel.IsVirtualizing="True"
-                                     VirtualizingPanel.IsVirtualizingWhenGrouping="True"
-                                     VirtualizingPanel.VirtualizationMode="Recycling"
-                                     VirtualizingPanel.CacheLength="1,2"
-                                     VirtualizingPanel.CacheLengthUnit="Page">
-                                <ListBox.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <VirtualizingStackPanel />
-                                    </ItemsPanelTemplate>
-                                </ListBox.ItemsPanel>
-                                <ListBox.GroupStyle>
-                                    <GroupStyle>
-                                        <GroupStyle.Panel>
-                                            <ItemsPanelTemplate>
-                                                <UniformGrid Columns="5" />
-                                            </ItemsPanelTemplate>
-                                        </GroupStyle.Panel>
-                                        <GroupStyle.ContainerStyle>
-                                            <Style TargetType="{x:Type GroupItem}">
-                                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                                <Setter Property="Template">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType="{x:Type GroupItem}">
-                                                            <StackPanel Margin="0,0,0,28">
-                                                                <TextBlock Margin="0,0,0,12"
-                                                                           FontSize="18"
-                                                                           FontWeight="SemiBold"
-                                                                           Foreground="{StaticResource LgBrushInk}"
-                                                                           Text="{Binding Name}" />
-                                                                <ItemsPresenter />
-                                                            </StackPanel>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </GroupStyle.ContainerStyle>
-                                    </GroupStyle>
-                                </ListBox.GroupStyle>
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="AutomationProperties.AutomationId" Value="{Binding RemoteId}" />
-                                        <Setter Property="AutomationProperties.Name" Value="{Binding FileName}" />
-                                        <Setter Property="Padding" Value="0" />
-                                        <Setter Property="Margin" Value="0,0,10,10" />
-                                        <Setter Property="Background" Value="Transparent" />
-                                        <Setter Property="BorderBrush" Value="Transparent" />
-                                        <Setter Property="BorderThickness" Value="2" />
-                                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                        <Setter Property="Template">
-                                            <Setter.Value>
-                                                <ControlTemplate TargetType="ListBoxItem">
-                                                    <Border Background="{TemplateBinding Background}"
-                                                            BorderBrush="{TemplateBinding BorderBrush}"
-                                                            BorderThickness="{TemplateBinding BorderThickness}"
-                                                            CornerRadius="12">
-                                                        <ContentPresenter />
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsSelected" Value="True">
-                                                            <Setter Property="BorderBrush" Value="{StaticResource LgBrushAccentStrong}" />
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Setter.Value>
-                                        </Setter>
-                                        <EventSetter Event="PreviewMouseLeftButtonUp" Handler="OnMediaTilePreviewMouseLeftButtonUp" />
-                                        <EventSetter Event="Loaded" Handler="OnTimelineItemLoaded" />
-                                        <EventSetter Event="Unloaded" Handler="OnTimelineItemUnloaded" />
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                                <ListBox.ItemTemplate>
+                            <ItemsControl x:Name="AlbumDetailList"
+                                          AutomationProperties.AutomationId="AlbumDetailList"
+                                          ItemsSource="{Binding AlbumDetailGroups}"
+                                          MouseDoubleClick="OnAlbumDetailDoubleClick">
+                                <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border MinHeight="100"
-                                                Background="{StaticResource LgBrushSurfaceAlt}"
-                                                CornerRadius="11"
-                                                ClipToBounds="True"
-                                                SizeChanged="OnMediaTileSizeChanged">
-                                            <Grid>
-                                                <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
-                                            </Grid>
-                                        </Border>
+                                        <StackPanel Margin="0,0,0,28">
+                                            <TextBlock Margin="0,0,0,12"
+                                                       FontSize="18"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{StaticResource LgBrushInk}"
+                                                       Text="{Binding Date}" />
+                                            <ItemsControl ItemsSource="{Binding Rows}">
+                                                <ItemsControl.ItemContainerStyle>
+                                                    <Style TargetType="ContentPresenter">
+                                                        <Setter Property="AutomationProperties.AutomationId" Value="{Binding RemoteId}" />
+                                                        <Setter Property="AutomationProperties.Name" Value="{Binding FileName}" />
+                                                        <Setter Property="local:JustifiedGalleryPanel.AspectRatio" Value="{Binding AspectRatio}" />
+                                                    </Style>
+                                                </ItemsControl.ItemContainerStyle>
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <local:JustifiedGalleryPanel />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button AutomationProperties.AutomationId="{Binding RemoteId}"
+                                                                AutomationProperties.Name="{Binding FileName}"
+                                                                Background="Transparent"
+                                                                BorderThickness="2"
+                                                                Padding="0"
+                                                                HorizontalContentAlignment="Stretch"
+                                                                VerticalContentAlignment="Stretch"
+                                                                Focusable="True"
+                                                                PreviewKeyDown="OnMediaTileKeyDown"
+                                                                Loaded="OnTimelineItemLoaded"
+                                                                Unloaded="OnTimelineItemUnloaded"
+                                                                PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp"
+                                                                SizeChanged="OnMediaTileSizeChanged">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button">
+                                                                    <Setter Property="BorderBrush" Value="Transparent" />
+                                                                    <Setter Property="Template">
+                                                                        <Setter.Value>
+                                                                            <ControlTemplate TargetType="Button">
+                                                                                <Border Background="{TemplateBinding Background}"
+                                                                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                                                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                                                                        CornerRadius="12"
+                                                                                        ClipToBounds="True">
+                                                                                    <ContentPresenter HorizontalAlignment="Stretch"
+                                                                                                      VerticalAlignment="Stretch" />
+                                                                                </Border>
+                                                                            </ControlTemplate>
+                                                                        </Setter.Value>
+                                                                    </Setter>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                            <Setter Property="BorderBrush" Value="{StaticResource LgBrushAccentStrong}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                            <Grid Background="{Binding PlaceholderBrush}">
+                                                                <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                                                                <Border HorizontalAlignment="Right"
+                                                                        VerticalAlignment="Bottom"
+                                                                        Margin="0,0,7,7"
+                                                                        Padding="6,2"
+                                                                        Background="#99000000"
+                                                                        CornerRadius="5"
+                                                                        Visibility="{Binding IsVideo, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                                    <TextBlock FontSize="10"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="White"
+                                                                               Text="{Binding DurationText}" />
+                                                                </Border>
+                                                            </Grid>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
                                     </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
                     </ScrollViewer>
 
@@ -1113,6 +1125,7 @@
                                 </StackPanel>
                             </Border>
                             <Button x:Name="InspectorCopyButton"
+                                    AutomationProperties.AutomationId="InspectorCopyButton"
                                     Margin="0,22,0,0"
                                     Content="Copy selected"
                                     Click="OnInspectorCopyClick"
@@ -1313,7 +1326,9 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Button Content="&#xE711;"
+                            <Button x:Name="ViewerCloseButton"
+                                    AutomationProperties.AutomationId="ViewerCloseButton"
+                                    Content="&#xE711;"
                                     FontFamily="Segoe MDL2 Assets"
                                     Background="#1AFFFFFF"
                                     BorderBrush="#1FFFFFFF"
@@ -1324,6 +1339,7 @@
                                         Margin="12,0"
                                         VerticalAlignment="Center">
                                 <TextBlock x:Name="ViewerNameText"
+                                           AutomationProperties.AutomationId="ViewerNameText"
                                            Foreground="White"
                                            FontSize="13"
                                            FontWeight="SemiBold"
@@ -1333,7 +1349,9 @@
                                            Foreground="#94FFFFFF"
                                            FontSize="10" />
                             </StackPanel>
-                            <Button Grid.Column="2"
+                            <Button x:Name="ViewerZoomOutButton"
+                                    AutomationProperties.AutomationId="ViewerZoomOutButton"
+                                    Grid.Column="2"
                                     Margin="0,0,8,0"
                                     Content="-"
                                     Background="#1AFFFFFF"
@@ -1341,7 +1359,9 @@
                                     Foreground="White"
                                     Click="OnZoomOutClick"
                                     Style="{StaticResource LgIconButton}" />
-                            <Button Grid.Column="3"
+                            <Button x:Name="ViewerZoomInButton"
+                                    AutomationProperties.AutomationId="ViewerZoomInButton"
+                                    Grid.Column="3"
                                     Margin="0,0,8,0"
                                     Content="+"
                                     Background="#1AFFFFFF"
@@ -1349,7 +1369,9 @@
                                     Foreground="White"
                                     Click="OnZoomInClick"
                                     Style="{StaticResource LgIconButton}" />
-                            <Button Grid.Column="4"
+                            <Button x:Name="ViewerCopyButton"
+                                    AutomationProperties.AutomationId="ViewerCopyButton"
+                                    Grid.Column="4"
                                     Content="&#xE896;"
                                     FontFamily="Segoe MDL2 Assets"
                                     Background="#1AFFFFFF"
