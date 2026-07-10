@@ -22,6 +22,8 @@ class PairingManagerTest {
         val manager = PairingManager()
         manager.openPairingWindow(nowMillis = 1_000)
 
+        val codeBeforeDesktopConnects = manager.activeVerificationCode(nowMillis = 1_001)
+
         val result = manager.start(startRequest(), nowMillis = 2_000)
         val second = manager.start(startRequest(desktopId = "desktop-2"), nowMillis = 2_001)
 
@@ -29,10 +31,27 @@ class PairingManagerTest {
         val response = (result as PairingResult.Success).value
         assertEquals(5, response.attemptsRemaining)
         assertEquals(6, response.codeLength)
+        assertNotNull(codeBeforeDesktopConnects)
+        assertEquals(codeBeforeDesktopConnects, manager.activeVerificationCode(nowMillis = 2_002))
         assertNotNull(manager.activeVerificationCode(nowMillis = 2_002))
         assertTrue(manager.activeVerificationCode(nowMillis = 2_002)!!.matches(Regex("\\d{6}")))
         assertTrue(second is PairingResult.Failure)
         assertEquals("pairing_session_active", (second as PairingResult.Failure).code)
+    }
+
+    @Test
+    fun qrCodeCanOpenWindowWithDesktopGeneratedVerificationCode() {
+        val manager = PairingManager()
+
+        manager.openPairingWindow(nowMillis = 1_000, verificationCode = "281604")
+        val start = manager.start(startRequest(), nowMillis = 2_000) as PairingResult.Success
+
+        assertEquals("281604", manager.activeVerificationCode(nowMillis = 2_001))
+        val confirmed = manager.confirm(
+            PairConfirmRequest(start.value.pairingSessionId, "281604"),
+            nowMillis = 2_002,
+        )
+        assertTrue(confirmed is PairingResult.Success)
     }
 
     @Test

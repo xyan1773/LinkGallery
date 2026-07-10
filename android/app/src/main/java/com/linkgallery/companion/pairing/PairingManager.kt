@@ -4,8 +4,6 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.UUID
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 data class PairStartRequest(
     val desktopId: String,
@@ -45,7 +43,10 @@ sealed interface PairingResult<out T> {
 }
 
 interface PairingCoordinator {
-    fun openPairingWindow(nowMillis: Long = System.currentTimeMillis()): PairingWindow
+    fun openPairingWindow(
+        nowMillis: Long = System.currentTimeMillis(),
+        verificationCode: String? = null,
+    ): PairingWindow
     fun isPairingAvailable(nowMillis: Long = System.currentTimeMillis()): Boolean
     fun activeVerificationCode(nowMillis: Long = System.currentTimeMillis()): String?
     fun start(request: PairStartRequest, nowMillis: Long = System.currentTimeMillis()): PairingResult<PairStartResponse>
@@ -76,7 +77,8 @@ object RejectingAccessTokenAuthenticator : AccessTokenAuthenticator {
 }
 
 object DisabledPairingCoordinator : PairingCoordinator {
-    override fun openPairingWindow(nowMillis: Long): PairingWindow = PairingWindow(nowMillis, nowMillis)
+    override fun openPairingWindow(nowMillis: Long, verificationCode: String?): PairingWindow =
+        PairingWindow(nowMillis, nowMillis, "")
     override fun isPairingAvailable(nowMillis: Long): Boolean = false
     override fun activeVerificationCode(nowMillis: Long): String? = null
     override fun start(
@@ -103,6 +105,7 @@ object DisabledPairingCoordinator : PairingCoordinator {
 data class PairingWindow(
     val openedAtEpochMillis: Long,
     val expiresAtEpochMillis: Long,
+    val verificationCode: String,
 )
 
 class PairingManager(
@@ -111,15 +114,20 @@ class PairingManager(
     private val credentialStore: PairingCredentialStore = InMemoryPairingCredentialStore(),
 ) : PairingCoordinator, AccessTokenAuthenticator {
     private val lock = Any()
-    private val secret = ByteArray(32).also(random::nextBytes)
     private var window: PairingWindow? = null
     private var activeSession: PairingSession? = null
     private var lockedUntilEpochMillis: Long = 0
 
     fun pairedCredentials(): List<PairedCredential> = credentialStore.list()
 
-    override fun openPairingWindow(nowMillis: Long): PairingWindow = synchronized(lock) {
-        val next = PairingWindow(nowMillis, nowMillis + windowDurationMillis)
+    override fun openPairingWindow(nowMillis: Long, verificationCode: String?): PairingWindow = synchronized(lock) {
+        val requestedCode = verificationCode
+            ?.takeIf { it.length == CODE_LENGTH && it.all(Char::isDigit) }
+        val next = PairingWindow(
+            openedAtEpochMillis = nowMillis,
+            expiresAtEpochMillis = nowMillis + windowDurationMillis,
+            verificationCode = requestedCode ?: randomVerificationCode(),
+        )
         window = next
         activeSession = null
         next
@@ -132,6 +140,7 @@ class PairingManager(
 
     override fun activeVerificationCode(nowMillis: Long): String? = synchronized(lock) {
         activeSession?.takeIf { nowMillis < it.expiresAtEpochMillis }?.verificationCode
+            ?: window?.takeIf { nowMillis < it.expiresAtEpochMillis }?.verificationCode
     }
 
     override fun start(
@@ -161,7 +170,7 @@ class PairingManager(
 
         val phoneNonce = randomBase64(24)
         val expiresAt = minOf(currentWindow.expiresAtEpochMillis, nowMillis + SESSION_DURATION_MILLIS)
-        val code = verificationCode(request, phoneNonce)
+        val code = currentWindow.verificationCode
         val session = PairingSession(
             id = UUID.randomUUID().toString(),
             desktopId = request.desktopId,
@@ -236,6 +245,7 @@ class PairingManager(
             ),
         )
         activeSession = null
+        window = null
         PairingResult.Success(PairConfirmResponse(paired = true, accessToken = accessToken))
     }
 
@@ -288,28 +298,8 @@ class PairingManager(
         "Pairing must be opened on the Android device first.",
     )
 
-    private fun verificationCode(request: PairStartRequest, phoneNonce: String): String {
-        val transcript = listOf(
-            request.desktopId,
-            request.desktopName,
-            request.desktopModel.orEmpty(),
-            request.identityPublicKey,
-            request.ephemeralPublicKey,
-            request.nonce,
-            phoneNonce,
-        ).joinToString(separator = "\n")
-        val mac = hmac(secret, "LinkGallery Pairing Code v1".toByteArray() + transcript.toByteArray())
-        val value = ((mac[0].toInt() and 0xFF) shl 16) or
-            ((mac[1].toInt() and 0xFF) shl 8) or
-            (mac[2].toInt() and 0xFF)
-        return (value % 1_000_000).toString().padStart(CODE_LENGTH, '0')
-    }
-
-    private fun hmac(key: ByteArray, data: ByteArray): ByteArray {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(key, "HmacSHA256"))
-        return mac.doFinal(data)
-    }
+    private fun randomVerificationCode(): String =
+        random.nextInt(1_000_000).toString().padStart(CODE_LENGTH, '0')
 
     private fun randomBase64(size: Int): String {
         val bytes = ByteArray(size)

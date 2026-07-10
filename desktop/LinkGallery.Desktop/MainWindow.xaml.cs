@@ -71,6 +71,7 @@ public partial class MainWindow : Window, IDisposable
     private readonly SqlitePairedDeviceStore _pairedDeviceStore;
     private readonly WindowsAccessTokenStore _accessTokenStore;
     private readonly HttpPairingClient _pairingClient;
+    private readonly LocalDeviceDiscovery _localDeviceDiscovery;
     private readonly DiscoveryManager _discoveryManager = new();
     private readonly LocalCopyCatalog _localCopies;
     private readonly ThumbnailCacheReader _thumbnailCache;
@@ -100,6 +101,7 @@ public partial class MainWindow : Window, IDisposable
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
     private string? _activeAccessToken;
+    private string? _pendingPairingCode;
     private PairedDevice? _activePairedDevice;
     private Uri? _activeApiAddress;
     private string? _remoteNextCursor;
@@ -126,6 +128,7 @@ public partial class MainWindow : Window, IDisposable
         _pairedDeviceStore = new SqlitePairedDeviceStore(Path.Combine(dataDirectory, "devices.db"));
         _accessTokenStore = new WindowsAccessTokenStore(Path.Combine(dataDirectory, "credentials"));
         _pairingClient = new HttpPairingClient(_httpClient);
+        _localDeviceDiscovery = new LocalDeviceDiscovery(_httpClient);
         _localCopies = new LocalCopyCatalog(Path.Combine(dataDirectory, "local-copies.json"));
         _thumbnailCacheDirectory = Path.Combine(dataDirectory, "cache", "thumbnails");
         _thumbnailCache = new ThumbnailCacheReader(_thumbnailCacheDirectory);
@@ -240,7 +243,7 @@ public partial class MainWindow : Window, IDisposable
         SearchButton.Content = L("Search", "搜索");
         ImportSelectedButton.Content = _isSelectionMode ? L("Done", "完成") : L("Multi-select", "多选");
         NewAlbumButton.Content = L("New album", "新建相册");
-        EnterIpButton.Content = L("Enter IP manually", "手动输入 IP");
+        EnterIpButton.Content = L("Pair device", "配对设备");
         FindDevicesButton.Content = L("Find devices", "查找设备");
         CopyAlbumButton.Content = L("Copy album", "复制相册");
 
@@ -743,7 +746,12 @@ public partial class MainWindow : Window, IDisposable
             SetEmptyState(L($"Connecting to {endpoint}...", $"正在连接 {endpoint}…"));
             _connectionCancellation = new CancellationTokenSource();
             var cancellationToken = _connectionCancellation.Token;
-            var authorization = await ResolveAuthorizationAsync(apiAddress, cancellationToken);
+            var pairingCode = _pendingPairingCode;
+            _pendingPairingCode = null;
+            var authorization = await ResolveAuthorizationAsync(
+                apiAddress,
+                cancellationToken,
+                pairingCode);
             var httpSource = new HttpReadOnlyMediaSource(
                 _httpClient,
                 apiAddress,
@@ -820,7 +828,8 @@ public partial class MainWindow : Window, IDisposable
 
     private async Task<DeviceAuthorization> ResolveAuthorizationAsync(
         Uri apiAddress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? verificationCode = null)
     {
         var publicInfo = await new HttpPublicDeviceInfoClient(_httpClient)
             .GetAsync(apiAddress, cancellationToken);
@@ -853,8 +862,8 @@ public partial class MainWindow : Window, IDisposable
         {
             throw new InvalidOperationException(
                 L(
-                    "Open LinkGallery on the phone and tap “Pair another computer”, then try again.",
-                    "请在手机上打开 LinkGallery，点击“配对另一台电脑”，然后重试。"));
+                    "Open the Devices page on the phone, then scan the QR code or show a six-digit code.",
+                    "请在手机 LinkGallery 的设备页扫描二维码，或显示六位配对码。"));
         }
 
         var identity = new PairingIdentity(
@@ -865,16 +874,20 @@ public partial class MainWindow : Window, IDisposable
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)));
         var session = await _pairingClient.StartAsync(apiAddress, identity, cancellationToken);
-        var dialog = new PairingCodeWindow(session.CodeLength) { Owner = this };
-        if (dialog.ShowDialog() != true)
+        if (string.IsNullOrWhiteSpace(verificationCode))
         {
-            throw new OperationCanceledException("Pairing was cancelled.", cancellationToken);
+            var dialog = new PairingCodeWindow(session.CodeLength) { Owner = this };
+            if (dialog.ShowDialog() != true)
+            {
+                throw new OperationCanceledException("Pairing was cancelled.", cancellationToken);
+            }
+            verificationCode = dialog.VerificationCode;
         }
 
         var credential = await _pairingClient.ConfirmAsync(
             apiAddress,
             session.PairingSessionId,
-            dialog.VerificationCode,
+            verificationCode,
             cancellationToken);
         var credentialKey = await _accessTokenStore.SaveAsync(
             credential.AccessToken,
@@ -1595,17 +1608,74 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnEnterIpClick(object sender, RoutedEventArgs e)
     {
-        SetManualConnectionOpen(true);
-        StatusText.Text = L(
-            "Enter the phone API address, then press Enter to connect.",
-            "输入手机 API 地址，然后按 Enter 连接。");
-        AddressTextBox.Focus();
-        if (!string.IsNullOrWhiteSpace(AddressTextBox.Text))
+        var code = RandomNumberGenerator.GetInt32(1_000_000).ToString("D6", CultureInfo.InvariantCulture);
+        var payload = PairingQrPayloadCodec.Create(_desktopId, Environment.MachineName, code);
+        var dialog = new PairDeviceWindow(
+            payload,
+            code,
+            _language == UiLanguage.Chinese) { Owner = this };
+        using var resolutionCancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var resolutionTask = ResolvePairingWindowAsync(dialog, resolutionCancellation.Token);
+        dialog.ShowDialog();
+        resolutionCancellation.Cancel();
+        try
         {
+            await resolutionTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        if (dialog.ResolvedDevice is not null)
+        {
+            var address = dialog.ResolvedDevice.Addresses
+                .OrderByDescending(candidate => candidate.Source == DeviceAddressSource.Udp)
+                .ThenByDescending(candidate => candidate.Source == DeviceAddressSource.Subnet)
+                .First();
+            _pendingPairingCode = dialog.ActiveCode;
+            AddressTextBox.Text = $"{address.Host}:{address.Port}";
+            StatusText.Text = L(
+                $"Found {dialog.ResolvedDevice.DisplayName}; pairing…",
+                $"已找到 {dialog.ResolvedDevice.DisplayName}，正在配对…");
+            OnConnectClick(ConnectButton, new RoutedEventArgs());
             return;
         }
 
-        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+        if (dialog.ManualIpRequested)
+        {
+            SetManualConnectionOpen(true);
+            StatusText.Text = L(
+                "Enter the phone API address, then press Enter to connect.",
+                "输入手机 API 地址，然后按 Enter 连接。");
+            AddressTextBox.Focus();
+        }
+    }
+
+    private async Task ResolvePairingWindowAsync(
+        PairDeviceWindow dialog,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested && !dialog.IsClosed)
+        {
+            var activeCode = dialog.ActiveCode;
+            var device = await _localDeviceDiscovery.ResolvePairingCodeAsync(
+                _desktopId,
+                activeCode,
+                cancellationToken);
+            if (device is not null && !dialog.IsClosed && dialog.ActiveCode == activeCode)
+            {
+                dialog.Complete(device, activeCode);
+                return;
+            }
+
+            if (!dialog.IsClosed)
+            {
+                dialog.SetWaitingStatus(L(
+                    "Waiting for the phone on Wi-Fi, hotspot or USB network…",
+                    "正在 Wi-Fi、热点或 USB 网络中等待手机…"));
+            }
+            await Task.Delay(350, cancellationToken);
+        }
     }
 
     private void OnCancelManualConnectionClick(object sender, RoutedEventArgs e) =>
@@ -1617,9 +1687,8 @@ public partial class MainWindow : Window, IDisposable
         StatusText.Text = L("Searching the local network…", "正在搜索局域网设备…");
         try
         {
-            var discovered = await UdpDiscoveryClient.DiscoverAsync(
+            var discovered = await _localDeviceDiscovery.DiscoverAsync(
                 _desktopId,
-                TimeSpan.FromSeconds(2),
                 CancellationToken.None);
             foreach (var device in discovered)
             {

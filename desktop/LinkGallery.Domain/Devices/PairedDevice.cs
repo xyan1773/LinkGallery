@@ -17,6 +17,8 @@ public enum DeviceAddressSource
     Saved,
     Mdns,
     Udp,
+    Subnet,
+    Adb,
     Manual,
     Qr,
 }

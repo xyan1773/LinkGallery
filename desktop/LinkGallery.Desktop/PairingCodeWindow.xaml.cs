@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 
 namespace LinkGallery.Desktop;
 
@@ -22,5 +23,10 @@ public partial class PairingCodeWindow : Window
             return;
         }
         DialogResult = true;
+    }
+
+    private void OnWindowMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ButtonState == MouseButtonState.Pressed) DragMove();
     }
 }

@@ -7,14 +7,18 @@ object UdpDiscoveryProtocol {
     const val PORT = 39571
 
     fun parseDiscover(payload: String): DiscoverMessage? {
-        if (field(payload, "magic") != MAGIC || field(payload, "type") != "discover") {
+        if (field(payload, "magic") != MAGIC) {
             return null
         }
+        val type = field(payload, "type") ?: return null
+        if (type != "discover" && type != "resolve_pairing_code") return null
         val nonce = field(payload, "nonce")?.takeIf(String::isNotBlank) ?: return null
         return DiscoverMessage(
             nonce = nonce,
             desktopId = field(payload, "desktopId").orEmpty(),
             timestamp = numberField(payload, "timestamp") ?: 0,
+            pairingCode = field(payload, "pairingCode")
+                ?.takeIf { it.length == 6 && it.all(Char::isDigit) },
         )
     }
 
@@ -92,4 +96,5 @@ data class DiscoverMessage(
     val nonce: String,
     val desktopId: String,
     val timestamp: Long,
+    val pairingCode: String? = null,
 )

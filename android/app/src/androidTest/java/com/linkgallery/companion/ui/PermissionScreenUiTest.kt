@@ -27,8 +27,6 @@ class PermissionScreenUiTest {
             )
         }
 
-        compose.onNodeWithText("Allow LinkGallery to read photos and videos")
-            .assertIsDisplayed()
         compose.onNodeWithTag("grant_media_permission")
             .assertIsDisplayed()
             .performClick()
@@ -49,7 +47,9 @@ class PermissionScreenUiTest {
             )
         }
 
-        compose.onNodeWithText("No media found")
+        compose.onNodeWithTag("tab_albums")
+            .assertIsDisplayed()
+        compose.onNodeWithTag("tab_connection")
             .assertIsDisplayed()
         compose.onAllNodesWithTag("grant_media_permission").assertCountEquals(0)
     }

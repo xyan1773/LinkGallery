@@ -477,6 +477,22 @@ class ApiControllerTest {
     }
 
     @Test
+    fun pairStartAcceptsSystemTextJsonUnicodeEscapes() {
+        val pairingManager = PairingManager()
+        pairingManager.openPairingWindow(nowMillis = System.currentTimeMillis())
+        val controller = controller(pairingManager = pairingManager)
+        val body =
+            """{"desktopId":"desktop-1","desktopName":"Windows PC","desktopModel":"Windows","identityPublicKey":"abc\u002Bdef","ephemeralPublicKey":"ghi\u002Bjkl","nonce":"nonce\u002Bvalue"}"""
+
+        val start = runSuspend {
+            controller.handle("POST", "/api/v1/pair/start", body = body)
+        }
+
+        assertEquals(200, start.status)
+        assertTrue(start.body.contains(""""codeLength":6"""))
+    }
+
+    @Test
     fun privateRoutesRequireBearerToken() {
         val controller = controller(
             accessTokenAuthenticator = RejectingAccessTokenAuthenticator,

@@ -47,4 +47,14 @@ class UdpDiscoveryProtocolTest {
         assertNull(UdpDiscoveryProtocol.parseDiscover("""{"magic":"other","type":"discover"}"""))
         assertNull(UdpDiscoveryProtocol.parseDiscover("""{"magic":"LINKGALLERY_DISCOVERY_V1","type":"announce"}"""))
     }
+
+    @Test
+    fun parsesPairingCodeResolutionWithoutTreatingCodeAsAddress() {
+        val request = UdpDiscoveryProtocol.parseDiscover(
+            """{"magic":"LINKGALLERY_DISCOVERY_V1","type":"resolve_pairing_code","nonce":"n2","desktopId":"desktop","pairingCode":"281604","timestamp":3}""",
+        )
+
+        assertNotNull(request)
+        assertEquals("281604", request?.pairingCode)
+    }
 }

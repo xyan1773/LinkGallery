@@ -543,6 +543,17 @@ class ApiController(
                     } else {
                         if (index + 1 >= value.length) throw IllegalArgumentException("Bad escape")
                         val escaped = value[index + 1]
+                        if (escaped == 'u') {
+                            if (index + 6 > value.length) {
+                                throw IllegalArgumentException("Bad unicode escape")
+                            }
+                            val codePoint = value.substring(index + 2, index + 6)
+                                .toIntOrNull(16)
+                                ?: throw IllegalArgumentException("Bad unicode escape")
+                            output.append(codePoint.toChar())
+                            index += 6
+                            continue
+                        }
                         output.append(
                             when (escaped) {
                                 '"' -> '"'

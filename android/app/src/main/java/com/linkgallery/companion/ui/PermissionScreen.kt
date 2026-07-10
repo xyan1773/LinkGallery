@@ -88,6 +88,9 @@ import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
+import com.linkgallery.companion.pairing.DesktopPairingQrCodec
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.text.NumberFormat
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -105,7 +108,7 @@ fun PermissionScreen(
     mediaRepository: MediaRepository? = null,
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
     onServiceRunningChange: (Boolean) -> Unit = {},
-    onOpenPairingWindow: () -> Long = { 0L },
+    onOpenPairingWindow: (String?) -> Long = { 0L },
     activePairingCodeProvider: () -> String? = { "428913" },
 ) {
     val context = LocalContext.current
@@ -146,7 +149,7 @@ internal fun LinkGalleryApp(
     onPermissionRequest: () -> Unit,
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
     onServiceRunningChange: (Boolean) -> Unit = {},
-    onOpenPairingWindow: () -> Long = { 0L },
+    onOpenPairingWindow: (String?) -> Long = { 0L },
     activePairingCodeProvider: () -> String? = { "428913" },
 ) {
     val context = LocalContext.current
@@ -168,6 +171,21 @@ internal fun LinkGalleryApp(
 
     fun showToast(message: String) {
         toastMessage = message
+    }
+
+    val qrScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val request = result.contents?.let(DesktopPairingQrCodec::parse)
+        if (request == null) {
+            showToast(strings.t(
+                "This is not a LinkGallery pairing QR code",
+                "这不是有效的 LinkGallery 配对二维码",
+            ))
+        } else {
+            onOpenPairingWindow(request.verificationCode)
+            showPairing = true
+            selectedTab = AppTab.Connection
+            showToast(strings.t("Pairing request accepted", "已接受电脑配对请求"))
+        }
     }
 
     fun setLanguage(next: UiLanguage) {
@@ -207,7 +225,9 @@ internal fun LinkGalleryApp(
         containerColor = LgParchment,
         bottomBar = {
             NavigationBar(
-                modifier = Modifier.testTag("bottom_navigation"),
+                modifier = Modifier
+                    .height(60.dp)
+                    .testTag("bottom_navigation"),
                 containerColor = LgCanvas,
                 tonalElevation = 0.dp,
             ) {
@@ -264,7 +284,6 @@ internal fun LinkGalleryApp(
                             mediaRepository = mediaRepository,
                             onFilterChange = {
                                 selectedFilter = it
-                                showToast(strings.t("Showing ${it.label(strings).lowercase()}", "正在显示${it.label(strings)}"))
                             },
                             onPermissionRequest = onPermissionRequest,
                             onToast = ::showToast,
@@ -285,9 +304,18 @@ internal fun LinkGalleryApp(
                             onServiceRunningChange = onServiceRunningChange,
                             permissionGranted = permissionGranted,
                             onPair = {
-                                onOpenPairingWindow()
+                                onOpenPairingWindow(null)
                                 showPairing = true
-                                showToast(strings.t("Pairing request created", "已创建配对请求"))
+                            },
+                            onScanQr = {
+                                qrScanner.launch(
+                                    ScanOptions()
+                                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                        .setCaptureActivity(LinkGalleryQrCaptureActivity::class.java)
+                                        .setPrompt(strings.scanComputerQr)
+                                        .setBeepEnabled(false)
+                                        .setOrientationLocked(false),
+                                )
                             },
                             onToast = ::showToast,
                             strings = strings,
@@ -370,7 +398,9 @@ private fun AlbumsPage(
                     items = activeAlbumItems,
                     selectedFilter = MediaFilter.All,
                     mediaRepository = mediaRepository,
-                    onToast = onToast,
+                    selectionMode = false,
+                    selectedIds = emptySet(),
+                    onToggleSelection = {},
                     strings = strings,
                 )
             }
@@ -457,17 +487,31 @@ private fun PhotosPage(
     strings: UiStrings,
 ) {
     val mediaCount = (galleryState as? GalleryState.Ready)?.items?.size ?: 0
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    fun toggleSelection(id: String) {
+        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+    }
+
+    fun closeSelection() {
+        selectedIds = emptySet()
+        selectionMode = false
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
             TopBar(
                 title = strings.photos,
                 subtitle = strings.itemCount(mediaCount),
-                action = strings.multiSelect,
-                onAction = { onToast(strings.selectionModeEnabled) },
+                action = if (selectionMode) strings.selectedCount(selectedIds.size) else strings.multiSelect,
+                onAction = {
+                    if (selectionMode) closeSelection() else selectionMode = true
+                },
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MediaFilter.entries.forEach { filter ->
@@ -492,18 +536,27 @@ private fun PhotosPage(
                     items = galleryState.items,
                     selectedFilter = selectedFilter,
                     mediaRepository = mediaRepository,
-                    onToast = onToast,
+                    selectionMode = selectionMode,
+                    selectedIds = selectedIds,
+                    onToggleSelection = ::toggleSelection,
                     strings = strings,
                 )
             }
         }
-        FloatingCopyButton(
-            onToast = onToast,
-            strings = strings,
+        AnimatedVisibility(
+            visible = selectionMode && selectedIds.isNotEmpty(),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(horizontal = 20.dp, vertical = 24.dp),
-        )
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            SelectionActionBar(
+                selectedCount = selectedIds.size,
+                onCopy = { onToast(strings.copyComplete) },
+                strings = strings,
+            )
+        }
     }
 }
 
@@ -514,6 +567,7 @@ private fun DevicesPage(
     onServiceRunningChange: (Boolean) -> Unit,
     permissionGranted: Boolean,
     onPair: () -> Unit,
+    onScanQr: () -> Unit,
     onToast: (String) -> Unit,
     strings: UiStrings,
     language: UiLanguage,
@@ -533,88 +587,89 @@ private fun DevicesPage(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         TopBar(
             title = strings.devices,
             subtitle = strings.wifiMediaService,
-            action = strings.settings,
+            action = if (showSettings) strings.done else strings.settings,
             onAction = { showSettings = !showSettings },
         )
-        AnimatedVisibility(visible = showSettings) {
-            SettingRow(
-                title = strings.languageLabel,
-                detail = strings.chooseLanguage,
-                trailing = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { onLanguageChange(UiLanguage.Chinese) }) {
-                            Text(
-                                text = "中文",
-                                color = if (language == UiLanguage.Chinese) LgBlue else LgMuted,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                        TextButton(onClick = { onLanguageChange(UiLanguage.English) }) {
-                            Text(
-                                text = "English",
-                                color = if (language == UiLanguage.English) LgBlue else LgMuted,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
-                },
-            )
-        }
         Card(
             colors = CardDefaults.cardColors(containerColor = LgBlue),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(20.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.padding(18.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier
-                            .size(9.dp)
-                            .clip(CircleShape)
-                            .background(if (serviceState.running) LgSuccess else LgMuted),
-                    )
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(if (serviceState.running) LgSuccess else LgMuted),
+                )
+                Column(Modifier.padding(start = 10.dp).weight(1f)) {
                     Text(
                         text = if (serviceState.running) strings.serviceRunning else strings.serviceStopped,
                         color = Color.White,
                         fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                    Text(
+                        text = serviceAddress,
+                        color = Color.White.copy(alpha = 0.82f),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("connection_address"),
                     )
                 }
                 Text(
-                    text = connectionGuide.title,
+                    text = serviceState.port?.toString() ?: "—",
                     color = Color.White,
-                    style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(top = 18.dp),
-                )
-                Text(
-                    text = serviceAddress,
-                    color = Color.White.copy(alpha = 0.88f),
                     modifier = Modifier
-                        .padding(top = 8.dp)
-                        .testTag("connection_address"),
+                        .background(Color.White.copy(alpha = 0.16f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
         }
-        Spacer(Modifier.height(16.dp))
-        SettingRow(
-            title = strings.keepServiceRunning,
-            detail = strings.allowPairedComputers,
-            trailing = {
-                LinkGallerySwitch(
-                    checked = serviceState.running,
-                    onCheckedChange = {
-                        onServiceRunningChange(it)
-                        onToast(if (it) strings.mediaServiceStarted else strings.mediaServiceStopped)
-                    },
+        Spacer(Modifier.height(12.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = LgCanvas),
+            shape = RoundedCornerShape(18.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, LgLine, RoundedCornerShape(18.dp)),
+        ) {
+            Column(Modifier.padding(14.dp)) {
+                Text(strings.connectComputer, fontWeight = FontWeight.SemiBold)
+                Text(
+                    strings.connectComputerDetail,
+                    color = LgMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 3.dp, bottom = 12.dp),
                 )
-            },
-        )
+                Button(
+                    onClick = onScanQr,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = LgBlueStrong),
+                ) {
+                    Text(strings.scanComputerQr)
+                }
+                TextButton(
+                    onClick = onPair,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("show_pairing_code"),
+                ) {
+                    Text(strings.showSixDigitCode)
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
         SettingRow(
             title = strings.pairedComputer,
             detail = serviceState.pairedDesktopNames
@@ -625,29 +680,49 @@ private fun DevicesPage(
                 Text(strings.pair, color = LgBlue, fontWeight = FontWeight.SemiBold)
             },
         )
-        SettingRow(
-            title = strings.pocketSource,
-            detail = strings.pocketIssueDetail,
-            trailing = {
-                Text(strings.issue, color = LgMuted, fontWeight = FontWeight.SemiBold)
-            },
-        )
-        Spacer(Modifier.height(16.dp))
-        StateCard(
-            title = if (permissionGranted) strings.mediaPermissionReady else strings.mediaPermissionNeeded,
-            detail = strings.readOnlyApiDetail,
-            tag = "permission_status",
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = onPair,
-            shape = RoundedCornerShape(999.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("show_pairing_code"),
-            colors = ButtonDefaults.buttonColors(containerColor = LgBlueStrong),
-        ) {
-            Text(strings.pairAnotherComputer)
+        AnimatedVisibility(visible = showSettings) {
+            Column {
+                SettingRow(
+                    title = strings.keepServiceRunning,
+                    detail = strings.allowPairedComputers,
+                    trailing = {
+                        LinkGallerySwitch(
+                            checked = serviceState.running,
+                            onCheckedChange = {
+                                onServiceRunningChange(it)
+                                onToast(if (it) strings.mediaServiceStarted else strings.mediaServiceStopped)
+                            },
+                        )
+                    },
+                )
+                SettingRow(
+                    title = strings.languageLabel,
+                    detail = strings.chooseLanguage,
+                    trailing = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            TextButton(onClick = { onLanguageChange(UiLanguage.Chinese) }) {
+                                Text(
+                                    text = "中文",
+                                    color = if (language == UiLanguage.Chinese) LgBlue else LgMuted,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                            TextButton(onClick = { onLanguageChange(UiLanguage.English) }) {
+                                Text(
+                                    text = "EN",
+                                    color = if (language == UiLanguage.English) LgBlue else LgMuted,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    },
+                )
+                StateCard(
+                    title = if (permissionGranted) strings.mediaPermissionReady else strings.mediaPermissionNeeded,
+                    detail = strings.readOnlyApiDetail,
+                    tag = "permission_status",
+                )
+            }
         }
     }
 }
@@ -747,7 +822,9 @@ private fun MediaGrid(
     items: List<MediaRecord>,
     selectedFilter: MediaFilter,
     mediaRepository: MediaRepository?,
-    onToast: (String) -> Unit,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (String) -> Unit,
     strings: UiStrings,
 ) {
     val filtered = when (selectedFilter) {
@@ -774,8 +851,15 @@ private fun MediaGrid(
                     modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
                 )
             }
-            items(dateItems) { item ->
-                MediaTile(item, mediaRepository, onToast, strings)
+            items(dateItems, key = { it.id }) { item ->
+                MediaTile(
+                    item = item,
+                    mediaRepository = mediaRepository,
+                    selectionMode = selectionMode,
+                    selected = item.id in selectedIds,
+                    onToggleSelection = onToggleSelection,
+                    strings = strings,
+                )
             }
         }
     }
@@ -785,7 +869,9 @@ private fun MediaGrid(
 private fun MediaTile(
     item: MediaRecord,
     mediaRepository: MediaRepository?,
-    onToast: (String) -> Unit,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onToggleSelection: (String) -> Unit,
     strings: UiStrings,
 ) {
     val shape = RoundedCornerShape(8.dp)
@@ -796,7 +882,7 @@ private fun MediaTile(
                 .clip(shape)
                 .background(LgCanvas)
                 .border(1.dp, LgLine, shape)
-                .clickable { onToast(strings.t("Selected ${item.fileName}", "已选择 ${item.fileName}")) }
+                .clickable(enabled = selectionMode) { onToggleSelection(item.id) }
                 .testTag("media_tile"),
             contentAlignment = Alignment.BottomEnd,
         ) {
@@ -808,6 +894,26 @@ private fun MediaTile(
                     .take(5)
                     .uppercase(Locale.getDefault()),
             )
+            if (selectionMode) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(7.dp)
+                        .size(23.dp)
+                        .clip(CircleShape)
+                        .background(if (selected) LgBlueStrong else Color.White.copy(alpha = 0.88f))
+                        .border(
+                            width = 1.5.dp,
+                            color = if (selected) Color.White else LgMuted,
+                            shape = CircleShape,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (selected) {
+                        Text("✓", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
             Text(
                 text = if (item.type == MediaType.VIDEO) strings.video else strings.photo,
                 color = Color.White,
@@ -864,13 +970,12 @@ private fun TopBar(title: String, subtitle: String, action: String, onAction: ()
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 18.dp),
+            .padding(bottom = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column {
-            Text("LinkGallery", style = MaterialTheme.typography.labelMedium, color = LgMuted)
-            Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(subtitle, color = LgMuted, style = MaterialTheme.typography.bodySmall)
         }
         PressScale(targetScale = 0.94f) { pressModifier ->
@@ -979,50 +1084,29 @@ private fun LinkGallerySwitch(checked: Boolean, onCheckedChange: (Boolean) -> Un
 }
 
 @Composable
-private fun FloatingCopyButton(onToast: (String) -> Unit, strings: UiStrings, modifier: Modifier = Modifier) {
-    var copying by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(0f) }
-    LaunchedEffect(copying) {
-        if (copying) {
-            progress = 0f
-            while (progress < 100f) {
-                delay(90)
-                progress += 4f
-            }
-            onToast(strings.copyComplete)
-            delay(900)
-            copying = false
-            progress = 0f
-        }
-    }
-
-    PressScale(targetScale = 0.97f) { pressModifier ->
-        Box(
-            modifier = modifier
-                .then(pressModifier)
-                .fillMaxWidth()
-                .height(58.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(if (progress >= 100f) LgSuccess else LgBlue)
-                .clickable(enabled = !copying) { copying = true },
-            contentAlignment = Alignment.Center,
+private fun SelectionActionBar(
+    selectedCount: Int,
+    onCopy: () -> Unit,
+    strings: UiStrings,
+) {
+    Surface(
+        color = LgInk.copy(alpha = 0.94f),
+        shape = RoundedCornerShape(16.dp),
+        shadowElevation = 8.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 7.dp, bottom = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxHeight()
-                    .fillMaxWidth((progress / 100f).coerceIn(0f, 1f))
-                    .background(Color.White.copy(alpha = 0.16f)),
-            )
-            Text(
-                text = when {
-                    progress >= 100f -> strings.copied
-                    copying -> strings.t("Copying... ${progress.toInt()}%", "正在复制… ${progress.toInt()}%")
-                    else -> strings.copySelected
-                },
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-            )
+            Text(strings.selectedCount(selectedCount), color = Color.White)
+            Button(
+                onClick = onCopy,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(strings.copySelected)
+            }
         }
     }
 }
@@ -1095,9 +1179,9 @@ private fun StateCard(
 }
 
 private enum class AppTab(val symbol: String, val testTag: String) {
-    Photos("P", "tab_gallery"),
-    Albums("A", "tab_albums"),
-    Connection("D", "tab_connection"),
+    Photos("▦", "tab_gallery"),
+    Albums("▣", "tab_albums"),
+    Connection("◉", "tab_connection"),
 }
 
 private fun AppTab.label(strings: UiStrings): String = when (this) {
@@ -1255,12 +1339,21 @@ private class UiStrings(val uiLanguage: UiLanguage) {
     val copyComplete get() = t("Copy complete", "复制完成")
     val copied get() = t("Copied", "已复制")
     val copySelected get() = t("Copy selected", "复制所选")
+    val scanComputerQr get() = t("Scan the QR code shown on Windows", "扫描电脑上显示的二维码")
+    val showSixDigitCode get() = t("Show six-digit code instead", "无法扫描？显示六位配对码")
+    val connectComputer get() = t("Connect a computer", "连接电脑")
+    val connectComputerDetail get() = t(
+        "Scan the Windows QR code, or use the six-digit phone code.",
+        "扫描电脑二维码，或使用手机显示的六位码。",
+    )
     val smartTag get() = t("SMART", "智能")
     val deviceTag get() = t("DEVICE", "设备")
     val unsorted get() = t("Unsorted", "未分类")
 
     fun itemCount(value: Int): String =
         t("${formatCount(value)} items", "${formatCount(value)} 项")
+
+    fun selectedCount(value: Int): String = t("Selected $value", "已选 $value 张")
 }
 
 private fun formatCount(value: Int): String =

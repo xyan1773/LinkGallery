@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="linkgallery_scanner_background">#101216</color>
+    <color name="linkgallery_scanner_toolbar">#FAFAFB</color>
+</resources>

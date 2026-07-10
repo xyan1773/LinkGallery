@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LinkGallery.Application.Devices;
@@ -20,10 +21,9 @@ public sealed class HttpPairingClient(HttpClient httpClient) : IPairingClient
     {
         ArgumentNullException.ThrowIfNull(apiBaseAddress);
         ArgumentNullException.ThrowIfNull(identity);
-        using var response = await httpClient.PostAsJsonAsync(
+        using var response = await PostJsonAsync(
             new Uri(EnsureTrailingSlash(apiBaseAddress), "pair/start"),
             identity,
-            JsonOptions,
             cancellationToken).ConfigureAwait(false);
         var dto = await ReadAsync<PairStartResponse>(response, cancellationToken).ConfigureAwait(false);
         return new PairingSession(
@@ -39,10 +39,9 @@ public sealed class HttpPairingClient(HttpClient httpClient) : IPairingClient
         string verificationCode,
         CancellationToken cancellationToken)
     {
-        using var response = await httpClient.PostAsJsonAsync(
+        using var response = await PostJsonAsync(
             new Uri(EnsureTrailingSlash(apiBaseAddress), "pair/confirm"),
             new { pairingSessionId, verificationCode },
-            JsonOptions,
             cancellationToken).ConfigureAwait(false);
         var dto = await ReadAsync<PairConfirmResponse>(response, cancellationToken).ConfigureAwait(false);
         if (!dto.Paired || string.IsNullOrWhiteSpace(dto.AccessToken))
@@ -72,6 +71,17 @@ public sealed class HttpPairingClient(HttpClient httpClient) : IPairingClient
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The phone returned an empty pairing response.");
+    }
+
+    private async Task<HttpResponseMessage> PostJsonAsync<T>(
+        Uri address,
+        T value,
+        CancellationToken cancellationToken)
+    {
+        var json = JsonSerializer.Serialize(value, JsonOptions);
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        content.Headers.ContentLength = Encoding.UTF8.GetByteCount(json);
+        return await httpClient.PostAsync(address, content, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task EnsureSuccessAsync(

@@ -63,7 +63,8 @@ object LinkGalleryServiceRuntime {
         }
     }
 
-    fun openPairingWindow(): Long = service?.openPairingWindow() ?: 0L
+    fun openPairingWindow(verificationCode: String? = null): Long =
+        service?.openPairingWindow(verificationCode) ?: 0L
 
     fun activePairingCode(): String? = service?.activePairingCode()
 
@@ -96,10 +97,12 @@ class LinkGalleryForegroundService : Service() {
     private lateinit var httpServer: LinkGalleryHttpServer
     private lateinit var connectivityManager: ConnectivityManager
     private var advertisedPort: Int? = null
+    private var cachedAddresses: List<String> = emptyList()
+    private var lastPublishedState: LinkGalleryServiceState? = null
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = restartAdvertising()
-        override fun onLost(network: Network) = restartAdvertising()
+        override fun onAvailable(network: Network) = restartAdvertising(refreshAddresses = true)
+        override fun onLost(network: Network) = restartAdvertising(refreshAddresses = true)
     }
 
     override fun onCreate() {
@@ -117,7 +120,10 @@ class LinkGalleryForegroundService : Service() {
             pairingAvailableProvider = pairingManager::isPairingAvailable,
         )
         nsdRegistrar = AndroidNsdServiceRegistrar(applicationContext, publicDeviceInfoProvider)
-        udpDiscoveryResponder = AndroidUdpDiscoveryResponder(publicDeviceInfoProvider)
+        udpDiscoveryResponder = AndroidUdpDiscoveryResponder(
+            publicDeviceInfoProvider,
+            pairingManager::activeVerificationCode,
+        )
         val repository = DefaultMediaRepository(
             AndroidMediaStoreDataSource(applicationContext, contentResolver),
             permissionGateway,
@@ -137,8 +143,9 @@ class LinkGalleryForegroundService : Service() {
         )
 
         publicDeviceInfoProvider.rotateInstanceId()
+        cachedAddresses = AndroidConnectionEnvironment.lanIpv4Addresses()
         httpServer.start()
-        restartAdvertising()
+        restartAdvertising(refreshAddresses = false)
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         connectivityManager.registerDefaultNetworkCallback(networkCallback)
         publishState()
@@ -166,19 +173,24 @@ class LinkGalleryForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    fun openPairingWindow(): Long {
-        val expiresAt = pairingManager.openPairingWindow().expiresAtEpochMillis
+    fun openPairingWindow(verificationCode: String? = null): Long {
+        val expiresAt = pairingManager.openPairingWindow(
+            verificationCode = verificationCode,
+        ).expiresAtEpochMillis
         publishState()
         return expiresAt
     }
 
     fun activePairingCode(): String? = pairingManager.activeVerificationCode()
 
-    private fun restartAdvertising() {
+    private fun restartAdvertising(refreshAddresses: Boolean = false) {
         val port = httpServer.localPort ?: return
         if (advertisedPort != null) {
             udpDiscoveryResponder.stop()
             nsdRegistrar.unregister()
+        }
+        if (refreshAddresses) {
+            cachedAddresses = AndroidConnectionEnvironment.lanIpv4Addresses()
         }
         publicDeviceInfoProvider.rotateInstanceId()
         nsdRegistrar.register(port)
@@ -192,13 +204,15 @@ class LinkGalleryForegroundService : Service() {
         val next = LinkGalleryServiceState(
             running = ::httpServer.isInitialized && httpServer.isRunning,
             port = if (::httpServer.isInitialized) httpServer.localPort else null,
-            addresses = AndroidConnectionEnvironment.lanIpv4Addresses(),
+            addresses = cachedAddresses,
             pairingCode = pairingManager.activeVerificationCode(),
             pairedDesktopNames = pairingManager.pairedCredentials()
                 .map { it.desktopName }
                 .distinct()
                 .sorted(),
         )
+        if (next == lastPublishedState) return
+        lastPublishedState = next
         LinkGalleryServiceRuntime.publish(next)
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(next))
     }

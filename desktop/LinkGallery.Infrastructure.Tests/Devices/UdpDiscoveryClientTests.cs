@@ -48,4 +48,10 @@ public sealed class UdpDiscoveryClientTests
 
         Assert.IsNull(device);
     }
+
+    [TestMethod]
+    public void BroadcastTargetsAlwaysIncludeLimitedBroadcast()
+    {
+        Assert.Contains(IPAddress.Broadcast, UdpDiscoveryClient.GetBroadcastTargets());
+    }
 }

@@ -155,6 +155,9 @@ class LinkGalleryHttpServer(
                 val body = readBody(reader, headers)
                 val response = executeController(method, target, headers, body)
                 status = response.status
+                if (response.status >= 400 && response.binaryBody == null) {
+                    Log.w("LinkGalleryHttp", response.body)
+                }
                 write(socket, response)
             } catch (_: TimeoutException) {
                 status = 504

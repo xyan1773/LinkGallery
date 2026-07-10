@@ -24,16 +24,17 @@ class MainActivity : ComponentActivity() {
             AndroidMediaStoreDataSource(applicationContext, contentResolver),
             permissionGateway,
         )
+        val connectionGuide = createConnectionGuide(
+            AndroidConnectionEnvironment.isEmulator(),
+            AndroidConnectionEnvironment.lanIpv4Addresses(),
+        )
         LinkGalleryServiceRuntime.startIfEnabled(applicationContext)
         setContent {
             val serviceState by LinkGalleryServiceRuntime.state.collectAsState()
             LinkGalleryTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     PermissionScreen(
-                        connectionGuide = createConnectionGuide(
-                            AndroidConnectionEnvironment.isEmulator(),
-                            AndroidConnectionEnvironment.lanIpv4Addresses(),
-                        ),
+                        connectionGuide = connectionGuide,
                         mediaRepository = mediaRepository,
                         serviceState = serviceState,
                         onServiceRunningChange = { enabled ->
