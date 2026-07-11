@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -43,16 +44,16 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -75,10 +76,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.linkgallery.companion.LinkGalleryServiceState
 import com.linkgallery.companion.media.AndroidMediaPermissionGateway
@@ -109,7 +114,6 @@ fun PermissionScreen(
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
     onServiceRunningChange: (Boolean) -> Unit = {},
     onOpenPairingWindow: (String?) -> Long = { 0L },
-    activePairingCodeProvider: () -> String? = { "428913" },
 ) {
     val context = LocalContext.current
     val permissions = AndroidMediaPermissionGateway.requiredPermissions(
@@ -137,7 +141,6 @@ fun PermissionScreen(
         onServiceRunningChange = onServiceRunningChange,
         onPermissionRequest = { launcher.launch(permissions) },
         onOpenPairingWindow = onOpenPairingWindow,
-        activePairingCodeProvider = activePairingCodeProvider,
     )
 }
 
@@ -150,7 +153,6 @@ internal fun LinkGalleryApp(
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
     onServiceRunningChange: (Boolean) -> Unit = {},
     onOpenPairingWindow: (String?) -> Long = { 0L },
-    activePairingCodeProvider: () -> String? = { "428913" },
 ) {
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("linkgallery_preferences", Context.MODE_PRIVATE) }
@@ -165,7 +167,6 @@ internal fun LinkGalleryApp(
     val strings = remember(language) { UiStrings(language) }
     var selectedTab by remember { mutableStateOf(AppTab.Albums) }
     var selectedFilter by remember { mutableStateOf(MediaFilter.All) }
-    var showPairing by remember { mutableStateOf(false) }
     var galleryState by remember { mutableStateOf<GalleryState>(GalleryState.Loading) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
 
@@ -182,7 +183,6 @@ internal fun LinkGalleryApp(
             ))
         } else {
             onOpenPairingWindow(request.verificationCode)
-            showPairing = true
             selectedTab = AppTab.Connection
             showToast(strings.t("Pairing request accepted", "已接受电脑配对请求"))
         }
@@ -224,21 +224,48 @@ internal fun LinkGalleryApp(
     Scaffold(
         containerColor = LgParchment,
         bottomBar = {
-            NavigationBar(
-                modifier = Modifier
-                    .height(60.dp)
-                    .testTag("bottom_navigation"),
-                containerColor = LgCanvas,
-                tonalElevation = 0.dp,
+            Surface(
+                color = LgCanvas,
+                shadowElevation = 8.dp,
+                modifier = Modifier.testTag("bottom_navigation"),
             ) {
-                AppTab.entries.forEach { tab ->
-                NavigationBarItem(
-                    selected = selectedTab == tab,
-                    onClick = { selectedTab = tab },
-                    label = { Text(tab.label(strings)) },
-                    icon = { Text(tab.symbol, fontWeight = FontWeight.SemiBold) },
-                    modifier = Modifier.testTag(tab.testTag),
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .height(58.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AppTab.entries.forEach { tab ->
+                        val selected = selectedTab == tab
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(15.dp))
+                                .background(if (selected) LgBlue.copy(alpha = 0.11f) else Color.Transparent)
+                                .clickable { selectedTab = tab }
+                                .testTag(tab.testTag),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = tab.symbol,
+                                color = if (selected) LgBlueStrong else LgMuted,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Text(
+                                text = tab.label(strings),
+                                color = if (selected) LgBlueStrong else LgMuted,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -303,10 +330,7 @@ internal fun LinkGalleryApp(
                             serviceState = serviceState,
                             onServiceRunningChange = onServiceRunningChange,
                             permissionGranted = permissionGranted,
-                            onPair = {
-                                onOpenPairingWindow(null)
-                                showPairing = true
-                            },
+                            onPair = { code -> onOpenPairingWindow(code) },
                             onScanQr = {
                                 qrScanner.launch(
                                     ScanOptions()
@@ -332,13 +356,6 @@ internal fun LinkGalleryApp(
         }
     }
 
-    if (showPairing) {
-        PairingCodeDialog(
-            code = serviceState.pairingCode ?: activePairingCodeProvider(),
-            onDismiss = { showPairing = false },
-            strings = strings,
-        )
-    }
 }
 
 @Composable
@@ -346,12 +363,14 @@ internal fun PermissionContent(
     connectionGuide: ConnectionGuide,
     permissionGranted: Boolean,
     onPermissionRequest: () -> Unit,
+    onOpenPairingWindow: (String?) -> Long = { 0L },
 ) {
     LinkGalleryApp(
         connectionGuide = connectionGuide,
         mediaRepository = null,
         permissionGranted = permissionGranted,
         onPermissionRequest = onPermissionRequest,
+        onOpenPairingWindow = onOpenPairingWindow,
     )
 }
 
@@ -566,7 +585,7 @@ private fun DevicesPage(
     serviceState: LinkGalleryServiceState,
     onServiceRunningChange: (Boolean) -> Unit,
     permissionGranted: Boolean,
-    onPair: () -> Unit,
+    onPair: (String) -> Unit,
     onScanQr: () -> Unit,
     onToast: (String) -> Unit,
     strings: UiStrings,
@@ -574,6 +593,22 @@ private fun DevicesPage(
     onLanguageChange: (UiLanguage) -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
+    var pairingCodeInput by remember { mutableStateOf("") }
+    var pairingCodeError by remember { mutableStateOf(false) }
+    var submittedPairingCode by remember { mutableStateOf<String?>(null) }
+    val focusManager = LocalFocusManager.current
+
+    fun submitPairingCode() {
+        if (pairingCodeInput.length != 6) {
+            pairingCodeError = true
+            return
+        }
+        pairingCodeError = false
+        submittedPairingCode = pairingCodeInput
+        onPair(pairingCodeInput)
+        focusManager.clearFocus()
+        onToast(strings.pairingRequestEnabled)
+    }
     val serviceAddress = remember(serviceState.addresses, serviceState.port, connectionGuide.address) {
         val address = serviceState.addresses.firstOrNull()
         val port = serviceState.port
@@ -659,13 +694,77 @@ private fun DevicesPage(
                 ) {
                     Text(strings.scanComputerQr)
                 }
-                TextButton(
-                    onClick = onPair,
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("show_pairing_code"),
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(strings.showSixDigitCode)
+                    Box(Modifier.weight(1f).height(1.dp).background(LgLine))
+                    Text(
+                        strings.orEnterPairingCode,
+                        color = LgMuted,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                    )
+                    Box(Modifier.weight(1f).height(1.dp).background(LgLine))
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = pairingCodeInput,
+                        onValueChange = { value ->
+                            pairingCodeInput = value.filter(Char::isDigit).take(6)
+                            pairingCodeError = false
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("pairing_code_input"),
+                        singleLine = true,
+                        isError = pairingCodeError,
+                        label = { Text(strings.sixDigitCode) },
+                        placeholder = { Text("123 456") },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.NumberPassword,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { submitPairingCode() }),
+                        shape = RoundedCornerShape(14.dp),
+                    )
+                    Button(
+                        onClick = ::submitPairingCode,
+                        enabled = pairingCodeInput.length == 6,
+                        modifier = Modifier
+                            .height(56.dp)
+                            .testTag("confirm_pairing_code"),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = LgBlueStrong),
+                    ) {
+                        Text(strings.pair)
+                    }
+                }
+                if (pairingCodeError) {
+                    Text(
+                        strings.invalidPairingCode,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                val activePairingCode = serviceState.pairingCode ?: submittedPairingCode
+                if (activePairingCode != null) {
+                    Text(
+                        strings.pairingReady(activePairingCode),
+                        color = LgBlueStrong,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .padding(top = 10.dp)
+                            .testTag("pairing_ready"),
+                    )
                 }
             }
         }
@@ -1009,30 +1108,6 @@ private fun PermissionGate(permissionGranted: Boolean, onPermissionRequest: () -
 }
 
 @Composable
-private fun PairingCodeDialog(code: String?, onDismiss: () -> Unit, strings: UiStrings) {
-    val displayCode = code?.chunked(3)?.joinToString(" ") ?: strings.waiting
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text(strings.done) }
-        },
-        title = { Text(strings.pairingCode) },
-        text = {
-            Column {
-                Text(
-                    text = displayCode,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.testTag("pairing_code"),
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(strings.pairingCodeHelp)
-            }
-        },
-    )
-}
-
-@Composable
 private fun SettingRow(title: String, detail: String, trailing: @Composable () -> Unit) {
     Card(
         modifier = Modifier
@@ -1340,12 +1415,19 @@ private class UiStrings(val uiLanguage: UiLanguage) {
     val copied get() = t("Copied", "已复制")
     val copySelected get() = t("Copy selected", "复制所选")
     val scanComputerQr get() = t("Scan the QR code shown on Windows", "扫描电脑上显示的二维码")
-    val showSixDigitCode get() = t("Show six-digit code instead", "无法扫描？显示六位配对码")
     val connectComputer get() = t("Connect a computer", "连接电脑")
     val connectComputerDetail get() = t(
-        "Scan the Windows QR code, or use the six-digit phone code.",
-        "扫描电脑二维码，或使用手机显示的六位码。",
+        "Scan the Windows QR code, or enter the six-digit code shown there.",
+        "扫描电脑二维码，或输入电脑上显示的六位码。",
     )
+    val orEnterPairingCode get() = t("or enter the code shown on Windows", "或输入电脑显示的六位码")
+    val sixDigitCode get() = t("Six-digit code", "六位配对码")
+    val invalidPairingCode get() = t("Enter all six digits.", "请输入完整的六位数字。")
+    val pairingRequestEnabled get() = t("Pairing is ready", "已开启配对")
+    fun pairingReady(code: String): String {
+        val formatted = code.filter(Char::isDigit).chunked(3).joinToString(" ")
+        return t("Pairing enabled · $formatted", "配对已启用 · $formatted")
+    }
     val smartTag get() = t("SMART", "智能")
     val deviceTag get() = t("DEVICE", "设备")
     val unsorted get() = t("Unsorted", "未分类")

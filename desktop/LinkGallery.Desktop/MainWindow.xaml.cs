@@ -862,8 +862,16 @@ public partial class MainWindow : Window, IDisposable
         {
             throw new InvalidOperationException(
                 L(
-                    "Open the Devices page on the phone, then scan the QR code or show a six-digit code.",
-                    "请在手机 LinkGallery 的设备页扫描二维码，或显示六位配对码。"));
+                    "Choose Pair device first, then scan the desktop QR code or enter its six-digit code on the phone.",
+                    "请先选择“配对设备”，再用手机扫描电脑二维码或输入电脑显示的六位码。"));
+        }
+
+        if (string.IsNullOrWhiteSpace(verificationCode))
+        {
+            throw new InvalidOperationException(
+                L(
+                    "Pairing must be started from the desktop QR-code window.",
+                    "请从电脑的二维码配对窗口开始配对。"));
         }
 
         var identity = new PairingIdentity(
@@ -874,16 +882,6 @@ public partial class MainWindow : Window, IDisposable
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
             Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)));
         var session = await _pairingClient.StartAsync(apiAddress, identity, cancellationToken);
-        if (string.IsNullOrWhiteSpace(verificationCode))
-        {
-            var dialog = new PairingCodeWindow(session.CodeLength) { Owner = this };
-            if (dialog.ShowDialog() != true)
-            {
-                throw new OperationCanceledException("Pairing was cancelled.", cancellationToken);
-            }
-            verificationCode = dialog.VerificationCode;
-        }
-
         var credential = await _pairingClient.ConfirmAsync(
             apiAddress,
             session.PairingSessionId,
@@ -1643,10 +1641,11 @@ public partial class MainWindow : Window, IDisposable
 
         if (dialog.ManualIpRequested)
         {
+            _pendingPairingCode = dialog.ActiveCode;
             SetManualConnectionOpen(true);
             StatusText.Text = L(
-                "Enter the phone API address, then press Enter to connect.",
-                "输入手机 API 地址，然后按 Enter 连接。");
+                "Enter the phone API address after scanning the QR code or entering the displayed code.",
+                "手机扫码或输入电脑显示的配对码后，再输入手机 API 地址。");
             AddressTextBox.Focus();
         }
     }
@@ -1709,10 +1708,22 @@ public partial class MainWindow : Window, IDisposable
             }
 
             AddressTextBox.Text = $"{selected.address.Host}:{selected.address.Port}";
-            StatusText.Text = L(
-                $"Found {selected.device.DisplayName}; connecting…",
-                $"已发现 {selected.device.DisplayName}，正在连接…");
-            OnConnectClick(ConnectButton, new RoutedEventArgs());
+            var paired = (await _pairedDeviceStore.ListPairedDevicesAsync(CancellationToken.None))
+                .FirstOrDefault(device =>
+                    string.Equals(device.DeviceId, selected.device.DeviceId, StringComparison.Ordinal));
+            var savedToken = paired is null
+                ? null
+                : await _accessTokenStore.ReadAsync(paired.CredentialKey, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(savedToken))
+            {
+                StatusText.Text = L(
+                    $"Found paired device {selected.device.DisplayName}; connecting…",
+                    $"已发现配对设备 {selected.device.DisplayName}，正在连接…");
+                OnConnectClick(ConnectButton, new RoutedEventArgs());
+                return;
+            }
+
+            await PairKnownDeviceAsync(selected.device, selected.address);
         }
         catch (Exception exception)
         {
@@ -1724,6 +1735,52 @@ public partial class MainWindow : Window, IDisposable
         finally
         {
             FindDevicesButton.IsEnabled = true;
+        }
+    }
+
+    private async Task PairKnownDeviceAsync(DiscoveredDevice device, DeviceAddress address)
+    {
+        var code = RandomNumberGenerator.GetInt32(1_000_000).ToString("D6", CultureInfo.InvariantCulture);
+        var payload = PairingQrPayloadCodec.Create(_desktopId, Environment.MachineName, code);
+        var dialog = new PairDeviceWindow(
+            payload,
+            code,
+            _language == UiLanguage.Chinese) { Owner = this };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var resolutionTask = ResolvePairingWindowAsync(dialog, cancellation.Token);
+        dialog.ShowDialog();
+        cancellation.Cancel();
+        try
+        {
+            await resolutionTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        if (dialog.ResolvedDevice is not null)
+        {
+            var resolvedAddress = dialog.ResolvedDevice.Addresses
+                .OrderByDescending(candidate => candidate.Source == DeviceAddressSource.Udp)
+                .ThenByDescending(candidate => candidate.Source == DeviceAddressSource.Subnet)
+                .First();
+            _pendingPairingCode = dialog.ActiveCode;
+            AddressTextBox.Text = $"{resolvedAddress.Host}:{resolvedAddress.Port}";
+            StatusText.Text = L(
+                $"Pairing with {dialog.ResolvedDevice.DisplayName}…",
+                $"正在与 {dialog.ResolvedDevice.DisplayName} 配对…");
+            OnConnectClick(ConnectButton, new RoutedEventArgs());
+            return;
+        }
+
+        if (dialog.ManualIpRequested)
+        {
+            _pendingPairingCode = dialog.ActiveCode;
+            AddressTextBox.Text = $"{address.Host}:{address.Port}";
+            SetManualConnectionOpen(true);
+            StatusText.Text = L(
+                $"Use the discovered address for {device.DisplayName} after the phone accepts the code.",
+                $"手机接受配对码后，可用已发现的地址连接 {device.DisplayName}。");
         }
     }
 

@@ -30,7 +30,6 @@ public partial class PairDeviceWindow : Window
     {
         if (IsClosed) return;
         QrStatusText.Text = message;
-        ManualErrorText.Text = ManualCodePanel.Visibility == Visibility.Visible ? message : string.Empty;
     }
 
     public void Complete(DiscoveredDevice device, string pairingCode)
@@ -39,30 +38,6 @@ public partial class PairDeviceWindow : Window
         ResolvedDevice = device;
         ActiveCode = pairingCode;
         DialogResult = true;
-    }
-
-    private void OnCannotScanClick(object sender, RoutedEventArgs e)
-    {
-        QrPanel.Visibility = Visibility.Collapsed;
-        ManualCodePanel.Visibility = Visibility.Visible;
-        CannotScanButton.Visibility = Visibility.Collapsed;
-        CodeTextBox.Focus();
-    }
-
-    private void OnConfirmManualCode(object sender, RoutedEventArgs e)
-    {
-        var code = CodeTextBox.Text.Trim();
-        if (code.Length != 6 || code.Any(character => !char.IsAsciiDigit(character)))
-        {
-            ManualErrorText.Text = _useChinese
-                ? "请输入手机上显示的六位数字。"
-                : "Enter the six digits shown on the phone.";
-            return;
-        }
-        ActiveCode = code;
-        ManualErrorText.Text = _useChinese
-            ? "正在局域网中查找手机…"
-            : "Searching for the phone on the local network…";
     }
 
     private void OnManualIpClick(object sender, RoutedEventArgs e)
@@ -83,15 +58,16 @@ public partial class PairDeviceWindow : Window
         Title = _useChinese ? "配对手机" : "Pair phone";
         TitleText.Text = _useChinese ? "配对手机" : "Pair phone";
         SubtitleText.Text = _useChinese
-            ? "在手机 LinkGallery 的设备页扫描二维码"
-            : "Scan this QR code from the Devices page on the phone";
-        QrStatusText.Text = _useChinese ? "正在等待手机扫描…" : "Waiting for the phone to scan…";
-        ManualTitleText.Text = _useChinese ? "输入手机上的六位码" : "Enter the six-digit phone code";
-        ManualBodyText.Text = _useChinese
-            ? "手机打开配对窗口后会显示一次性六位码，电脑会在当前局域网中自动找到它。"
-            : "Open pairing on the phone, then enter its one-time code. LinkGallery will find it on this network.";
-        FindByCodeButton.Content = _useChinese ? "查找并配对" : "Find and pair";
-        CannotScanButton.Content = _useChinese ? "无法扫描二维码" : "Can't scan the QR code";
+            ? "用手机扫描二维码，或输入下方六位码"
+            : "Scan with the phone, or enter the six-digit code below";
+        PairingCodeLabel.Text = _useChinese ? "配对码" : "Pairing code";
+        PairingCodeText.Text = ActiveCode.Length == 6
+            ? $"{ActiveCode[..3]} {ActiveCode[3..]}"
+            : ActiveCode;
+        QrStatusText.Text = _useChinese ? "正在等待手机确认…" : "Waiting for the phone…";
+        CodeHintText.Text = _useChinese
+            ? "无法扫码时，在手机上输入六位码"
+            : "If scanning fails, enter this code on the phone";
         ManualIpButton.Content = _useChinese ? "输入 IP" : "Enter IP";
     }
 

@@ -6,8 +6,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -55,20 +56,26 @@ class PermissionScreenUiTest {
     }
 
     @Test
-    fun connectionPageShowsPairingCodeSheet() {
+    fun connectionPageAcceptsWindowsPairingCode() {
+        var submittedCode: String? = null
         compose.setContent {
             PermissionContent(
                 connectionGuide = emulatorGuide(),
                 permissionGranted = true,
                 onPermissionRequest = {},
+                onOpenPairingWindow = { code ->
+                    submittedCode = code
+                    0L
+                },
             )
         }
 
         compose.onNodeWithTag("tab_connection").performClick()
-        compose.onNodeWithTag("show_pairing_code").performClick()
-        compose.onNodeWithTag("pairing_code")
+        compose.onNodeWithTag("pairing_code_input").performTextInput("428913")
+        compose.onNodeWithTag("confirm_pairing_code").performClick()
+        compose.onNodeWithTag("pairing_ready")
             .assertIsDisplayed()
-            .assertTextContains("428 913")
+        compose.runOnIdle { assertEquals("428913", submittedCode) }
     }
 
     private fun emulatorGuide() = createConnectionGuide(

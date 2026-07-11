@@ -41,7 +41,6 @@ class MainActivity : ComponentActivity() {
                             LinkGalleryServiceRuntime.setEnabled(applicationContext, enabled)
                         },
                         onOpenPairingWindow = LinkGalleryServiceRuntime::openPairingWindow,
-                        activePairingCodeProvider = LinkGalleryServiceRuntime::activePairingCode,
                     )
                 }
             }
