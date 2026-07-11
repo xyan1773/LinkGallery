@@ -13,8 +13,5 @@
     <ProjectReference Include="..\LinkGallery.Application\LinkGallery.Application.csproj" />
     <ProjectReference Include="..\LinkGallery.Infrastructure\LinkGallery.Infrastructure.csproj" />
   </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="QRCoder" />
-  </ItemGroup>
 </Project>
 

@@ -1,8 +1,5 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
 using LinkGallery.Application.Devices;
 using LinkGallery.Domain.Devices;
 
@@ -28,12 +25,10 @@ public sealed class LocalDeviceDiscovery(HttpClient httpClient) : ILocalDeviceDi
             .GroupBy(device => device.DeviceId, StringComparer.Ordinal)
             .Select(group => group.First())
             .ToArray();
-        if (directlyDiscovered.Length > 0)
-        {
-            return directlyDiscovered;
-        }
-
-        return await ProbeLocalSubnetsAsync(cancellationToken).ConfigureAwait(false);
+        // Never fall back to probing every host on the local subnet. Apart from being
+        // expensive, campus and enterprise networks can correctly classify that as a
+        // port scan. Discovery is intentionally limited to UDP announcements and ADB.
+        return directlyDiscovered;
     }
 
     public async Task<DiscoveredDevice?> ResolvePairingCodeAsync(
@@ -87,66 +82,6 @@ public sealed class LocalDeviceDiscovery(HttpClient httpClient) : ILocalDeviceDi
             }
         }
         return devices;
-    }
-
-    private async Task<IReadOnlyList<DiscoveredDevice>> ProbeLocalSubnetsAsync(
-        CancellationToken cancellationToken)
-    {
-        var hosts = LocalIpv4Addresses()
-            .SelectMany(HostsInSame24)
-            .Distinct()
-            .Take(768)
-            .ToArray();
-        var results = new ConcurrentDictionary<string, DiscoveredDevice>(StringComparer.Ordinal);
-        await Parallel.ForEachAsync(
-            hosts,
-            new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = 48,
-            },
-            async (host, token) =>
-            {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-                timeout.CancelAfter(TimeSpan.FromMilliseconds(450));
-                try
-                {
-                    var apiAddress = new UriBuilder(Uri.UriSchemeHttp, host.ToString(), ApiPort, "api/v1/").Uri;
-                    var info = await _publicInfoClient.GetAsync(apiAddress, timeout.Token).ConfigureAwait(false);
-                    var device = Map(info, host.ToString(), ApiPort, DeviceAddressSource.Subnet);
-                    results.TryAdd(device.DeviceId, device);
-                }
-                catch (Exception exception) when (
-                    exception is HttpRequestException or OperationCanceledException or InvalidOperationException)
-                {
-                }
-            }).ConfigureAwait(false);
-        return results.Values.ToArray();
-    }
-
-    internal static IReadOnlyList<IPAddress> LocalIpv4Addresses() =>
-        NetworkInterface.GetAllNetworkInterfaces()
-            .Where(network =>
-                network.OperationalStatus == OperationalStatus.Up &&
-                network.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-            .SelectMany(network => network.GetIPProperties().UnicastAddresses)
-            .Select(unicast => unicast.Address)
-            .Where(address =>
-                address.AddressFamily == AddressFamily.InterNetwork &&
-                !IPAddress.IsLoopback(address) &&
-                !address.Equals(IPAddress.Any))
-            .Distinct()
-            .ToArray();
-
-    public static IEnumerable<IPAddress> HostsInSame24(IPAddress localAddress)
-    {
-        var bytes = localAddress.GetAddressBytes();
-        if (bytes.Length != 4) yield break;
-        for (var last = 1; last < 255; last++)
-        {
-            if (last == bytes[3]) continue;
-            yield return new IPAddress([bytes[0], bytes[1], bytes[2], (byte)last]);
-        }
     }
 
     private static string? FindAdbExecutable()

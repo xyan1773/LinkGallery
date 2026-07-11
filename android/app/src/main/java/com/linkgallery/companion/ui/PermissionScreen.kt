@@ -6,7 +6,6 @@ import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -15,7 +14,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -93,9 +91,7 @@ import com.linkgallery.companion.media.MediaRecord
 import com.linkgallery.companion.media.MediaRepository
 import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaType
-import com.linkgallery.companion.pairing.DesktopPairingQrCodec
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import com.linkgallery.companion.pairing.Ipv4AddressCode
 import java.text.NumberFormat
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -103,9 +99,12 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 private val LgEase = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
+private val ThumbnailLoadGate = Semaphore(6)
 
 @Composable
 fun PermissionScreen(
@@ -172,20 +171,6 @@ internal fun LinkGalleryApp(
 
     fun showToast(message: String) {
         toastMessage = message
-    }
-
-    val qrScanner = rememberLauncherForActivityResult(ScanContract()) { result ->
-        val request = result.contents?.let(DesktopPairingQrCodec::parse)
-        if (request == null) {
-            showToast(strings.t(
-                "This is not a LinkGallery pairing QR code",
-                "这不是有效的 LinkGallery 配对二维码",
-            ))
-        } else {
-            onOpenPairingWindow(request.verificationCode)
-            selectedTab = AppTab.Connection
-            showToast(strings.t("Pairing request accepted", "已接受电脑配对请求"))
-        }
     }
 
     fun setLanguage(next: UiLanguage) {
@@ -292,19 +277,7 @@ internal fun LinkGalleryApp(
                 },
         ) {
             Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
-                AnimatedContent(
-                    targetState = selectedTab,
-                    transitionSpec = {
-                        (fadeIn(tween(180, easing = LgEase)) +
-                            slideInVertically(tween(180, easing = LgEase)) { 8 })
-                            .togetherWith(
-                                fadeOut(tween(1, easing = LgEase)) +
-                                    slideOutVertically(tween(1, easing = LgEase)) { 0 },
-                            )
-                    },
-                    label = "view-switch",
-                ) { tab ->
-                    when (tab) {
+                when (selectedTab) {
                         AppTab.Photos -> PhotosPage(
                             galleryState = galleryState,
                             selectedFilter = selectedFilter,
@@ -331,22 +304,11 @@ internal fun LinkGalleryApp(
                             onServiceRunningChange = onServiceRunningChange,
                             permissionGranted = permissionGranted,
                             onPair = { code -> onOpenPairingWindow(code) },
-                            onScanQr = {
-                                qrScanner.launch(
-                                    ScanOptions()
-                                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                                        .setCaptureActivity(LinkGalleryQrCaptureActivity::class.java)
-                                        .setPrompt(strings.scanComputerQr)
-                                        .setBeepEnabled(false)
-                                        .setOrientationLocked(false),
-                                )
-                            },
                             onToast = ::showToast,
                             strings = strings,
                             language = language,
                             onLanguageChange = ::setLanguage,
                         )
-                    }
                 }
             }
             ToastOverlay(
@@ -364,6 +326,7 @@ internal fun PermissionContent(
     permissionGranted: Boolean,
     onPermissionRequest: () -> Unit,
     onOpenPairingWindow: (String?) -> Long = { 0L },
+    serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
 ) {
     LinkGalleryApp(
         connectionGuide = connectionGuide,
@@ -371,6 +334,7 @@ internal fun PermissionContent(
         permissionGranted = permissionGranted,
         onPermissionRequest = onPermissionRequest,
         onOpenPairingWindow = onOpenPairingWindow,
+        serviceState = serviceState,
     )
 }
 
@@ -586,31 +550,18 @@ private fun DevicesPage(
     onServiceRunningChange: (Boolean) -> Unit,
     permissionGranted: Boolean,
     onPair: (String) -> Unit,
-    onScanQr: () -> Unit,
     onToast: (String) -> Unit,
     strings: UiStrings,
     language: UiLanguage,
     onLanguageChange: (UiLanguage) -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
-    var pairingCodeInput by remember { mutableStateOf("") }
-    var pairingCodeError by remember { mutableStateOf(false) }
-    var submittedPairingCode by remember { mutableStateOf<String?>(null) }
-    val focusManager = LocalFocusManager.current
-
-    fun submitPairingCode() {
-        if (pairingCodeInput.length != 6) {
-            pairingCodeError = true
-            return
-        }
-        pairingCodeError = false
-        submittedPairingCode = pairingCodeInput
-        onPair(pairingCodeInput)
-        focusManager.clearFocus()
-        onToast(strings.pairingRequestEnabled)
+    val ipv4Address = remember(serviceState.addresses) {
+        serviceState.addresses.firstOrNull { Ipv4AddressCode.encode(it) != null }
     }
-    val serviceAddress = remember(serviceState.addresses, serviceState.port, connectionGuide.address) {
-        val address = serviceState.addresses.firstOrNull()
+    val addressCode = remember(ipv4Address) { ipv4Address?.let(Ipv4AddressCode::encode) }
+    val serviceAddress = remember(ipv4Address, serviceState.port, connectionGuide.address) {
+        val address = ipv4Address
         val port = serviceState.port
         if (address != null && port != null) {
             "http://$address:$port/api/v1/"
@@ -686,78 +637,54 @@ private fun DevicesPage(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 3.dp, bottom = 12.dp),
                 )
-                Button(
-                    onClick = onScanQr,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = LgBlueStrong),
-                ) {
-                    Text(strings.scanComputerQr)
-                }
-                Row(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .background(LgParchment, RoundedCornerShape(14.dp))
+                        .border(1.dp, LgLine, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                 ) {
-                    Box(Modifier.weight(1f).height(1.dp).background(LgLine))
-                    Text(
-                        strings.orEnterPairingCode,
-                        color = LgMuted,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(horizontal = 10.dp),
-                    )
-                    Box(Modifier.weight(1f).height(1.dp).background(LgLine))
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = pairingCodeInput,
-                        onValueChange = { value ->
-                            pairingCodeInput = value.filter(Char::isDigit).take(6)
-                            pairingCodeError = false
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("pairing_code_input"),
-                        singleLine = true,
-                        isError = pairingCodeError,
-                        label = { Text(strings.sixDigitCode) },
-                        placeholder = { Text("123 456") },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.NumberPassword,
-                            imeAction = ImeAction.Done,
-                        ),
-                        keyboardActions = KeyboardActions(onDone = { submitPairingCode() }),
-                        shape = RoundedCornerShape(14.dp),
-                    )
-                    Button(
-                        onClick = ::submitPairingCode,
-                        enabled = pairingCodeInput.length == 6,
-                        modifier = Modifier
-                            .height(56.dp)
-                            .testTag("confirm_pairing_code"),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = LgBlueStrong),
-                    ) {
-                        Text(strings.pair)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        Text(strings.addressCode, color = LgMuted, style = MaterialTheme.typography.labelMedium)
+                        Text(
+                            text = addressCode?.let(Ipv4AddressCode::format) ?: "---- ----",
+                            color = LgInk,
+                            fontSize = 30.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 2.sp,
+                            modifier = Modifier.testTag("address_code"),
+                        )
+                        Text(
+                            strings.addressCodeHelp,
+                            color = LgMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 3.dp),
+                        )
                     }
                 }
-                if (pairingCodeError) {
-                    Text(
-                        strings.invalidPairingCode,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
+                Button(
+                    onClick = {
+                        if (addressCode == null) {
+                            onToast(strings.addressUnavailable)
+                        } else {
+                            onPair(addressCode)
+                            onToast(strings.waitingForWindows)
+                        }
+                    },
+                    enabled = serviceState.running && addressCode != null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .height(50.dp)
+                        .testTag("enable_address_pairing"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = LgBlueStrong),
+                ) {
+                    Text(strings.enablePairing)
                 }
-                val activePairingCode = serviceState.pairingCode ?: submittedPairingCode
-                if (activePairingCode != null) {
+                if (serviceState.pairingCode != null) {
                     Text(
-                        strings.pairingReady(activePairingCode),
+                        strings.pairingReady(serviceState.pairingCode),
                         color = LgBlueStrong,
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
@@ -974,55 +901,53 @@ private fun MediaTile(
     strings: UiStrings,
 ) {
     val shape = RoundedCornerShape(8.dp)
-    PressScale(targetScale = 0.96f) { pressModifier ->
-        Box(
-            modifier = pressModifier
-                .aspectRatio(1f)
-                .clip(shape)
-                .background(LgCanvas)
-                .border(1.dp, LgLine, shape)
-                .clickable(enabled = selectionMode) { onToggleSelection(item.id) }
-                .testTag("media_tile"),
-            contentAlignment = Alignment.BottomEnd,
-        ) {
-            MediaThumbnailPreview(
-                item = item,
-                mediaRepository = mediaRepository,
-                modifier = Modifier.fillMaxSize(),
-                fallbackText = item.fileName.substringAfterLast('.', "Media")
-                    .take(5)
-                    .uppercase(Locale.getDefault()),
-            )
-            if (selectionMode) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(7.dp)
-                        .size(23.dp)
-                        .clip(CircleShape)
-                        .background(if (selected) LgBlueStrong else Color.White.copy(alpha = 0.88f))
-                        .border(
-                            width = 1.5.dp,
-                            color = if (selected) Color.White else LgMuted,
-                            shape = CircleShape,
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (selected) {
-                        Text("✓", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(shape)
+            .background(LgCanvas)
+            .border(1.dp, LgLine, shape)
+            .clickable(enabled = selectionMode) { onToggleSelection(item.id) }
+            .testTag("media_tile"),
+        contentAlignment = Alignment.BottomEnd,
+    ) {
+        MediaThumbnailPreview(
+            item = item,
+            mediaRepository = mediaRepository,
+            modifier = Modifier.fillMaxSize(),
+            fallbackText = item.fileName.substringAfterLast('.', "Media")
+                .take(5)
+                .uppercase(Locale.getDefault()),
+        )
+        if (selectionMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(7.dp)
+                    .size(23.dp)
+                    .clip(CircleShape)
+                    .background(if (selected) LgBlueStrong else Color.White.copy(alpha = 0.88f))
+                    .border(
+                        width = 1.5.dp,
+                        color = if (selected) Color.White else LgMuted,
+                        shape = CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (selected) {
+                    Text("✓", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
-            Text(
-                text = if (item.type == MediaType.VIDEO) strings.video else strings.photo,
-                color = Color.White,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier
-                    .padding(6.dp)
-                    .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(999.dp))
-                    .padding(horizontal = 7.dp, vertical = 3.dp),
-            )
         }
+        Text(
+            text = if (item.type == MediaType.VIDEO) strings.video else strings.photo,
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier
+                .padding(6.dp)
+                .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(999.dp))
+                .padding(horizontal = 7.dp, vertical = 3.dp),
+        )
     }
 }
 
@@ -1038,14 +963,15 @@ private fun MediaThumbnailPreview(
         image = null
         val record = item ?: return@LaunchedEffect
         val repository = mediaRepository ?: return@LaunchedEffect
-        val result = withContext(Dispatchers.IO) {
-            repository.getThumbnail(record.id, 256, 256)
-        }
-        image = when (result) {
-            is MediaThumbnailResult.Found -> BitmapFactory
-                .decodeByteArray(result.jpeg, 0, result.jpeg.size)
-                ?.asImageBitmap()
-            else -> null
+        image = ThumbnailLoadGate.withPermit {
+            withContext(Dispatchers.IO) {
+                when (val result = repository.getThumbnail(record.id, 256, 256)) {
+                    is MediaThumbnailResult.Found -> BitmapFactory
+                        .decodeByteArray(result.jpeg, 0, result.jpeg.size)
+                        ?.asImageBitmap()
+                    else -> null
+                }
+            }
         }
     }
 
@@ -1414,19 +1340,25 @@ private class UiStrings(val uiLanguage: UiLanguage) {
     val copyComplete get() = t("Copy complete", "复制完成")
     val copied get() = t("Copied", "已复制")
     val copySelected get() = t("Copy selected", "复制所选")
-    val scanComputerQr get() = t("Scan the QR code shown on Windows", "扫描电脑上显示的二维码")
     val connectComputer get() = t("Connect a computer", "连接电脑")
     val connectComputerDetail get() = t(
-        "Scan the Windows QR code, or enter the six-digit code shown there.",
-        "扫描电脑二维码，或输入电脑上显示的六位码。",
+        "Enable pairing, then enter this address code on Windows.",
+        "开启配对后，在 Windows 端输入此地址码。",
     )
-    val orEnterPairingCode get() = t("or enter the code shown on Windows", "或输入电脑显示的六位码")
-    val sixDigitCode get() = t("Six-digit code", "六位配对码")
-    val invalidPairingCode get() = t("Enter all six digits.", "请输入完整的六位数字。")
-    val pairingRequestEnabled get() = t("Pairing is ready", "已开启配对")
+    val addressCode get() = t("Address code", "地址码")
+    val addressCodeHelp get() = t(
+        "This reversibly represents the complete IPv4 address.",
+        "此代码可完整还原手机 IPv4 地址。",
+    )
+    val addressUnavailable get() = t(
+        "No usable IPv4 address is available.",
+        "当前没有可用的 IPv4 地址。",
+    )
+    val enablePairing get() = t("Enable pairing for 2 minutes", "开启两分钟配对")
+    val waitingForWindows get() = t("Waiting for Windows to connect", "正在等待 Windows 连接")
     fun pairingReady(code: String): String {
-        val formatted = code.filter(Char::isDigit).chunked(3).joinToString(" ")
-        return t("Pairing enabled · $formatted", "配对已启用 · $formatted")
+        val formatted = if (code.length == 8) Ipv4AddressCode.format(code) else code.chunked(3).joinToString(" ")
+        return t("Waiting for Windows · $formatted", "正在等待 Windows · $formatted")
     }
     val smartTag get() = t("SMART", "智能")
     val deviceTag get() = t("DEVICE", "设备")

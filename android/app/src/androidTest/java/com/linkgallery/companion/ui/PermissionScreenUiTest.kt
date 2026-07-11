@@ -7,7 +7,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
+import com.linkgallery.companion.LinkGalleryServiceState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -56,7 +56,7 @@ class PermissionScreenUiTest {
     }
 
     @Test
-    fun connectionPageAcceptsWindowsPairingCode() {
+    fun connectionPageDisplaysAddressCodeAndEnablesPairing() {
         var submittedCode: String? = null
         compose.setContent {
             PermissionContent(
@@ -67,15 +67,20 @@ class PermissionScreenUiTest {
                     submittedCode = code
                     0L
                 },
+                serviceState = LinkGalleryServiceState(
+                    running = true,
+                    port = 39570,
+                    addresses = listOf("172.23.45.108"),
+                ),
             )
         }
 
         compose.onNodeWithTag("tab_connection").performClick()
-        compose.onNodeWithTag("pairing_code_input").performTextInput("428913")
-        compose.onNodeWithTag("confirm_pairing_code").performClick()
-        compose.onNodeWithTag("pairing_ready")
+        compose.onNodeWithTag("address_code")
             .assertIsDisplayed()
-        compose.runOnIdle { assertEquals("428913", submittedCode) }
+        compose.onNodeWithText("AC17-2D6C").assertIsDisplayed()
+        compose.onNodeWithTag("enable_address_pairing").performClick()
+        compose.runOnIdle { assertEquals("AC172D6C", submittedCode) }
     }
 
     private fun emulatorGuide() = createConnectionGuide(

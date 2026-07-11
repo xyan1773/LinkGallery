@@ -1196,19 +1196,21 @@
                                            FontSize="20"
                                            FontWeight="SemiBold"
                                            Foreground="{StaticResource LgBrushInk}"
-                                           Text="Manual connection" />
+                                           Text="Connect with address code" />
                                 <TextBlock x:Name="ManualConnectionSubtitleText"
                                            Margin="0,5,0,0"
                                            FontSize="13"
                                            Foreground="{StaticResource LgBrushMuted}"
-                                           Text="Enter the phone API address, then connect." />
+                                           Text="Enter the eight-character code shown on the phone." />
                             </StackPanel>
                         </StackPanel>
                         <TextBox x:Name="AddressTextBox"
                                  AutomationProperties.AutomationId="AddressTextBox"
                                  Margin="0,20,0,0"
                                  MinHeight="52"
-                                 FontSize="14"
+                                 FontFamily="Consolas"
+                                 FontSize="20"
+                                 CharacterCasing="Upper"
                                  Style="{StaticResource LgTextBox}"
                                  TextChanged="OnAddressTextChanged" />
                         <TextBlock x:Name="AddressHintText"

@@ -265,8 +265,10 @@ public partial class MainWindow : Window, IDisposable
         BrowseDevicePhotosButton.Content = L("Browse photos", "浏览照片");
         DisconnectButton.Content = L("Disconnect", "断开连接");
         ForgetDeviceButton.Content = L("Forget device", "忘记设备");
-        ManualConnectionTitleText.Text = L("Manual connection", "手动连接");
-        ManualConnectionSubtitleText.Text = L("Enter the phone API address, then connect.", "输入手机 API 地址后连接。");
+        ManualConnectionTitleText.Text = L("Connect with address code", "使用地址码连接");
+        ManualConnectionSubtitleText.Text = L(
+            "On the phone, enable pairing and enter its eight-character address code here.",
+            "在手机端开启配对，然后在这里输入八位地址码。");
         ConnectButton.Content = L("Connect", "连接");
         CancelManualConnectionButton.Content = L("Cancel", "取消");
 
@@ -680,8 +682,8 @@ public partial class MainWindow : Window, IDisposable
     private void UpdateAddressHint()
     {
         var defaultHint = L(
-            "Emulator: run adb forward first, then enter 127.0.0.1:39570. Do not use the emulator 10.0.2.x address.",
-            "模拟器：先执行 adb forward，再输入 127.0.0.1:39570；不要输入模拟器显示的 10.0.2.x。");
+            "Example: AC17-2D6C. The code contains the complete IPv4 address; no network scan is performed.",
+            "例如 AC17-2D6C。地址码包含完整 IPv4 地址，程序不会扫描局域网。");
         if (string.IsNullOrWhiteSpace(AddressTextBox.Text))
         {
             AddressHintText.Text = defaultHint;
@@ -691,6 +693,14 @@ public partial class MainWindow : Window, IDisposable
 
         try
         {
+            if (Ipv4AddressCode.TryDecode(AddressTextBox.Text, out var decoded))
+            {
+                AddressHintText.Text = L(
+                    $"Will connect directly to {decoded}:39570.",
+                    $"将直接连接 {decoded}:39570。");
+                AddressHintText.Foreground = System.Windows.Media.Brushes.SeaGreen;
+                return;
+            }
             var address = HttpReadOnlyMediaSource.NormalizeApiAddress(AddressTextBox.Text);
             var couldBeEmulatorNat =
                 HttpReadOnlyMediaSource.IsPotentialAndroidEmulatorNatAddress(address);
@@ -712,12 +722,12 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
-        var rawAddress = AddressTextBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(rawAddress))
+        var rawAddressOrCode = AddressTextBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(rawAddressOrCode))
         {
             SetManualConnectionOpen(true);
-            StatusText.Text = L("Enter a phone API address first.", "请先输入手机 API 地址。");
-            ShowToast(L("Enter IP manually first", "请先手动输入 IP"));
+            StatusText.Text = L("Enter the address code shown on the phone.", "请输入手机显示的地址码。");
+            ShowToast(L("Enter the address code first", "请先输入地址码"));
             AddressTextBox.Focus();
             return;
         }
@@ -725,7 +735,16 @@ public partial class MainWindow : Window, IDisposable
         Uri apiAddress;
         try
         {
-            apiAddress = HttpReadOnlyMediaSource.NormalizeApiAddress(rawAddress);
+            if (Ipv4AddressCode.TryDecode(rawAddressOrCode, out var decodedAddress) &&
+                Ipv4AddressCode.TryNormalize(rawAddressOrCode, out var normalizedCode))
+            {
+                apiAddress = await ResolveAddressCodeApiAddressAsync(decodedAddress);
+                SetPendingPairingCode(normalizedCode);
+            }
+            else
+            {
+                apiAddress = HttpReadOnlyMediaSource.NormalizeApiAddress(rawAddressOrCode);
+            }
         }
         catch (FormatException exception)
         {
@@ -747,11 +766,11 @@ public partial class MainWindow : Window, IDisposable
             _connectionCancellation = new CancellationTokenSource();
             var cancellationToken = _connectionCancellation.Token;
             var pairingCode = _pendingPairingCode;
-            _pendingPairingCode = null;
             var authorization = await ResolveAuthorizationAsync(
                 apiAddress,
                 cancellationToken,
                 pairingCode);
+            SetPendingPairingCode(null);
             var httpSource = new HttpReadOnlyMediaSource(
                 _httpClient,
                 apiAddress,
@@ -862,16 +881,16 @@ public partial class MainWindow : Window, IDisposable
         {
             throw new InvalidOperationException(
                 L(
-                    "Choose Pair device first, then scan the desktop QR code or enter its six-digit code on the phone.",
-                    "请先选择“配对设备”，再用手机扫描电脑二维码或输入电脑显示的六位码。"));
+                    "Enable pairing on the phone, then retry with its eight-character address code.",
+                    "请先在手机端开启配对，再使用手机显示的八位地址码重试。"));
         }
 
         if (string.IsNullOrWhiteSpace(verificationCode))
         {
             throw new InvalidOperationException(
                 L(
-                    "Pairing must be started from the desktop QR-code window.",
-                    "请从电脑的二维码配对窗口开始配对。"));
+                    "Enter the phone address code to start pairing.",
+                    "请输入手机地址码以开始配对。"));
         }
 
         var identity = new PairingIdentity(
@@ -1604,86 +1623,58 @@ public partial class MainWindow : Window, IDisposable
         ManualConnectionModal.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private async void OnEnterIpClick(object sender, RoutedEventArgs e)
+    private void SetPendingPairingCode(string? code)
     {
-        var code = RandomNumberGenerator.GetInt32(1_000_000).ToString("D6", CultureInfo.InvariantCulture);
-        var payload = PairingQrPayloadCodec.Create(_desktopId, Environment.MachineName, code);
-        var dialog = new PairDeviceWindow(
-            payload,
-            code,
-            _language == UiLanguage.Chinese) { Owner = this };
-        using var resolutionCancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        var resolutionTask = ResolvePairingWindowAsync(dialog, resolutionCancellation.Token);
-        dialog.ShowDialog();
-        resolutionCancellation.Cancel();
-        try
-        {
-            await resolutionTask;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        if (dialog.ResolvedDevice is not null)
-        {
-            var address = dialog.ResolvedDevice.Addresses
-                .OrderByDescending(candidate => candidate.Source == DeviceAddressSource.Udp)
-                .ThenByDescending(candidate => candidate.Source == DeviceAddressSource.Subnet)
-                .First();
-            _pendingPairingCode = dialog.ActiveCode;
-            AddressTextBox.Text = $"{address.Host}:{address.Port}";
-            StatusText.Text = L(
-                $"Found {dialog.ResolvedDevice.DisplayName}; pairing…",
-                $"已找到 {dialog.ResolvedDevice.DisplayName}，正在配对…");
-            OnConnectClick(ConnectButton, new RoutedEventArgs());
-            return;
-        }
-
-        if (dialog.ManualIpRequested)
-        {
-            _pendingPairingCode = dialog.ActiveCode;
-            SetManualConnectionOpen(true);
-            StatusText.Text = L(
-                "Enter the phone API address after scanning the QR code or entering the displayed code.",
-                "手机扫码或输入电脑显示的配对码后，再输入手机 API 地址。");
-            AddressTextBox.Focus();
-        }
+        _pendingPairingCode = code;
     }
 
-    private async Task ResolvePairingWindowAsync(
-        PairDeviceWindow dialog,
-        CancellationToken cancellationToken)
+    private async Task<Uri> ResolveAddressCodeApiAddressAsync(IPAddress decodedAddress)
     {
-        while (!cancellationToken.IsCancellationRequested && !dialog.IsClosed)
+        var directAddress = new UriBuilder(
+            Uri.UriSchemeHttp,
+            decodedAddress.ToString(),
+            39570,
+            "api/v1/").Uri;
+        if (!HttpReadOnlyMediaSource.IsPotentialAndroidEmulatorNatAddress(directAddress))
         {
-            var activeCode = dialog.ActiveCode;
-            var device = await _localDeviceDiscovery.ResolvePairingCodeAsync(
-                _desktopId,
-                activeCode,
-                cancellationToken);
-            if (device is not null && !dialog.IsClosed && dialog.ActiveCode == activeCode)
-            {
-                dialog.Complete(device, activeCode);
-                return;
-            }
-
-            if (!dialog.IsClosed)
-            {
-                dialog.SetWaitingStatus(L(
-                    "Waiting for the phone on Wi-Fi, hotspot or USB network…",
-                    "正在 Wi-Fi、热点或 USB 网络中等待手机…"));
-            }
-            await Task.Delay(350, cancellationToken);
+            return directAddress;
         }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+        var discovered = await _localDeviceDiscovery.DiscoverAsync(_desktopId, timeout.Token);
+        foreach (var device in discovered)
+        {
+            _discoveryManager.Merge(device);
+        }
+        var adbAddress = discovered
+            .SelectMany(device => device.Addresses)
+            .FirstOrDefault(address => address.Source == DeviceAddressSource.Adb);
+        return adbAddress is null
+            ? directAddress
+            : new UriBuilder(Uri.UriSchemeHttp, adbAddress.Host, adbAddress.Port, "api/v1/").Uri;
     }
 
-    private void OnCancelManualConnectionClick(object sender, RoutedEventArgs e) =>
+    private void OnEnterIpClick(object sender, RoutedEventArgs e)
+    {
+        SetPendingPairingCode(null);
+        AddressTextBox.Clear();
+        SetManualConnectionOpen(true);
+        StatusText.Text = L(
+            "Enable pairing on the phone, then enter its address code.",
+            "请在手机端开启配对，然后输入手机显示的地址码。");
+        AddressTextBox.Focus();
+    }
+
+    private void OnCancelManualConnectionClick(object sender, RoutedEventArgs e)
+    {
+        SetPendingPairingCode(null);
         SetManualConnectionOpen(false);
+    }
 
     private async void OnFindDevicesClick(object sender, RoutedEventArgs e)
     {
         FindDevicesButton.IsEnabled = false;
-        StatusText.Text = L("Searching the local network…", "正在搜索局域网设备…");
+        StatusText.Text = L("Listening for safe discovery announcements…", "正在监听安全的设备发现广播…");
         try
         {
             var discovered = await _localDeviceDiscovery.DiscoverAsync(
@@ -1701,8 +1692,8 @@ public partial class MainWindow : Window, IDisposable
             if (selected.device is null)
             {
                 StatusText.Text = L(
-                    "No LinkGallery device was found. You can still enter an IP address.",
-                    "未发现 LinkGallery 设备，你仍可手动输入 IP 地址。");
+                    "No device announcement was found. Enter the phone address code; LinkGallery will not scan the subnet.",
+                    "未收到设备广播。请输入手机地址码；LinkGallery 不会扫描整个子网。");
                 ShowToast(L("No devices found", "未发现设备"));
                 return;
             }
@@ -1738,50 +1729,36 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private async Task PairKnownDeviceAsync(DiscoveredDevice device, DeviceAddress address)
+    private Task PairKnownDeviceAsync(DiscoveredDevice device, DeviceAddress address)
     {
-        var code = RandomNumberGenerator.GetInt32(1_000_000).ToString("D6", CultureInfo.InvariantCulture);
-        var payload = PairingQrPayloadCodec.Create(_desktopId, Environment.MachineName, code);
-        var dialog = new PairDeviceWindow(
-            payload,
-            code,
-            _language == UiLanguage.Chinese) { Owner = this };
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        var resolutionTask = ResolvePairingWindowAsync(dialog, cancellation.Token);
-        dialog.ShowDialog();
-        cancellation.Cancel();
-        try
+        if (address.Source == DeviceAddressSource.Adb)
         {
-            await resolutionTask;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-
-        if (dialog.ResolvedDevice is not null)
-        {
-            var resolvedAddress = dialog.ResolvedDevice.Addresses
-                .OrderByDescending(candidate => candidate.Source == DeviceAddressSource.Udp)
-                .ThenByDescending(candidate => candidate.Source == DeviceAddressSource.Subnet)
-                .First();
-            _pendingPairingCode = dialog.ActiveCode;
-            AddressTextBox.Text = $"{resolvedAddress.Host}:{resolvedAddress.Port}";
+            SetPendingPairingCode(null);
+            AddressTextBox.Clear();
+            SetManualConnectionOpen(true);
             StatusText.Text = L(
-                $"Pairing with {dialog.ResolvedDevice.DisplayName}…",
-                $"正在与 {dialog.ResolvedDevice.DisplayName} 配对…");
-            OnConnectClick(ConnectButton, new RoutedEventArgs());
-            return;
+                "Enter the address code shown by the emulator; the existing ADB forward will be used.",
+                "请输入模拟器显示的地址码；连接将使用现有 ADB 转发。");
+            return Task.CompletedTask;
         }
 
-        if (dialog.ManualIpRequested)
+        if (!Ipv4AddressCode.TryEncode(address.Host, out var code))
         {
-            _pendingPairingCode = dialog.ActiveCode;
             AddressTextBox.Text = $"{address.Host}:{address.Port}";
             SetManualConnectionOpen(true);
             StatusText.Text = L(
-                $"Use the discovered address for {device.DisplayName} after the phone accepts the code.",
-                $"手机接受配对码后，可用已发现的地址连接 {device.DisplayName}。");
+                "The discovered address is not IPv4. Enter the address shown by the phone.",
+                "发现的地址不是 IPv4，请输入手机显示的地址。");
+            return Task.CompletedTask;
         }
+
+        SetPendingPairingCode(code);
+        AddressTextBox.Text = Ipv4AddressCode.Format(code);
+        SetManualConnectionOpen(true);
+        StatusText.Text = L(
+            $"Enable pairing on {device.DisplayName}, then connect with {Ipv4AddressCode.Format(code)}.",
+            $"请在 {device.DisplayName} 上开启配对，再使用 {Ipv4AddressCode.Format(code)} 连接。");
+        return Task.CompletedTask;
     }
 
     private void OnAlbumCardClick(object sender, MouseButtonEventArgs e)

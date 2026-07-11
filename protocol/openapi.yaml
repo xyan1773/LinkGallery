@@ -489,7 +489,8 @@ components:
           type: string
         verificationCode:
           type: string
-          pattern: "^[0-9]{6}$"
+          description: Six-digit legacy pairing code or eight-digit hexadecimal IPv4 address code.
+          pattern: "^([0-9]{6}|[0-9A-Fa-f]{8})$"
     PairConfirmResponse:
       type: object
       required: [paired, accessToken, tokenType]

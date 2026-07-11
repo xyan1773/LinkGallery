@@ -1,5 +1,4 @@
 using System.Net;
-using LinkGallery.Application.Devices;
 using LinkGallery.Infrastructure.Devices;
 
 namespace LinkGallery.Infrastructure.Tests.Devices;
@@ -8,24 +7,24 @@ namespace LinkGallery.Infrastructure.Tests.Devices;
 public sealed class LocalDeviceDiscoveryTests
 {
     [TestMethod]
-    public void Same24ProbeIsBoundedAndExcludesCurrentHost()
+    public void Ipv4AddressCodeRoundTripsTheCompleteAddress()
     {
-        var hosts = LocalDeviceDiscovery.HostsInSame24(IPAddress.Parse("172.23.45.108")).ToArray();
+        var code = Ipv4AddressCode.Encode(IPAddress.Parse("172.23.45.108"));
 
-        Assert.HasCount(253, hosts);
-        Assert.DoesNotContain(IPAddress.Parse("172.23.45.108"), hosts);
-        Assert.Contains(IPAddress.Parse("172.23.45.1"), hosts);
-        Assert.Contains(IPAddress.Parse("172.23.45.254"), hosts);
+        Assert.AreEqual("AC172D6C", code);
+        Assert.AreEqual("AC17-2D6C", Ipv4AddressCode.Format(code));
+        Assert.IsTrue(Ipv4AddressCode.TryDecode("ac17-2d6c", out var decoded));
+        Assert.AreEqual("172.23.45.108", decoded.ToString());
     }
 
     [TestMethod]
-    public void PairingQrContainsVersionedEscapedIdentityAndRandomCode()
+    [DataRow("")]
+    [DataRow("123456")]
+    [DataRow("AC17-ZD6C")]
+    [DataRow("AC172D6C00")]
+    public void Ipv4AddressCodeRejectsInvalidValues(string value)
     {
-        var payload = PairingQrPayloadCodec.Create("desktop id", "Living Room PC", "281604");
-
-        StringAssert.StartsWith(payload, "linkgallery://pair?v=1");
-        StringAssert.Contains(payload, "code=281604");
-        StringAssert.Contains(payload, "desktopId=desktop%20id");
-        StringAssert.Contains(payload, "desktopName=Living%20Room%20PC");
+        Assert.IsFalse(Ipv4AddressCode.TryDecode(value, out _));
     }
+
 }

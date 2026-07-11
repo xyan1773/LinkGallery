@@ -99,6 +99,21 @@ class PairingManagerTest {
     }
 
     @Test
+    fun completeIpv4AddressCodeCanAuthorizePairing() {
+        val manager = PairingManager()
+        manager.openPairingWindow(nowMillis = 1_000, verificationCode = "ac17-2d6c")
+        val start = manager.start(startRequest(), nowMillis = 2_000) as PairingResult.Success
+
+        val result = manager.confirm(
+            PairConfirmRequest(start.value.pairingSessionId, "AC172D6C"),
+            nowMillis = 2_001,
+        )
+
+        assertEquals(8, start.value.codeLength)
+        assertTrue(result is PairingResult.Success)
+    }
+
+    @Test
     fun revokeRemovesStoredTokenHash() {
         val store = InMemoryPairingCredentialStore()
         val manager = PairingManager(credentialStore = store)

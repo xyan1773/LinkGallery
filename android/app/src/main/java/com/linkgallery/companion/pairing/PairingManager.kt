@@ -122,7 +122,13 @@ class PairingManager(
 
     override fun openPairingWindow(nowMillis: Long, verificationCode: String?): PairingWindow = synchronized(lock) {
         val requestedCode = verificationCode
-            ?.takeIf { it.length == CODE_LENGTH && it.all(Char::isDigit) }
+            ?.takeIf { value -> value.all { it.isLetterOrDigit() || it == '-' || it.isWhitespace() } }
+            ?.filter(Char::isLetterOrDigit)
+            ?.uppercase()
+            ?.takeIf { code ->
+                (code.length == CODE_LENGTH && code.all(Char::isDigit)) ||
+                    (code.length == ADDRESS_CODE_LENGTH && code.all { it.isDigit() || it in 'A'..'F' })
+            }
         val next = PairingWindow(
             openedAtEpochMillis = nowMillis,
             expiresAtEpochMillis = nowMillis + windowDurationMillis,
@@ -187,7 +193,7 @@ class PairingManager(
                 phoneNonce = phoneNonce,
                 expiresAtEpochMillis = expiresAt,
                 attemptsRemaining = session.attemptsRemaining,
-                codeLength = CODE_LENGTH,
+                codeLength = code.length,
             ),
         )
     }
@@ -323,5 +329,6 @@ class PairingManager(
         const val LOCKOUT_DURATION_MILLIS = 300_000L
         const val MAX_ATTEMPTS = 5
         const val CODE_LENGTH = 6
+        const val ADDRESS_CODE_LENGTH = 8
     }
 }
