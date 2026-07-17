@@ -38,9 +38,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -61,10 +64,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -182,11 +187,16 @@ internal fun LinkGalleryApp(
         )
     }
     val strings = remember(language) { UiStrings(language) }
-    var selectedTab by remember { mutableStateOf(AppTab.Albums) }
+    var selectedTab by rememberSaveable { mutableStateOf(AppTab.Photos) }
+    var galleryMode by rememberSaveable { mutableStateOf(GalleryMode.AllPhotos) }
+    var gridColumns by rememberSaveable { mutableIntStateOf(4) }
     var selectedFilter by remember { mutableStateOf(MediaFilter.All) }
     var galleryState by remember { mutableStateOf<GalleryState>(GalleryState.Loading) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
     val albumPageCache = remember(mediaRepository) { AlbumPageCache() }
+    val photosGridState = rememberLazyGridState()
+    val albumsScrollState = rememberScrollState()
+    val albumDetailGridState = rememberLazyGridState()
 
     fun showToast(message: String) {
         toastMessage = message
@@ -242,7 +252,7 @@ internal fun LinkGalleryApp(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    AppTab.entries.forEach { tab ->
+                    AppTab.entries.filterNot { it == AppTab.Albums }.forEach { tab ->
                         val selected = selectedTab == tab
                         Column(
                             modifier = Modifier
@@ -279,27 +289,44 @@ internal fun LinkGalleryApp(
         ) {
             Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
                 when (selectedTab) {
-                        AppTab.Photos -> PhotosPage(
-                            galleryState = galleryState,
-                            selectedFilter = selectedFilter,
-                            mediaRepository = mediaRepository,
-                            onFilterChange = {
-                                selectedFilter = it
-                            },
-                            onPermissionRequest = onPermissionRequest,
-                            onToast = ::showToast,
-                            strings = strings,
-                        )
-                        AppTab.Albums -> AlbumsPage(
-                            galleryState = galleryState,
-                            mediaRepository = mediaRepository,
-                            albumPageCache = albumPageCache,
-                            permissionGranted = permissionGranted,
-                            onPermissionRequest = onPermissionRequest,
-                            onManageDevices = { selectedTab = AppTab.Connection },
-                            onToast = ::showToast,
-                            strings = strings,
-                        )
+                        AppTab.Photos -> Column(Modifier.fillMaxSize()) {
+                            GalleryModeSelector(
+                                selected = galleryMode,
+                                onSelected = { galleryMode = it },
+                                strings = strings,
+                            )
+                            Box(Modifier.weight(1f)) {
+                                when (galleryMode) {
+                                    GalleryMode.AllPhotos -> PhotosPage(
+                                        galleryState = galleryState,
+                                        selectedFilter = selectedFilter,
+                                        mediaRepository = mediaRepository,
+                                        onFilterChange = { selectedFilter = it },
+                                        onPermissionRequest = onPermissionRequest,
+                                        onToast = ::showToast,
+                                        strings = strings,
+                                        gridColumns = gridColumns,
+                                        onGridColumnsChange = { gridColumns = it },
+                                        gridState = photosGridState,
+                                    )
+                                    GalleryMode.Albums -> AlbumsPage(
+                                        galleryState = galleryState,
+                                        mediaRepository = mediaRepository,
+                                        albumPageCache = albumPageCache,
+                                        permissionGranted = permissionGranted,
+                                        onPermissionRequest = onPermissionRequest,
+                                        onManageDevices = { selectedTab = AppTab.Connection },
+                                        onToast = ::showToast,
+                                        strings = strings,
+                                        gridColumns = gridColumns,
+                                        onGridColumnsChange = { gridColumns = it },
+                                        albumsScrollState = albumsScrollState,
+                                        albumDetailGridState = albumDetailGridState,
+                                    )
+                                }
+                            }
+                        }
+                        AppTab.Albums -> Unit
                         AppTab.Connection -> DevicesPage(
                             connectionGuide = connectionGuide,
                             serviceState = serviceState,
@@ -343,6 +370,55 @@ internal fun PermissionContent(
 }
 
 @Composable
+private fun GalleryModeSelector(
+    selected: GalleryMode,
+    onSelected: (GalleryMode) -> Unit,
+    strings: UiStrings,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        GalleryMode.entries.forEach { mode ->
+            FilterChip(
+                selected = selected == mode,
+                onClick = { onSelected(mode) },
+                label = {
+                    Text(if (mode == GalleryMode.AllPhotos) strings.allPhotos else strings.albums)
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(
+                        if (mode == GalleryMode.AllPhotos) {
+                            "gallery_mode_all_photos"
+                        } else {
+                            "gallery_mode_albums"
+                        },
+                    ),
+                shape = RoundedCornerShape(999.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DensityChip(
+    columns: Int,
+    onColumnsChange: (Int) -> Unit,
+    strings: UiStrings,
+) {
+    FilterChip(
+        selected = false,
+        onClick = { onColumnsChange(if (columns >= 5) 3 else columns + 1) },
+        label = { Text(strings.gridColumns(columns)) },
+        modifier = Modifier.testTag("grid_density"),
+        shape = RoundedCornerShape(999.dp),
+    )
+}
+
+@Composable
 private fun AlbumsPage(
     galleryState: GalleryState,
     mediaRepository: MediaRepository?,
@@ -352,6 +428,10 @@ private fun AlbumsPage(
     onManageDevices: () -> Unit,
     onToast: (String) -> Unit,
     strings: UiStrings,
+    gridColumns: Int,
+    onGridColumnsChange: (Int) -> Unit,
+    albumsScrollState: ScrollState,
+    albumDetailGridState: LazyGridState,
 ) {
     val mediaItems = (galleryState as? GalleryState.Ready)?.items.orEmpty()
     val smartAlbums = remember(mediaItems, strings.uiLanguage) { buildSmartAlbums(mediaItems, strings) }
@@ -408,6 +488,7 @@ private fun AlbumsPage(
                         )
                     }
                 }
+                DensityChip(gridColumns, onGridColumnsChange, strings)
             }
             Spacer(Modifier.height(14.dp))
             if (albumLoading) {
@@ -423,6 +504,8 @@ private fun AlbumsPage(
                     selectedIds = emptySet(),
                     onToggleSelection = {},
                     strings = strings,
+                    columns = gridColumns,
+                    gridState = albumDetailGridState,
                 )
             }
         }
@@ -465,7 +548,7 @@ private fun AlbumsPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(albumsScrollState)
             .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         TopBar(
@@ -513,6 +596,9 @@ private fun PhotosPage(
     onPermissionRequest: () -> Unit,
     onToast: (String) -> Unit,
     strings: UiStrings,
+    gridColumns: Int,
+    onGridColumnsChange: (Int) -> Unit,
+    gridState: LazyGridState,
 ) {
     val mediaCount = (galleryState as? GalleryState.Ready)?.items?.size ?: 0
     var selectionMode by remember { mutableStateOf(false) }
@@ -553,6 +639,7 @@ private fun PhotosPage(
                         )
                     }
                 }
+                DensityChip(gridColumns, onGridColumnsChange, strings)
             }
             Spacer(Modifier.height(14.dp))
             when (galleryState) {
@@ -568,6 +655,8 @@ private fun PhotosPage(
                     selectedIds = selectedIds,
                     onToggleSelection = ::toggleSelection,
                     strings = strings,
+                    columns = gridColumns,
+                    gridState = gridState,
                 )
             }
         }
@@ -978,6 +1067,8 @@ private fun MediaGrid(
     selectedIds: Set<String>,
     onToggleSelection: (String) -> Unit,
     strings: UiStrings,
+    columns: Int,
+    gridState: LazyGridState,
 ) {
     val filtered = remember(items, selectedFilter) {
         when (selectedFilter) {
@@ -992,7 +1083,8 @@ private fun MediaGrid(
         }
     }
     LazyVerticalGrid(
-        columns = GridCells.Fixed(3),
+        columns = GridCells.Fixed(columns),
+        state = gridState,
         modifier = Modifier
             .fillMaxSize()
             .testTag("gallery_grid"),
@@ -1033,7 +1125,7 @@ private fun MediaTile(
     val shape = RoundedCornerShape(10.dp)
     Box(
         modifier = Modifier
-            .aspectRatio(1.18f)
+            .aspectRatio(1f)
             .clip(shape)
             .background(LgCanvas)
             .then(if (selected) Modifier.border(2.dp, LgBlue, shape) else Modifier)
@@ -1344,8 +1436,13 @@ private enum class AppTab(val symbol: String, val testTag: String) {
     Connection("◉", "tab_connection"),
 }
 
+private enum class GalleryMode {
+    AllPhotos,
+    Albums,
+}
+
 private fun AppTab.label(strings: UiStrings): String = when (this) {
-    AppTab.Photos -> strings.photos
+    AppTab.Photos -> strings.gallery
     AppTab.Albums -> strings.albums
     AppTab.Connection -> strings.devices
 }
@@ -1469,6 +1566,8 @@ private class UiStrings(val uiLanguage: UiLanguage) {
         if (uiLanguage == UiLanguage.English) english else chinese
 
     val photos get() = t("Photos", "照片")
+    val gallery get() = t("Gallery", "图库")
+    val allPhotos get() = t("All photos", "全部照片")
     val albums get() = t("Albums", "相册")
     val back get() = t("Back", "返回")
     val devices get() = t("Devices", "设备")
@@ -1575,6 +1674,8 @@ private class UiStrings(val uiLanguage: UiLanguage) {
         "$completed/$total items · ${(progress * 100).toInt()}%",
         "$completed/$total 项 · ${(progress * 100).toInt()}%",
     )
+
+    fun gridColumns(columns: Int): String = t("$columns columns", "$columns 列")
 }
 
 private fun formatCount(value: Int): String =

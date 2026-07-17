@@ -49,11 +49,27 @@ class PermissionScreenUiTest {
             )
         }
 
-        compose.onNodeWithTag("tab_albums")
+        compose.onNodeWithTag("gallery_mode_albums")
             .assertIsDisplayed()
         compose.onNodeWithTag("tab_connection")
             .assertIsDisplayed()
         compose.onAllNodesWithTag("grant_media_permission").assertCountEquals(0)
+    }
+
+    @Test
+    fun gallerySwitchesBetweenAllPhotosAndAlbumsAndCyclesDensity() {
+        compose.setContent {
+            PermissionContent(
+                connectionGuide = emulatorGuide(),
+                permissionGranted = true,
+                onPermissionRequest = {},
+            )
+        }
+
+        compose.onNodeWithTag("gallery_mode_all_photos").assertIsDisplayed()
+        compose.onNodeWithTag("grid_density").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("gallery_mode_albums").performClick()
+        compose.onNodeWithTag("gallery_mode_albums").assertIsDisplayed()
     }
 
     @Test
