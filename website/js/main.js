@@ -40,19 +40,71 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Language Switcher Logic
+  // Language Switcher Logic & Iframe Mockup Translation
   const langToggleBtn = document.getElementById('langToggle');
   const body = document.body;
+
+  const mockupDict = {
+    'zh': {
+      'Albums': '相册', 'Photos': '照片', 'Devices': '设备',
+      'Smart Albums': '智能相册', 'Device Albums': '设备相册', 'My Albums': '我的相册',
+      'Favorites': '个人收藏', 'Videos': '视频', 'Screenshots': '屏幕截图', 'Recently Deleted': '最近删除',
+      'Camera': '相机', 'Downloads': '下载', 'Settings': '设置',
+      'Search albums': '搜索相册', 'See all': '查看全部', 'Manage': '管理', 'New album': '新建相册',
+      'Your media, nearby.': '极速预览，近在咫尺。'
+    },
+    'en': {
+      '相册': 'Albums', '照片': 'Photos', '设备': 'Devices',
+      '智能相册': 'Smart Albums', '设备相册': 'Device Albums', '我的相册': 'My Albums',
+      '个人收藏': 'Favorites', '视频': 'Videos', '屏幕截图': 'Screenshots', '最近删除': 'Recently Deleted',
+      '相机': 'Camera', '下载': 'Downloads', '设置': 'Settings',
+      '搜索相册': 'Search albums', '查看全部': 'See all', '管理': 'Manage', '新建相册': 'New album',
+      '极速预览，近在咫尺。': 'Your media, nearby.'
+    }
+  };
+
+  function translateIframe(iframe, targetLang) {
+    try {
+      const doc = iframe.contentDocument || iframe.contentWindow.document;
+      if (!doc) return;
+      const dict = mockupDict[targetLang];
+      
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
+      let node;
+      while (node = walker.nextNode()) {
+        const text = node.nodeValue.trim();
+        if (dict[text]) node.nodeValue = node.nodeValue.replace(text, dict[text]);
+      }
+      
+      doc.querySelectorAll('input[placeholder]').forEach(input => {
+        const text = input.getAttribute('placeholder').trim();
+        if (dict[text]) input.setAttribute('placeholder', dict[text]);
+      });
+    } catch (e) {}
+  }
+
+  function updateMockupsLang(lang) {
+    document.querySelectorAll('iframe').forEach(iframe => translateIframe(iframe, lang));
+  }
 
   if (langToggleBtn) {
     langToggleBtn.addEventListener('click', () => {
       if (body.classList.contains('lang-zh')) {
         body.classList.remove('lang-zh');
         body.classList.add('lang-en');
+        updateMockupsLang('en');
       } else {
         body.classList.remove('lang-en');
         body.classList.add('lang-zh');
+        updateMockupsLang('zh');
       }
+    });
+
+    // Initial translation for iframes once loaded
+    document.querySelectorAll('iframe').forEach(iframe => {
+      iframe.addEventListener('load', () => {
+        if (body.classList.contains('lang-zh')) translateIframe(iframe, 'zh');
+      });
     });
   }
 
