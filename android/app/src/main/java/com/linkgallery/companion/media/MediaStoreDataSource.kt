@@ -36,6 +36,9 @@ data class MediaStoreRow(
     val generationModified: Long? = null,
     val mimeType: String? = null,
     val ownerPackageName: String? = null,
+    val metadataMake: String? = null,
+    val metadataModel: String? = null,
+    val codec: String? = null,
 ) {
     val sortTimestampEpochMillis: Long
         get() = dateTakenEpochMillis?.takeIf { it > 0 } ?: dateModifiedEpochSeconds * 1000

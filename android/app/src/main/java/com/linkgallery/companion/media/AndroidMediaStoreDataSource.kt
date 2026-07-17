@@ -5,8 +5,12 @@ import android.content.ContentUris
 import android.content.Context
 import android.database.Cursor
 import android.graphics.Bitmap
+import android.media.ExifInterface
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.os.Build
 import android.provider.MediaStore
+import android.util.LruCache
 import android.util.Size
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -16,6 +20,8 @@ class AndroidMediaStoreDataSource(
     private val context: Context,
     private val contentResolver: ContentResolver,
 ) : MediaStoreDataSource {
+    private val sourceMetadataCache = LruCache<String, EmbeddedSourceMetadata>(256)
+
     override fun query(request: MediaStoreRequest): List<MediaStoreRow> {
         val spec = request.toMediaStoreQuerySpec()
         return contentResolver.query(
@@ -247,7 +253,7 @@ class AndroidMediaStoreDataSource(
             MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO -> MediaType.VIDEO
             else -> error("MediaStore returned a non-image/video row.")
         }
-        return MediaStoreRow(
+        val row = MediaStoreRow(
             mediaStoreId = getLong(column(ID)),
             fileName = getString(column(DISPLAY_NAME)).orEmpty(),
             type = type,
@@ -265,6 +271,54 @@ class AndroidMediaStoreDataSource(
             mimeType = nullableString(MIME_TYPE),
             ownerPackageName = nullableString(OWNER_PACKAGE_NAME),
         )
+        if (!Pocket3MediaClassifier.shouldInspectEmbeddedMetadata(
+                row.fileName,
+                row.albumName,
+                row.relativePath,
+                row.ownerPackageName,
+            )
+        ) {
+            return row
+        }
+        val cacheKey = "${row.type}:${row.mediaStoreId}:${row.generation ?: row.dateModifiedEpochSeconds}"
+        val metadata = sourceMetadataCache[cacheKey] ?: loadEmbeddedSourceMetadata(row).also { loaded ->
+            sourceMetadataCache.put(cacheKey, loaded)
+        }
+        return row.copy(
+            metadataMake = metadata.make,
+            metadataModel = metadata.model,
+            codec = metadata.codec,
+        )
+    }
+
+    private fun loadEmbeddedSourceMetadata(row: MediaStoreRow): EmbeddedSourceMetadata {
+        val uri = ContentUris.withAppendedId(COLLECTION, row.mediaStoreId)
+        return when (row.type) {
+            MediaType.IMAGE -> runCatching {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val exif = ExifInterface(input)
+                    EmbeddedSourceMetadata(
+                        make = exif.getAttribute(ExifInterface.TAG_MAKE),
+                        model = exif.getAttribute(ExifInterface.TAG_MODEL),
+                    )
+                } ?: EmbeddedSourceMetadata()
+            }.getOrDefault(EmbeddedSourceMetadata())
+            MediaType.VIDEO -> runCatching {
+                val extractor = MediaExtractor()
+                try {
+                    extractor.setDataSource(context, uri, null)
+                    EmbeddedSourceMetadata(
+                        codec = (0 until extractor.trackCount)
+                            .asSequence()
+                            .map(extractor::getTrackFormat)
+                            .mapNotNull { format -> format.getString(MediaFormat.KEY_MIME) }
+                            .firstOrNull { mime -> mime.startsWith("video/") },
+                    )
+                } finally {
+                    extractor.release()
+                }
+            }.getOrDefault(EmbeddedSourceMetadata())
+        }
     }
 
     private fun Cursor.column(name: String): Int = getColumnIndexOrThrow(name)
@@ -353,6 +407,12 @@ class AndroidMediaStoreDataSource(
             BASE_PROJECTION
         }
 }
+
+private data class EmbeddedSourceMetadata(
+    val make: String? = null,
+    val model: String? = null,
+    val codec: String? = null,
+)
 
 internal data class MediaStoreQuerySpec(
     val selection: String,

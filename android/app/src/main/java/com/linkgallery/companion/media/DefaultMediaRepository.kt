@@ -232,6 +232,9 @@ class DefaultMediaRepository(
             relativePath = row.relativePath,
             mimeType = row.mimeType,
             ownerPackageName = row.ownerPackageName,
+            metadataMake = row.metadataMake,
+            metadataModel = row.metadataModel,
+            codec = row.codec,
         )
         return MediaRecord(
             id = tokenCodec.encodeId(row),
@@ -251,7 +254,7 @@ class DefaultMediaRepository(
             relativePath = row.relativePath,
             generation = row.generation,
             thumbnailUrl = "/api/v1/media/${tokenCodec.encodeId(row)}/thumbnail?size=256",
-            sourceDevice = source.sourceDevice,
+            sourceDevice = source.sourceDevice ?: Pocket3MediaClassifier.PHONE,
             sourceApplication = source.sourceApplication,
             isEditedExport = source.isEditedExport,
         )

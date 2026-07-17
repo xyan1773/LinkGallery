@@ -44,6 +44,32 @@ class DefaultMediaRepositoryTest {
     }
 
     @Test
+    fun `maps explicit Pocket 3 metadata and defaults ordinary media to Phone`() = runSuspend {
+        val source = FakeDataSource(
+            rows = listOf(
+                row(
+                    id = 2,
+                    fileName = "DJI_20260717_101530.jpg",
+                    mimeType = "image/jpeg",
+                    metadataMake = "DJI",
+                    metadataModel = "Osmo Pocket 3",
+                ),
+                row(
+                    id = 1,
+                    fileName = "IMG_0001.jpg",
+                    mimeType = "image/jpeg",
+                ),
+            ),
+        )
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+
+        val items = (repository.getPage(MediaQuery()) as MediaPageResult.Success).page.items
+
+        assertEquals(Pocket3MediaClassifier.POCKET_3, items.first { it.fileName.startsWith("DJI") }.sourceDevice)
+        assertEquals(Pocket3MediaClassifier.PHONE, items.first { it.fileName.startsWith("IMG") }.sourceDevice)
+    }
+
+    @Test
     fun `album cursor is scoped and cannot be reused for another album`() = runSuspend {
         val source = FakeDataSource(
             rows = listOf(
@@ -436,9 +462,15 @@ class DefaultMediaRepositoryTest {
             size: Long = 4_096,
             generation: Long? = null,
             albumId: String? = "camera",
+            fileName: String = "photo-$id.jpg",
+            mimeType: String? = null,
+            ownerPackageName: String? = null,
+            metadataMake: String? = null,
+            metadataModel: String? = null,
+            codec: String? = null,
         ) = MediaStoreRow(
             mediaStoreId = id,
-            fileName = "photo-$id.jpg",
+            fileName = fileName,
             type = type,
             fileSize = size,
             dateTakenEpochMillis = taken,
@@ -451,6 +483,11 @@ class DefaultMediaRepositoryTest {
             albumId = albumId,
             generationAdded = generation,
             generationModified = generation,
+            mimeType = mimeType,
+            ownerPackageName = ownerPackageName,
+            metadataMake = metadataMake,
+            metadataModel = metadataModel,
+            codec = codec,
         )
 
         fun decodeTestMediaId(item: MediaRecord): Long =

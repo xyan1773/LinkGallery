@@ -35,6 +35,7 @@ object Pocket3MediaClassifier {
         val album = normalize(albumName)
         val path = normalize(relativePath)
         val owner = normalize(ownerPackageName)
+        val make = normalize(metadataMake)
         val model = normalize(metadataModel)
         val mime = normalize(mimeType)
 
@@ -44,11 +45,12 @@ object Pocket3MediaClassifier {
         val mimoEvidence = listOf(album, path, owner).any {
             it.contains("dji mimo") || it.contains("dji_mimo") || it.contains("dji.mimo")
         }
-        val explicitPocket = listOf(album, path, model).any(pocketMarker::containsMatchIn)
+        val explicitPocketMetadata = pocketMarker.containsMatchIn(model) &&
+            (make.isEmpty() || make.contains("dji") || make.contains("osmo"))
         // Generic DJI names, manufacturer metadata, codecs, and Mimo directories do
         // not distinguish Pocket 3 from drones, Action cameras, or older Pockets.
         // Keep sourceDevice unknown unless the evidence names Pocket 3 explicitly.
-        val isPocket3 = explicitPocket
+        val isPocket3 = listOf(album, path).any(pocketMarker::containsMatchIn) || explicitPocketMetadata
 
         val explicitExport = listOf(name, album, path).any(exportMarker::containsMatchIn)
         return MediaSourceClassification(
@@ -61,6 +63,18 @@ object Pocket3MediaClassifier {
     private fun normalize(value: String?): String =
         value.orEmpty().trim().lowercase(Locale.ROOT).replace('\\', '/')
 
+    fun shouldInspectEmbeddedMetadata(
+        fileName: String,
+        albumName: String?,
+        relativePath: String?,
+        ownerPackageName: String?,
+    ): Boolean = listOf(fileName, albumName, relativePath, ownerPackageName)
+        .map(::normalize)
+        .any { value ->
+            value.contains("dji") || value.contains("osmo") || value.contains("pocket")
+        }
+
     const val POCKET_3 = "DJI Pocket 3"
     const val DJI_MIMO = "DJI Mimo"
+    const val PHONE = "Phone"
 }

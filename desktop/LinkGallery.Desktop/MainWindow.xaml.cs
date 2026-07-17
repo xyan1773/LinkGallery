@@ -127,7 +127,7 @@ public partial class MainWindow : Window, IDisposable
     private CancellationTokenSource? _queryCancellation;
     private CancellationTokenSource? _viewerPreviewCancellation;
     private CachingReadOnlyMediaSource? _source;
-    private IRemoteTransferStatusSink? _transferStatusSink;
+    private HttpReadOnlyMediaSource? _transferStatusSink;
     private readonly HashSet<Guid> _reportedTransferIds = [];
     private bool _transferStatusInFlight;
     private long _transferStatusSequence;
@@ -140,6 +140,8 @@ public partial class MainWindow : Window, IDisposable
     private PairedDevice? _activePairedDevice;
     private PairedDevice? _savedDeviceCard;
     private LinkGallery.Domain.Devices.Device? _connectedDevice;
+    private readonly Dictionary<string, string> _pairedDeviceNames =
+        new(StringComparer.Ordinal);
     private Uri? _activeApiAddress;
     private bool _isDeviceOnline;
     private bool _deviceRefreshInFlight;
@@ -440,6 +442,15 @@ public partial class MainWindow : Window, IDisposable
         InspectorResolutionLabelText.Text = L("Resolution", "分辨率");
         InspectorSourceLabelText.Text = L("Source", "来源");
         InspectorDeviceLabelText.Text = L("Via phone", "通过手机");
+        foreach (var item in SourceFilterComboBox.Items.OfType<ComboBoxItem>())
+        {
+            item.Content = (item.Tag as string) switch
+            {
+                "all" => L("All sources", "全部来源"),
+                "pocket3" => L("Pocket 3", "Pocket 3"),
+                _ => item.Content,
+            };
+        }
         ClosePromptTitleText.Text = L("Close LinkGallery?", "关闭 LinkGallery？");
         ClosePromptBodyText.Text = L(
             "Hide the app to the tray so transfers and cache tasks can continue, or quit LinkGallery completely.",
@@ -730,6 +741,11 @@ public partial class MainWindow : Window, IDisposable
             UpdateIndexedStatus();
             var pairedDevices = await _pairedDeviceStore.ListPairedDevicesAsync(CancellationToken.None);
             await NormalizeSavedDeviceNamesAsync(pairedDevices, CancellationToken.None);
+            _pairedDeviceNames.Clear();
+            foreach (var pairedDevice in pairedDevices)
+            {
+                _pairedDeviceNames[pairedDevice.DeviceId] = pairedDevice.DisplayName;
+            }
             _savedDeviceCard = pairedDevices
                 .OrderByDescending(static device => device.LastConnectedAt ?? device.CreatedAt)
                 .FirstOrDefault();
@@ -993,6 +1009,8 @@ public partial class MainWindow : Window, IDisposable
             await _pairedDeviceStore.UpsertPairedDeviceAsync(
                 authorization.PairedDevice,
                 cancellationToken);
+            _pairedDeviceNames[authorization.PairedDevice.DeviceId] =
+                authorization.PairedDevice.DisplayName;
             await _pairedDeviceStore.UpsertAddressAsync(
                 new DeviceAddress
                 {
@@ -1133,6 +1151,7 @@ public partial class MainWindow : Window, IDisposable
             Status = PairedDeviceStatus.Online,
         };
         await _pairedDeviceStore.UpsertPairedDeviceAsync(device, cancellationToken);
+        _pairedDeviceNames[device.DeviceId] = device.DisplayName;
         return new DeviceAuthorization(credential.AccessToken, device);
     }
 
@@ -2257,6 +2276,7 @@ public partial class MainWindow : Window, IDisposable
         device.DisplayName = displayName;
         device.IsDisplayNameCustom = true;
         _savedDeviceCard = device;
+        _pairedDeviceNames[device.DeviceId] = device.DisplayName;
         await _pairedDeviceStore.UpsertPairedDeviceAsync(device, CancellationToken.None);
         RenameDeviceModal.Visibility = Visibility.Collapsed;
         RefreshDevicePresentation();
@@ -2277,6 +2297,7 @@ public partial class MainWindow : Window, IDisposable
             _connectedDevice?.Model ?? device.Model,
             device.Manufacturer);
         _savedDeviceCard = device;
+        _pairedDeviceNames[device.DeviceId] = device.DisplayName;
         await _pairedDeviceStore.UpsertPairedDeviceAsync(device, CancellationToken.None);
         RenameDeviceModal.Visibility = Visibility.Collapsed;
         RefreshDevicePresentation();
@@ -3065,20 +3086,18 @@ public partial class MainWindow : Window, IDisposable
 
     private string GetMediaDeviceDisplayName(MediaItem item)
     {
-        if (_connectedDevice is { } connected &&
-            string.Equals(connected.Id, item.DeviceId, StringComparison.Ordinal))
+        var resolved = MediaDevicePresentation.Resolve(
+            item.DeviceId,
+            _connectedDevice?.Id,
+            _connectedDevice?.Name,
+            _pairedDeviceNames,
+            unknown: string.Empty);
+        if (!string.IsNullOrEmpty(resolved))
         {
-            return connected.Name;
+            return resolved;
         }
 
-        var paired = _activePairedDevice ?? _savedDeviceCard;
-        if (paired is not null &&
-            string.Equals(paired.DeviceId, item.DeviceId, StringComparison.Ordinal))
-        {
-            return paired.DisplayName;
-        }
-
-        return L("Saved device", "已保存设备");
+        return L("Unknown phone", "未知手机");
     }
 
     private static MediaRow? FindMediaRow(DependencyObject source)
@@ -3998,6 +4017,7 @@ public partial class MainWindow : Window, IDisposable
 
         await _accessTokenStore.DeleteAsync(device.CredentialKey, CancellationToken.None);
         await _pairedDeviceStore.RemovePairedDeviceAsync(device.DeviceId, CancellationToken.None);
+        _pairedDeviceNames.Remove(device.DeviceId);
         _savedDeviceCard = null;
         Disconnect(clearTimeline: true);
         ShowToast(remoteRevoked

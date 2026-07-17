@@ -8,6 +8,26 @@ import org.junit.Test
 
 class Pocket3MediaClassifierTest {
     @Test
+    fun candidateMetadataInspectionIsLimitedToDjiOsmoOrPocketEvidence() {
+        assertTrue(
+            Pocket3MediaClassifier.shouldInspectEmbeddedMetadata(
+                "DJI_0001.jpg",
+                null,
+                "DCIM/Camera",
+                null,
+            ),
+        )
+        assertFalse(
+            Pocket3MediaClassifier.shouldInspectEmbeddedMetadata(
+                "IMG_0001.jpg",
+                "Camera",
+                "DCIM/Camera",
+                "com.android.camera",
+            ),
+        )
+    }
+
+    @Test
     fun explicitPocket3AlbumClassifiesOriginalWithoutInventingAnEdit() {
         val result = Pocket3MediaClassifier.classify(
             fileName = "DJI_20260717124401_0001_D.JPG",
