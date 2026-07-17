@@ -108,5 +108,33 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Download Button Feedback
+  document.querySelectorAll('a[download]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      if (this.classList.contains('downloading')) return;
+      this.classList.add('downloading');
+      this.style.pointerEvents = 'none';
+      this.style.opacity = '0.8';
+      this.style.transform = 'scale(0.98)';
+      
+      const zhSpan = this.querySelector('.zh');
+      const enSpan = this.querySelector('.en');
+      const originalZh = zhSpan.textContent;
+      const originalEn = enSpan.textContent;
+      
+      zhSpan.textContent = '即将开始下载...';
+      enSpan.textContent = 'Starting download...';
+      
+      setTimeout(() => {
+        zhSpan.textContent = originalZh;
+        enSpan.textContent = originalEn;
+        this.classList.remove('downloading');
+        this.style.pointerEvents = '';
+        this.style.opacity = '';
+        this.style.transform = '';
+      }, 2500);
+    });
+  });
+
   console.log("LinkGallery official website loaded successfully.");
 });
