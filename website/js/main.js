@@ -136,5 +136,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // OS Detection for Download Buttons
+  const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+  const isMobile = /android|iPad|iPhone|iPod|mobile/i.test(userAgent);
+  
+  const winBtn = document.querySelector('a[href$=".exe"]');
+  const androidBtn = document.querySelector('a[href$=".apk"]');
+  
+  if (isMobile) {
+    if (winBtn) winBtn.style.display = 'none';
+  } else {
+    if (androidBtn) androidBtn.style.display = 'none';
+  }
+
   console.log("LinkGallery official website loaded successfully.");
 });

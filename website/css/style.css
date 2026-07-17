@@ -273,6 +273,7 @@ body.lang-en .zh { display: none !important; }
 }
 
 .mobile-iframe {
+  display: none; /* Hidden on desktop screens */
   width: 250px;
   height: 525px;
   border-radius: 36px;
@@ -440,6 +441,7 @@ body.lang-en .zh { display: none !important; }
     display: none;
   }
   .mobile-iframe {
+    display: block; /* Show on mobile screens */
     position: relative;
     right: auto;
     bottom: auto;
