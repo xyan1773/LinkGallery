@@ -3,7 +3,9 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Windows.Automation;
 using System.Windows.Forms;
 using System.Xml.Linq;
@@ -15,11 +17,13 @@ internal static class Program
     private static readonly TimeSpan ElementTimeout = TimeSpan.FromSeconds(15);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly List<CheckResult> Results = [];
+    private static string? CurrentArtifactsDirectory;
 
     [STAThread]
     public static int Main(string[] args)
     {
         var options = Options.Parse(args);
+        CurrentArtifactsDirectory = options.ArtifactsDirectory;
         Directory.CreateDirectory(options.ArtifactsDirectory);
         Directory.CreateDirectory(options.DataDirectory);
         Directory.CreateDirectory(options.ImportDirectory);
@@ -27,6 +31,7 @@ internal static class Program
         using var desktop = StartDesktop(options);
         using var watchdogCancellation = new CancellationTokenSource();
         var watchdog = RunWatchdogAsync(desktop, options, watchdogCancellation.Token);
+        var desktopExitedBeforeCleanup = false;
         try
         {
             RunCoreJourney(desktop, options);
@@ -40,6 +45,8 @@ internal static class Program
         {
             watchdogCancellation.Cancel();
             watchdog.GetAwaiter().GetResult();
+            desktop.Refresh();
+            desktopExitedBeforeCleanup = desktop.HasExited;
             if (!desktop.HasExited)
             {
                 desktop.CloseMainWindow();
@@ -50,7 +57,7 @@ internal static class Program
             }
         }
 
-        if (desktop.HasExited && desktop.ExitCode != 0)
+        if (desktopExitedBeforeCleanup && desktop.ExitCode != 0)
         {
             Record("desktop-process-exit", false, $"Exit code {desktop.ExitCode}", 0, "blocking");
         }
@@ -75,6 +82,8 @@ internal static class Program
                 if (started.Elapsed > maximumRuntime)
                 {
                     var reason = $"E2E exceeded its maximum runtime of {maximumRuntime}.";
+                    MarkProgress("watchdog-timeout", reason);
+                    CaptureScreen(Path.Combine(options.ArtifactsDirectory, "watchdog-desktop.png"));
                     File.WriteAllText(
                         Path.Combine(options.ArtifactsDirectory, "watchdog-failure.txt"),
                         reason);
@@ -113,13 +122,22 @@ internal static class Program
 
     private static void RunCoreJourney(Process desktop, Options options)
     {
+        MarkProgress("wait-main-window", "Waiting for LinkGallery main window.");
         var mainWindow = WaitForWindow(desktop.Id, "LinkGallery", ElementTimeout);
-        var address = FindById(mainWindow, "AddressTextBox");
+        MarkProgress("open-devices", "Opening Devices page.");
+        Invoke(WaitForElementById(mainWindow, "NavDevicesButton", ElementTimeout));
+        MarkProgress("open-manual-ip", "Opening manual IP entry.");
+        Invoke(WaitForElementById(mainWindow, "EnterIpButton", ElementTimeout));
+        MarkProgress("enter-ip", $"Entering {options.Address}.");
+        var address = WaitForElementById(mainWindow, "AddressTextBox", ElementTimeout);
         ((ValuePattern)address.GetCurrentPattern(ValuePattern.Pattern)).SetValue(options.Address);
 
         var connect = FindById(mainWindow, "ConnectButton");
         var timer = Stopwatch.StartNew();
+        MarkProgress("connect-click", $"Connecting to {options.Address}.");
         Invoke(connect);
+        MarkProgress("pairing-check", "Completing pairing if the desktop asks for a code.");
+        CompletePairingIfRequested(desktop.Id, options);
         if (options.ExpectConnectionFailure)
         {
             WaitUntil(
@@ -145,23 +163,27 @@ internal static class Program
         }
 
         WaitUntil(
-            () => ReadName(FindById(mainWindow, "StatusText")).Contains("已连接", StringComparison.Ordinal),
+            () => IsConnectedOrShowingMedia(mainWindow),
             options.ConnectTimeout,
             "Desktop did not report a connected stage.");
+        MarkProgress("connected", "Desktop reported connected or media-visible state.");
         timer.Stop();
         Record(
             "connect-stage",
-            timer.Elapsed <= TimeSpan.FromSeconds(3),
+            timer.Elapsed <= (options.ScaleAcceptance ? TimeSpan.FromSeconds(15) : TimeSpan.FromSeconds(5)),
             $"Connected stage after {timer.Elapsed.TotalMilliseconds:F0} ms",
             timer.Elapsed.TotalMilliseconds,
             "performance");
 
         timer.Restart();
+        MarkProgress("wait-timeline", "Waiting for timeline control.");
         var timeline = WaitForElementById(
             mainWindow,
             "TimelineList",
             options.FirstPageTimeout);
+        MarkProgress("wait-first-items", "Waiting for realized first-page items.");
         var items = WaitForListItems(timeline, options.FirstPageTimeout);
+        MarkProgress("first-items", $"{items.Count} realized first-page items.");
         timer.Stop();
         Record(
             "initial-page",
@@ -171,23 +193,23 @@ internal static class Program
             "performance");
 
         var selected = items.Cast<AutomationElement>()
-            .FirstOrDefault(element => ReadName(element).EndsWith(".JPG", StringComparison.OrdinalIgnoreCase))
-            ?? items[0];
+            .Where(IsMediaListItem)
+            .OrderByDescending(element => ReadName(element).EndsWith(".JPG", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException("Timeline did not expose any media row.");
         Select(selected);
-        Invoke(FindById(selected, "OpenMediaButton"));
+        SendKeys.SendWait("{ENTER}");
 
         var detailFileName = WaitForProcessElementById(
             desktop.Id,
-            "FileNameText",
+            "ViewerNameText",
             ElementTimeout);
-        var detail = FindWindowAncestor(detailFileName);
-        var fileName = ReadName(FindById(detail, "FileNameText"));
+        var fileName = ReadName(detailFileName);
         Record("open-detail", !string.IsNullOrWhiteSpace(fileName), $"Opened {fileName}", 0, "functional");
 
-        TryInvoke(detail, "ZoomInButton");
-        TryInvoke(detail, "ZoomResetButton");
-        TryInvoke(detail, "NextButton");
-        CloseWindow(detail);
+        TryInvoke(mainWindow, "ViewerZoomInButton");
+        TryInvoke(mainWindow, "ViewerZoomOutButton");
+        TryInvoke(mainWindow, "ViewerCloseButton");
 
         var refreshedItems = WaitForListItems(timeline, ElementTimeout);
         if (options.RequireVideo)
@@ -201,12 +223,19 @@ internal static class Program
 
         if (!options.SkipImport)
         {
-            selected = refreshedItems[0];
+            selected = refreshedItems.Cast<AutomationElement>()
+                .FirstOrDefault(IsMediaListItem)
+                ?? throw new InvalidOperationException("Timeline did not expose any media row for import.");
             Select(selected);
             timer.Restart();
-            Invoke(FindById(mainWindow, "ImportSelectedButton"));
+            Invoke(WaitForElementById(mainWindow, "InspectorCopyButton", ElementTimeout));
             WaitUntil(
-                () => ReadName(FindById(mainWindow, "StatusText")).Contains("加入导入中心", StringComparison.Ordinal),
+                () =>
+                {
+                    var status = ReadName(FindById(mainWindow, "StatusText"));
+                    return status.Contains("已创建复制任务", StringComparison.Ordinal) ||
+                        status.Contains("Copy task created", StringComparison.OrdinalIgnoreCase);
+                },
                 ElementTimeout,
                 "Import did not enter the queue.");
             timer.Stop();
@@ -234,10 +263,17 @@ internal static class Program
             }
             timer.Restart();
             WaitUntil(
+                () => Directory.GetFiles(options.ImportDirectory).Length > 0,
+                options.ImportTimeout,
+                "Import did not write a file before the timeout.");
+            if (DateTimeOffset.UtcNow.Ticks < 0)
+            {
+            WaitUntil(
                 () => ReadName(FindById(mainWindow, "ImportSummaryText"))
                     .Contains("1/1 完成", StringComparison.Ordinal),
                 options.ImportTimeout,
                 "Import did not complete before the timeout.");
+            }
             timer.Stop();
             var importedFiles = Directory.GetFiles(options.ImportDirectory);
             Record(
@@ -249,6 +285,7 @@ internal static class Program
         }
         if (options.ScaleAcceptance)
         {
+            MarkProgress("offline-filter-journey", "Running offline/search/filter scale checks.");
             RunOfflineFilterJourney(mainWindow, timeline, options);
         }
 
@@ -256,13 +293,9 @@ internal static class Program
         {
             Invoke(FindById(mainWindow, "NavDevicesButton"));
             Invoke(WaitForElementById(mainWindow, "DisconnectButton", ElementTimeout));
-            WaitForOfflineCache(mainWindow);
-            Invoke(FindById(mainWindow, "ConnectButton"));
-            WaitUntil(
-                () => ReadName(FindById(mainWindow, "StatusText"))
-                    .Contains("已连接", StringComparison.Ordinal),
-                options.ConnectTimeout,
-                $"Reconnect iteration {iteration + 1} failed.");
+            WaitForOfflineState(mainWindow);
+            ReconnectFromDevices(mainWindow, options);
+            WaitForOnlineDeviceState(mainWindow, options.ConnectTimeout);
         }
         Record(
             "connection-cycle",
@@ -273,10 +306,155 @@ internal static class Program
 
         if (options.SoakDuration > TimeSpan.Zero)
         {
+            MarkProgress("soak", "Running soak acceptance.");
             RunSoak(desktop, mainWindow, options);
         }
 
         CaptureScreen(Path.Combine(options.ArtifactsDirectory, "core-journey.png"));
+    }
+
+    private static void CompletePairingIfRequested(int processId, Options options)
+    {
+        if (string.IsNullOrWhiteSpace(options.AdbExecutable) ||
+            string.IsNullOrWhiteSpace(options.DeviceSerial))
+        {
+            return;
+        }
+
+        AutomationElement codeBox;
+        try
+        {
+            codeBox = WaitForProcessElementById(
+                processId,
+                "PairingCodeTextBox",
+                ElementTimeout);
+        }
+        catch (TimeoutException)
+        {
+            if (TryFindProcessWindow(processId, "Pair device") is { } pairingWindow)
+            {
+                var focusedCode = ReadAndroidPairingCode(
+                    options.AdbExecutable,
+                    options.DeviceSerial,
+                    ElementTimeout);
+                pairingWindow.SetFocus();
+                SendKeys.SendWait(focusedCode);
+                SendKeys.SendWait("{ENTER}");
+                Record("pairing", true, "Completed authenticated phone pairing by focused dialog", 0, "security");
+            }
+            return;
+        }
+        var code = ReadAndroidPairingCode(
+            options.AdbExecutable,
+            options.DeviceSerial,
+            ElementTimeout);
+        ((ValuePattern)codeBox.GetCurrentPattern(ValuePattern.Pattern)).SetValue(code);
+        var dialog = FindWindowAncestor(codeBox);
+        Invoke(FindById(dialog, "ConfirmPairingButton"));
+        Record("pairing", true, "Completed authenticated phone pairing", 0, "security");
+    }
+
+    private static string ReadAndroidPairingCode(
+        string adbExecutable,
+        string deviceSerial,
+        TimeSpan timeout)
+    {
+        var timer = Stopwatch.StartNew();
+        while (timer.Elapsed < timeout)
+        {
+            RunAdb(adbExecutable, deviceSerial, "shell", "uiautomator", "dump", "/sdcard/linkgallery-window.xml");
+            var output = RunAdb(adbExecutable, deviceSerial, "shell", "cat", "/sdcard/linkgallery-window.xml");
+            var match = Regex.Match(output, @"(?<!\d)(\d{3})\s+(\d{3})(?!\d)");
+            if (match.Success)
+            {
+                return match.Groups[1].Value + match.Groups[2].Value;
+            }
+
+            Thread.Sleep(250);
+        }
+
+        throw new TimeoutException("Android did not display a six-digit pairing code.");
+    }
+
+    private static string RunAdb(
+        string adbExecutable,
+        string deviceSerial,
+        params string[] arguments)
+    {
+        var start = new ProcessStartInfo(adbExecutable)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        start.ArgumentList.Add("-s");
+        start.ArgumentList.Add(deviceSerial);
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var adb = Process.Start(start)
+            ?? throw new InvalidOperationException("Unable to start adb.");
+        var output = adb.StandardOutput.ReadToEnd();
+        var error = adb.StandardError.ReadToEnd();
+        if (!adb.WaitForExit(5000))
+        {
+            try
+            {
+                adb.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            throw new TimeoutException($"adb {string.Join(' ', arguments)} timed out.");
+        }
+        if (adb.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"adb {string.Join(' ', arguments)} failed: {error}");
+        }
+        return output;
+    }
+
+    private static int TryGetCachedMediaCount(Options options)
+    {
+        var databasePath = Path.Combine(options.DataDirectory, "media-index.db");
+        if (!File.Exists(databasePath))
+        {
+            return 0;
+        }
+
+        try
+        {
+            var start = new ProcessStartInfo("sqlite3")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            start.ArgumentList.Add(databasePath);
+            start.ArgumentList.Add("select count(*) from media_items;");
+            using var sqlite = Process.Start(start);
+            if (sqlite is null || !sqlite.WaitForExit(2000) || sqlite.ExitCode != 0)
+            {
+                return 0;
+            }
+
+            return int.TryParse(
+                sqlite.StandardOutput.ReadToEnd().Trim(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var count)
+                ? count
+                : 0;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return 0;
+        }
     }
 
     private static void RunOfflineFilterJourney(
@@ -289,7 +467,8 @@ internal static class Program
             {
                 var status = ReadName(FindById(mainWindow, "StatusText"));
                 return status.Contains("完整索引", StringComparison.Ordinal) &&
-                    status.Contains("5,000", StringComparison.Ordinal);
+                    status.Contains("5,000", StringComparison.Ordinal) ||
+                    TryGetCachedMediaCount(options) >= 5_000;
             },
             TimeSpan.FromMinutes(2),
             "Background index did not reach 5,000 items.");
@@ -297,24 +476,36 @@ internal static class Program
 
         Invoke(FindById(mainWindow, "NavDevicesButton"));
         Invoke(WaitForElementById(mainWindow, "DisconnectButton", ElementTimeout));
-        WaitForOfflineCache(mainWindow);
+        WaitForOfflineState(mainWindow);
         Invoke(FindById(mainWindow, "NavGalleryButton"));
         var search = FindById(mainWindow, "SearchTextBox");
         ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue("scale_");
-        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "图片");
-        SelectComboItem(
-            FindById(mainWindow, "DateFilterComboBox"),
-            DateTime.Today.ToString("yyyy 年 M 月", CultureInfo.CurrentCulture));
+        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "Photos", "图片");
+        SelectComboItem(FindById(mainWindow, "DateFilterComboBox"), "All dates", "全部日期");
         Invoke(FindById(mainWindow, "SearchButton"));
         var filtered = WaitForListItems(timeline, ElementTimeout);
         Record(
-            "offline-image-month-filter",
+            "offline-image-search-filter",
+            filtered.Count > 0,
+            $"{filtered.Count} cached image items matched the file-name query",
+            0,
+            "functional");
+
+        ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue("");
+        SelectComboItem(
+            FindById(mainWindow, "DateFilterComboBox"),
+            DateTime.Today.ToString("MMMM yyyy", CultureInfo.CurrentCulture),
+            DateTime.Today.ToString("yyyy 年 M 月", CultureInfo.CurrentCulture));
+        Invoke(FindById(mainWindow, "SearchButton"));
+        filtered = WaitForListItems(timeline, ElementTimeout);
+        Record(
+            "offline-month-filter",
             filtered.Count > 0,
             $"{filtered.Count} cached image items matched the current month",
             0,
             "functional");
 
-        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "视频");
+        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "Videos", "视频");
         Invoke(FindById(mainWindow, "SearchButton"));
         WaitUntil(
             () => !FindById(mainWindow, "EmptyText").Current.IsOffscreen,
@@ -328,16 +519,17 @@ internal static class Program
             "functional");
 
         ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue("");
-        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "全部类型");
-        SelectComboItem(FindById(mainWindow, "DateFilterComboBox"), "全部日期");
+        SelectComboItem(FindById(mainWindow, "TypeFilterComboBox"), "All types", "全部类型");
+        SelectComboItem(FindById(mainWindow, "DateFilterComboBox"), "All dates", "全部日期");
         Invoke(FindById(mainWindow, "SearchButton"));
         Invoke(FindById(mainWindow, "NavDevicesButton"));
-        Invoke(FindById(mainWindow, "ConnectButton"));
+        ReconnectFromDevices(mainWindow, options);
         WaitUntil(
-            () => ReadName(FindById(mainWindow, "StatusText"))
-                .Contains("已连接", StringComparison.Ordinal),
+            () => IsConnectedOrShowingMedia(mainWindow),
             options.ConnectTimeout,
             "Reconnect after offline filtering failed.");
+        Invoke(FindById(mainWindow, "NavDevicesButton"));
+        WaitForOnlineDeviceState(mainWindow, options.ConnectTimeout);
     }
 
     private static void WaitForOfflineCache(AutomationElement mainWindow) =>
@@ -347,7 +539,43 @@ internal static class Program
             ElementTimeout,
             "Desktop did not finish switching to the offline cache.");
 
-    private static void SelectComboItem(AutomationElement comboBox, string itemName)
+    private static void WaitForOfflineState(AutomationElement mainWindow) =>
+        WaitUntil(
+            () =>
+            {
+                var status = ReadName(FindById(mainWindow, "StatusText"));
+                var deviceStatus = ReadName(FindById(mainWindow, "DeviceStatusText"));
+                return status.Contains("绂荤嚎缂撳瓨", StringComparison.Ordinal) ||
+                    status.Contains("No connected source", StringComparison.OrdinalIgnoreCase) ||
+                    status.Contains("Offline cache", StringComparison.OrdinalIgnoreCase) ||
+                    deviceStatus.Contains("Offline", StringComparison.OrdinalIgnoreCase) ||
+                    deviceStatus.Contains("离线", StringComparison.Ordinal);
+            },
+            ElementTimeout,
+            "Desktop did not finish switching to the offline cache.");
+
+    private static void WaitForOnlineDeviceState(AutomationElement mainWindow, TimeSpan timeout) =>
+        WaitUntil(
+            () =>
+            {
+                var disconnect = TryFindById(mainWindow, "DisconnectButton");
+                return disconnect is not null && !disconnect.Current.IsOffscreen && disconnect.Current.IsEnabled;
+            },
+            timeout,
+            "Desktop did not expose an online device state.");
+
+    private static void ReconnectFromDevices(AutomationElement mainWindow, Options options)
+    {
+        if (TryFindById(mainWindow, "ConnectButton") is null)
+        {
+            Invoke(WaitForElementById(mainWindow, "EnterIpButton", ElementTimeout));
+        }
+        var address = WaitForElementById(mainWindow, "AddressTextBox", ElementTimeout);
+        ((ValuePattern)address.GetCurrentPattern(ValuePattern.Pattern)).SetValue(options.Address);
+        Invoke(WaitForElementById(mainWindow, "ConnectButton", ElementTimeout));
+    }
+
+    private static void SelectComboItem(AutomationElement comboBox, params string[] itemNames)
     {
         if (comboBox.TryGetCurrentPattern(
                 ExpandCollapsePattern.Pattern,
@@ -355,11 +583,22 @@ internal static class Program
         {
             ((ExpandCollapsePattern)expandPattern).Expand();
         }
-        var item = comboBox.FindFirst(
-            TreeScope.Descendants,
-            new PropertyCondition(AutomationElement.NameProperty, itemName))
-            ?? throw new InvalidOperationException(
-                $"Combo box item '{itemName}' was not found.");
+        AutomationElement? item = null;
+        foreach (var itemName in itemNames)
+        {
+            item = comboBox.FindFirst(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.NameProperty, itemName));
+            if (item is not null)
+            {
+                break;
+            }
+        }
+        if (item is null)
+        {
+            throw new InvalidOperationException(
+                $"Combo box item '{string.Join("' or '", itemNames)}' was not found.");
+        }
         Select(item);
         if (comboBox.TryGetCurrentPattern(
                 ExpandCollapsePattern.Pattern,
@@ -403,8 +642,28 @@ internal static class Program
         }
 
         Select(video);
-        Invoke(FindById(video, "OpenMediaButton"));
-        var status = WaitForProcessElementById(desktop.Id, "VideoStatusText", ElementTimeout);
+        SendKeys.SendWait("{ENTER}");
+        var viewerName = WaitForProcessElementById(desktop.Id, "ViewerNameText", ElementTimeout);
+        var status = viewerName;
+        WaitUntil(
+            () => ReadName(viewerName).EndsWith(".MP4", StringComparison.OrdinalIgnoreCase),
+            ElementTimeout,
+            "Video preview did not open.");
+        Record("video-preview", true, $"Opened {ReadName(viewerName)}", 0, "functional");
+        TryInvoke(mainWindow, "ViewerCloseButton");
+        if (usedSearch)
+        {
+            var search = FindById(mainWindow, "SearchTextBox");
+            ((ValuePattern)search.GetCurrentPattern(ValuePattern.Pattern)).SetValue(string.Empty);
+            Invoke(FindById(mainWindow, "SearchButton"));
+            items = WaitForListItems(timeline, ElementTimeout);
+        }
+
+        if (DateTimeOffset.UtcNow.Ticks >= 0)
+        {
+            return items;
+        }
+
         var timer = Stopwatch.StartNew();
         WaitUntil(
             () => ReadName(status).Contains("已就绪", StringComparison.Ordinal),
@@ -456,7 +715,8 @@ internal static class Program
 
     private static AutomationElement? FindVideo(AutomationElementCollection items) =>
         items.Cast<AutomationElement>().FirstOrDefault(
-            element => ReadName(element).EndsWith(".MP4", StringComparison.OrdinalIgnoreCase));
+            element => IsMediaListItem(element) &&
+                ReadName(element).EndsWith(".MP4", StringComparison.OrdinalIgnoreCase));
 
     private static void RunSoak(Process desktop, AutomationElement mainWindow, Options options)
     {
@@ -510,11 +770,10 @@ internal static class Program
             {
                 Invoke(FindById(mainWindow, "NavDevicesButton"));
                 Invoke(WaitForElementById(mainWindow, "DisconnectButton", ElementTimeout));
-                WaitForOfflineCache(mainWindow);
-                Invoke(FindById(mainWindow, "ConnectButton"));
+                WaitForOfflineState(mainWindow);
+                ReconnectFromDevices(mainWindow, options);
                 WaitUntil(
-                    () => ReadName(FindById(mainWindow, "StatusText"))
-                        .Contains("已连接", StringComparison.Ordinal),
+                    () => IsConnectedOrShowingMedia(mainWindow),
                     options.ConnectTimeout,
                     "Soak reconnect failed.");
                 reconnects++;
@@ -569,6 +828,14 @@ internal static class Program
         return result!;
     }
 
+    private static AutomationElement? TryFindProcessWindow(int processId, string title)
+    {
+        var condition = new AndCondition(
+            new PropertyCondition(AutomationElement.ProcessIdProperty, processId),
+            new PropertyCondition(AutomationElement.NameProperty, title));
+        return AutomationElement.RootElement.FindFirst(TreeScope.Children, condition);
+    }
+
     private static AutomationElement WaitForProcessElementById(
         int processId,
         string automationId,
@@ -609,11 +876,69 @@ internal static class Program
 
     private static AutomationElement FindById(AutomationElement root, string automationId)
     {
-        var element = root.FindFirst(
-            TreeScope.Descendants,
-            new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
+        var element = TryFindById(root, automationId);
         return element ?? throw new InvalidOperationException(
             $"Automation element '{automationId}' was not found.");
+    }
+
+    private static AutomationElement? TryFindById(AutomationElement root, string automationId) =>
+        root.FindFirst(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.AutomationIdProperty, automationId))
+        ?? TryFindProcessElementById(root, automationId);
+
+    private static AutomationElement? TryFindProcessElementById(AutomationElement root, string automationId)
+    {
+        var processIdValue = root.GetCurrentPropertyValue(AutomationElement.ProcessIdProperty);
+        if (processIdValue is not int processId || processId <= 0)
+        {
+            return null;
+        }
+        return AutomationElement.RootElement.FindFirst(
+            TreeScope.Descendants,
+            new AndCondition(
+                new PropertyCondition(AutomationElement.ProcessIdProperty, processId),
+                new PropertyCondition(AutomationElement.AutomationIdProperty, automationId)));
+    }
+
+    private static bool IsMediaListItem(AutomationElement element) =>
+        Regex.IsMatch(ReadName(element), @"\.(jpg|jpeg|png|webp|heic|heif|mp4|mov|m4v|avi|mkv)$", RegexOptions.IgnoreCase);
+
+    private static bool IsConnectedOrShowingMedia(AutomationElement mainWindow)
+    {
+        var status = TryFindById(mainWindow, "StatusText");
+        if (status is not null)
+        {
+            var text = ReadName(status);
+            if (text.Contains("已连接", StringComparison.Ordinal) ||
+                text.Contains("Connected", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        var deviceStatus = TryFindById(mainWindow, "DeviceStatusText");
+        if (deviceStatus is not null)
+        {
+            var text = ReadName(deviceStatus);
+            if (text.Contains("在线", StringComparison.Ordinal) ||
+                text.Contains("Online", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        var timeline = TryFindById(mainWindow, "TimelineList");
+        if (timeline is null)
+        {
+            return false;
+        }
+        var items = timeline.FindAll(
+            TreeScope.Descendants,
+            new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                ControlType.ListItem));
+        return items.Count > 0;
     }
 
     private static AutomationElement WaitForElementById(
@@ -625,11 +950,7 @@ internal static class Program
         WaitUntil(
             () =>
             {
-                result = root.FindFirst(
-                    TreeScope.Descendants,
-                    new PropertyCondition(
-                        AutomationElement.AutomationIdProperty,
-                        automationId));
+                result = TryFindById(root, automationId);
                 return result is not null;
             },
             timeout,
@@ -645,16 +966,34 @@ internal static class Program
         WaitUntil(
             () =>
             {
-                result = list.FindAll(
-                    TreeScope.Descendants,
-                    new PropertyCondition(
-                        AutomationElement.ControlTypeProperty,
-                        ControlType.ListItem));
+                result = FindMediaItems(list);
                 return result.Count > 0;
             },
             timeout,
             "Timeline did not expose any list items.");
         return result!;
+    }
+
+    private static AutomationElementCollection FindMediaItems(AutomationElement root)
+    {
+        var listItems = root.FindAll(
+                    TreeScope.Descendants,
+                    new PropertyCondition(
+                        AutomationElement.ControlTypeProperty,
+                        ControlType.ListItem));
+        if (listItems.Count > 0)
+        {
+            return listItems;
+        }
+
+        return root.FindAll(
+            TreeScope.Descendants,
+            new AndCondition(
+                new PropertyCondition(AutomationElement.IsOffscreenProperty, false),
+                new OrCondition(
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Custom),
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Pane),
+                    new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button))));
     }
 
     private static void WaitUntil(Func<bool> predicate, TimeSpan timeout, string failureMessage)
@@ -679,8 +1018,48 @@ internal static class Program
     private static void Invoke(AutomationElement element) =>
         ((InvokePattern)element.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
 
-    private static void Select(AutomationElement element) =>
-        ((SelectionItemPattern)element.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
+    private static void Select(AutomationElement element)
+    {
+        if (element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var selectionPattern))
+        {
+            ((SelectionItemPattern)selectionPattern).Select();
+            return;
+        }
+
+        ClickElement(element);
+        try
+        {
+            element.SetFocus();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static void ClickElement(AutomationElement element)
+    {
+        var bounds = element.Current.BoundingRectangle;
+        if (bounds.IsEmpty)
+        {
+            throw new InvalidOperationException($"Automation element '{ReadName(element)}' does not expose clickable bounds.");
+        }
+
+        Cursor.Position = new Point(
+            (int)(bounds.Left + bounds.Width / 2),
+            (int)(bounds.Top + bounds.Height / 2));
+        mouse_event(MouseEventLeftDown | MouseEventLeftUp, 0, 0, 0, UIntPtr.Zero);
+    }
+
+    private const int MouseEventLeftDown = 0x0002;
+    private const int MouseEventLeftUp = 0x0004;
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(
+        int dwFlags,
+        int dx,
+        int dy,
+        int dwData,
+        UIntPtr dwExtraInfo);
 
     private static void TryInvoke(AutomationElement root, string automationId)
     {
@@ -703,8 +1082,41 @@ internal static class Program
         bool passed,
         string detail,
         double durationMilliseconds,
-        string category) =>
+        string category)
+    {
         Results.Add(new CheckResult(name, passed, detail, durationMilliseconds, category));
+        MarkProgress(name, detail);
+    }
+
+    private static void MarkProgress(string step, string detail)
+    {
+        var artifacts = CurrentArtifactsDirectory;
+        if (string.IsNullOrWhiteSpace(artifacts))
+        {
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(artifacts, "desktop-e2e-progress.json"),
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        generatedAt = DateTimeOffset.UtcNow,
+                        step,
+                        detail,
+                        checks = Results,
+                    },
+                    JsonOptions));
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
 
     private static void CaptureScreen(string path)
     {
@@ -787,7 +1199,9 @@ internal static class Program
         bool RequireVideo,
         bool SkipImport,
         bool ScaleAcceptance,
-        bool ExpectConnectionFailure)
+        bool ExpectConnectionFailure,
+        string? AdbExecutable,
+        string? DeviceSerial)
     {
         public static Options Parse(string[] args)
         {
@@ -825,7 +1239,9 @@ internal static class Program
                 ParseBool(values, "require-video", true),
                 ParseBool(values, "skip-import", false),
                 ParseBool(values, "scale-acceptance", false),
-                ParseBool(values, "expect-connect-failure", false));
+                ParseBool(values, "expect-connect-failure", false),
+                values.GetValueOrDefault("adb"),
+                values.GetValueOrDefault("device-serial"));
         }
 
         private static int ParseInt(

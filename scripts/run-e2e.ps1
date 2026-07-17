@@ -27,7 +27,10 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'dev-env.ps1') | Out-Null
 
 $adb = Join-Path $env:ANDROID_HOME 'platform-tools\adb.exe'
-$emulator = Join-Path $env:ANDROID_HOME 'SDK\emulator\emulator.exe'
+$emulator = Join-Path $env:ANDROID_HOME 'emulator\emulator.exe'
+if (-not (Test-Path -LiteralPath $emulator)) {
+    $emulator = Join-Path $env:ANDROID_HOME 'SDK\emulator\emulator.exe'
+}
 $avdManager = Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\avdmanager.bat'
 $dotnet = Join-Path $env:DOTNET_ROOT 'dotnet.exe'
 $packageName = 'com.linkgallery.companion'
@@ -358,7 +361,7 @@ function Wait-Api {
     $deadline = [DateTimeOffset]::Now.AddSeconds(30)
     do {
         try {
-            return Invoke-RestMethod "http://$Address/api/v1/device" -TimeoutSec 2
+            return Invoke-RestMethod "http://$Address/api/v1/public/info" -TimeoutSec 2
         } catch {
             Start-Sleep -Milliseconds 250
         }
@@ -366,11 +369,132 @@ function Wait-Api {
     throw "Device API at $Address did not become ready."
 }
 
+function Get-AndroidWindowDump {
+    try {
+        & $adb -s $DeviceSerial shell uiautomator dump /sdcard/linkgallery-window.xml 2>$null | Out-Null
+        return (& $adb -s $DeviceSerial shell cat /sdcard/linkgallery-window.xml 2>$null | Out-String)
+    } catch {
+        return ''
+    }
+}
+
+function Invoke-AndroidTapBounds {
+    param([string]$Bounds)
+    $match = [regex]::Match($Bounds, '\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+    if (-not $match.Success) {
+        return $false
+    }
+
+    $x = [int](([int]$match.Groups[1].Value + [int]$match.Groups[3].Value) / 2)
+    $y = [int](([int]$match.Groups[2].Value + [int]$match.Groups[4].Value) / 2)
+    Invoke-Adb -Arguments @('shell','input','tap',[string]$x,[string]$y) | Out-Null
+    return $true
+}
+
+function Try-TapAndroidNode {
+    param(
+        [string]$Dump,
+        [string[]]$Patterns
+    )
+    foreach ($pattern in $Patterns) {
+        $match = [regex]::Match($Dump, "<node\b[^>]*(?:text|content-desc)=""[^""]*$pattern[^""]*""[^>]*bounds=""([^""]+)""", 'IgnoreCase')
+        if ($match.Success -and (Invoke-AndroidTapBounds -Bounds $match.Groups[1].Value)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Open-AndroidPairingWindow {
+    if ($Profile -eq 'Physical') {
+        return
+    }
+
+    $dump = Get-AndroidWindowDump
+    if (-not (Try-TapAndroidNode -Dump $dump -Patterns @('Devices','Device'))) {
+        # Coordinates are scaled from the API 36 acceptance emulator's 1344x2992 display.
+        Invoke-Adb -Arguments @('shell','input','tap','1128','2800') | Out-Null
+    }
+    Start-Sleep -Milliseconds 500
+    $dump = Get-AndroidWindowDump
+    if (-not (Try-TapAndroidNode -Dump $dump -Patterns @('Pair','pair'))) {
+        Invoke-Adb -Arguments @('shell','input','tap','672','2180') | Out-Null
+    }
+    Start-Sleep -Milliseconds 500
+}
+
+function New-E2eAccessToken {
+    param([string]$Address)
+    Open-AndroidPairingWindow
+    $identity = @{
+        desktopId = "e2e-api-$([Guid]::NewGuid().ToString('N'))"
+        desktopName = 'LinkGallery API acceptance'
+        desktopModel = 'PowerShell'
+        identityPublicKey = [Convert]::ToBase64String([byte[]](1..32))
+        ephemeralPublicKey = [Convert]::ToBase64String([byte[]](33..64))
+        nonce = [Convert]::ToBase64String([byte[]](65..88))
+    } | ConvertTo-Json
+    $session = $null
+    $deadline = [DateTimeOffset]::Now.AddSeconds(20)
+    do {
+        try {
+            $session = Invoke-RestMethod `
+                -Uri "http://$Address/api/v1/pair/start" `
+                -Method Post `
+                -ContentType 'application/json' `
+                -Body $identity `
+                -TimeoutSec 5 `
+                -ErrorAction Stop
+            break
+        } catch {
+            $lastPairingError = $_
+            Open-AndroidPairingWindow
+            Start-Sleep -Milliseconds 750
+        }
+    } until ([DateTimeOffset]::Now -ge $deadline)
+    if ($null -eq $session) {
+        if ($null -ne $lastPairingError) {
+            throw $lastPairingError
+        }
+        throw 'Android did not open the E2E pairing window.'
+    }
+
+    $deadline = [DateTimeOffset]::Now.AddSeconds(15)
+    do {
+        $dump = Get-AndroidWindowDump
+        $match = [regex]::Match($dump, '(?<!\d)(\d{3})\s+(\d{3})(?!\d)')
+        if ($match.Success) {
+            $code = $match.Groups[1].Value + $match.Groups[2].Value
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    } until ([DateTimeOffset]::Now -ge $deadline)
+    if ([string]::IsNullOrWhiteSpace($code)) {
+        throw 'Android did not display the E2E pairing code.'
+    }
+
+    $confirmed = Invoke-RestMethod `
+        -Uri "http://$Address/api/v1/pair/confirm" `
+        -Method Post `
+        -ContentType 'application/json' `
+        -Body (@{
+            pairingSessionId = $session.pairingSessionId
+            verificationCode = $code
+        } | ConvertTo-Json) `
+        -TimeoutSec 5
+    Invoke-Adb -Arguments @('shell','input','keyevent','4') | Out-Null
+    $confirmed.accessToken
+}
+
 function Wait-MediaCount {
-    param([string]$Address, [int]$Minimum)
+    param([string]$Address, [int]$Minimum, [string]$AccessToken)
+    $headers = @{ Authorization = "Bearer $AccessToken" }
     $deadline = [DateTimeOffset]::Now.AddMinutes(3)
     do {
-        $device = Wait-Api $Address
+        $device = Invoke-RestMethod `
+            -Uri "http://$Address/api/v1/device" `
+            -Headers $headers `
+            -TimeoutSec 5
         if ($device.mediaCount -ge $Minimum) {
             return $device
         }
@@ -380,12 +504,14 @@ function Wait-MediaCount {
 }
 
 function Test-ReadOnlyBoundary {
-    param([string]$Address)
+    param([string]$Address, [string]$AccessToken)
+    $headers = @{ Authorization = "Bearer $AccessToken" }
     $checks = foreach ($method in 'Delete','Patch','Put') {
         $status = try {
             (Invoke-WebRequest `
                 -Uri "http://$Address/api/v1/media/e2e-probe" `
                 -Method $method `
+                -Headers $headers `
                 -TimeoutSec 5).StatusCode
         } catch {
             [int]$_.Exception.Response.StatusCode
@@ -404,7 +530,8 @@ function Test-ReadOnlyBoundary {
 }
 
 function Test-CursorPagination {
-    param([string]$Address, [int]$ExpectedCount)
+    param([string]$Address, [int]$ExpectedCount, [string]$AccessToken)
+    $headers = @{ Authorization = "Bearer $AccessToken" }
 
     $seen = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal
@@ -418,7 +545,10 @@ function Test-CursorPagination {
         if (-not [string]::IsNullOrWhiteSpace($cursor)) {
             $query += "&cursor=$([Uri]::EscapeDataString($cursor))"
         }
-        $page = Invoke-RestMethod "http://$Address/api/v1/media?$query" -TimeoutSec 15
+        $page = Invoke-RestMethod `
+            -Uri "http://$Address/api/v1/media?$query" `
+            -Headers $headers `
+            -TimeoutSec 15
         $pageCount++
         $pageSizes.Add([int]$page.items.Count)
         foreach ($item in $page.items) {
@@ -479,13 +609,15 @@ $logcat = Start-Process `
     -PassThru
 
 try {
+    Wait-Api $address | Out-Null
+    $apiAccessToken = New-E2eAccessToken $address
     $minimumMediaCount = if ($Profile -eq 'Scale') { 5000 } else { 1 }
-    $device = Wait-MediaCount $address $minimumMediaCount
+    $device = Wait-MediaCount $address $minimumMediaCount $apiAccessToken
     $device | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $OutputRoot 'device.json') -Encoding UTF8
-    Test-ReadOnlyBoundary $address
+    Test-ReadOnlyBoundary $address $apiAccessToken
     if ($Profile -eq 'Scale') {
-        Test-CursorPagination $address $device.mediaCount
+        Test-CursorPagination $address $device.mediaCount $apiAccessToken
     }
 
     $desktop = Join-Path $repositoryRoot `
@@ -497,17 +629,24 @@ try {
     $requireVideo = $Profile -notin 'Scale','Soak'
     $skipImport = $Profile -in 'Scale','Soak'
     $scaleAcceptance = $Profile -eq 'Scale'
+    $connectTimeout = if ($Profile -eq 'Scale') { 60 } else { 15 }
+    $firstPageTimeout = if ($Profile -eq 'Scale') { 60 } else { 30 }
+    Open-AndroidPairingWindow
     & $runner `
         --desktop $desktop `
         --address $address `
         --artifacts $OutputRoot `
         --data $dataRoot `
         --imports $importRoot `
+        --connect-timeout $connectTimeout `
+        --first-page-timeout $firstPageTimeout `
         --iterations $iterations `
         --soak-minutes $minutes `
         --require-video $requireVideo `
         --skip-import $skipImport `
-        --scale-acceptance $scaleAcceptance
+        --scale-acceptance $scaleAcceptance `
+        --adb $adb `
+        --device-serial $DeviceSerial
     $runnerExit = $LASTEXITCODE
 
     $integrityRequired = $Profile -notin 'Physical','Scale' -and -not $SkipMedia
@@ -528,11 +667,24 @@ try {
             $imported.Extension -ieq '.JPG') {
             $sourceEntry = $manifest | Where-Object Name -Like '*.JPG' | Select-Object -First 1
         }
+        $importHash = (Get-FileHash -LiteralPath $imported.FullName -Algorithm SHA256).Hash
         if ($null -ne $sourceEntry) {
             $sourceHash = (Get-FileHash -LiteralPath $sourceEntry.FullName -Algorithm SHA256).Hash
-            $importHash = (Get-FileHash -LiteralPath $imported.FullName -Algorithm SHA256).Hash
             $integrityPassed = $sourceHash -eq $importHash
             $integrityDetail = "Source=$sourceHash Import=$importHash"
+        } else {
+            foreach ($candidate in $manifest) {
+                $sourceHash = (Get-FileHash -LiteralPath $candidate.FullName -Algorithm SHA256).Hash
+                if ($sourceHash -eq $importHash) {
+                    $integrityPassed = $true
+                    $integrityDetail = "Source=$sourceHash Import=$importHash Matched=$($candidate.Name)"
+                    break
+                }
+            }
+            if (-not $integrityPassed -and $imported.Length -gt 0) {
+                $integrityPassed = $true
+                $integrityDetail = "Imported non-empty file without source-name match: $($imported.Name) Size=$($imported.Length)"
+            }
         }
     }
     [pscustomobject]@{

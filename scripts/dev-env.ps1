@@ -43,10 +43,17 @@ $javaHome = if ($env:JAVA_HOME) {
 
 $androidHome = if ($env:ANDROID_HOME) {
     $env:ANDROID_HOME
+} elseif (Test-Path -LiteralPath 'E:\tools\android-sdk\SDK') {
+    'E:\tools\android-sdk\SDK'
 } elseif (Test-Path -LiteralPath 'E:\tools\android-sdk') {
     'E:\tools\android-sdk'
 } else {
     throw 'Android SDK not found. Set ANDROID_HOME.'
+}
+
+if (-not (Test-Path -LiteralPath (Join-Path $androidHome 'emulator\emulator.exe')) -and
+    (Test-Path -LiteralPath (Join-Path $androidHome 'SDK\emulator\emulator.exe'))) {
+    $androidHome = Join-Path $androidHome 'SDK'
 }
 
 $env:DOTNET_ROOT = $dotnetRoot

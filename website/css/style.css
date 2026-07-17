@@ -273,7 +273,6 @@ body.lang-en .zh { display: none !important; }
 }
 
 .mobile-iframe {
-  display: none; /* Hidden on desktop screens */
   width: 250px;
   height: 525px;
   border-radius: 36px;
