@@ -49,6 +49,7 @@ class LinkGalleryHttpServer(
 ) {
     private val lock = Any()
     private var serverSocket: ServerSocket? = null
+    private val activeClients = mutableSetOf<Socket>()
     private var acceptExecutor = Executors.newSingleThreadExecutor()
     private var requestExecutor = newRequestExecutor()
     private var handlerExecutor = Executors.newFixedThreadPool(config.maxConcurrentRequests)
@@ -79,9 +80,13 @@ class LinkGalleryHttpServer(
     }
 
     fun stop() {
-        synchronized(lock) {
+        val clients = synchronized(lock) {
             serverSocket?.close()
             serverSocket = null
+            activeClients.toList().also { activeClients.clear() }
+        }
+        clients.forEach { client -> runCatching { client.close() } }
+        synchronized(lock) {
             acceptExecutor.shutdownNow()
             requestExecutor.shutdownNow()
             handlerExecutor.shutdownNow()
@@ -92,9 +97,22 @@ class LinkGalleryHttpServer(
         while (!socket.isClosed) {
             try {
                 val client = socket.accept()
+                val accepted = synchronized(lock) {
+                    if (serverSocket !== socket || socket.isClosed) {
+                        false
+                    } else {
+                        activeClients += client
+                        true
+                    }
+                }
+                if (!accepted) {
+                    runCatching { client.close() }
+                    continue
+                }
                 try {
                     requestExecutor.execute { handleClient(client) }
                 } catch (_: RejectedExecutionException) {
+                    synchronized(lock) { activeClients -= client }
                     runCatching { client.close() }
                 }
             } catch (_: Exception) {
@@ -112,13 +130,14 @@ class LinkGalleryHttpServer(
     )
 
     private fun handleClient(client: Socket) {
-        client.use { socket ->
-            socket.soTimeout = config.requestTimeoutMilliseconds.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            val startedAt = System.nanoTime()
-            var method = "UNKNOWN"
-            var target = "/"
-            var status = 500
-            try {
+        try {
+            client.use { socket ->
+                socket.soTimeout = config.requestTimeoutMilliseconds.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                val startedAt = System.nanoTime()
+                var method = "UNKNOWN"
+                var target = "/"
+                var status = 500
+                try {
                 val reader = BufferedReader(
                     InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII),
                 )
@@ -159,25 +178,28 @@ class LinkGalleryHttpServer(
                     Log.w("LinkGalleryHttp", response.body)
                 }
                 write(socket, response)
-            } catch (_: TimeoutException) {
-                status = 504
-                runCatching {
-                    write(socket, ApiResponse(504, Json.problem("request_timeout", "The request timed out.")))
+                } catch (_: TimeoutException) {
+                    status = 504
+                    runCatching {
+                        write(socket, ApiResponse(504, Json.problem("request_timeout", "The request timed out.")))
+                    }
+                } catch (exception: BadHttpRequest) {
+                    status = 400
+                    runCatching {
+                        write(socket, ApiResponse(400, Json.problem("bad_request", exception.message ?: "Bad request.")))
+                    }
+                } catch (_: Exception) {
+                    status = 500
+                    runCatching {
+                        write(socket, ApiResponse(500, Json.problem("internal_error", "The request failed.")))
+                    }
+                } finally {
+                    val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+                    logger.log(method, target, status, elapsed)
                 }
-            } catch (exception: BadHttpRequest) {
-                status = 400
-                runCatching {
-                    write(socket, ApiResponse(400, Json.problem("bad_request", exception.message ?: "Bad request.")))
-                }
-            } catch (_: Exception) {
-                status = 500
-                runCatching {
-                    write(socket, ApiResponse(500, Json.problem("internal_error", "The request failed.")))
-                }
-            } finally {
-                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
-                logger.log(method, target, status, elapsed)
             }
+        } finally {
+            synchronized(lock) { activeClients -= client }
         }
     }
 

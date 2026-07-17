@@ -142,6 +142,79 @@ class LinkGalleryHttpServerTest {
     }
 
     @Test
+    fun stoppingServerClosesClientAndInterruptsInFlightDownload() {
+        val readStarted = CountDownLatch(1)
+        val streamClosed = CountDownLatch(1)
+        val repository = object : MediaRepository {
+            override suspend fun getPage(query: MediaQuery): MediaPageResult =
+                MediaPageResult.Success(MediaPage(emptyList(), null, false, 0))
+
+            override suspend fun getById(id: String): MediaItemResult = MediaItemResult.NotFound
+
+            override suspend fun getContent(id: String): MediaContentResult =
+                MediaContentResult.Found(
+                    MediaContent(1024, "video/mp4") {
+                        object : InputStream() {
+                            override fun read(): Int {
+                                readStarted.countDown()
+                                return try {
+                                    CountDownLatch(1).await()
+                                    -1
+                                } catch (_: InterruptedException) {
+                                    throw IOException("Download interrupted by server stop.")
+                                }
+                            }
+
+                            override fun close() {
+                                streamClosed.countDown()
+                            }
+                        }
+                    },
+                )
+        }
+        val server = LinkGalleryHttpServer(
+            controller = ApiController(
+                publicDeviceInfoProvider = FakePublicDeviceInfoProvider,
+                deviceInfoProvider = DeviceInfoProvider {
+                    DeviceInfoResult.Success(DeviceInfo("id", "name", null, null, 1))
+                },
+                mediaRepository = repository,
+                accessTokenAuthenticator = AllowAllAccessTokenAuthenticator,
+            ),
+            config = HttpServerConfig(port = 0, requestTimeoutMilliseconds = 5_000),
+            logger = RequestLogger { _, _, _, _ -> },
+        )
+        val client = Executors.newSingleThreadExecutor()
+
+        try {
+            server.start()
+            val response = client.submit<ByteArray> {
+                Socket("127.0.0.1", checkNotNull(server.localPort)).use { socket ->
+                    socket.getOutputStream().apply {
+                        write(
+                            "GET /api/v1/media/video/content HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                                .toByteArray(StandardCharsets.US_ASCII),
+                        )
+                        flush()
+                    }
+                    socket.getInputStream().readBytes()
+                }
+            }
+            assertTrue(readStarted.await(2, TimeUnit.SECONDS))
+
+            server.stop()
+
+            val received = response.get(2, TimeUnit.SECONDS)
+            assertTrue(String(received, StandardCharsets.US_ASCII).startsWith("HTTP/1.1 200 OK"))
+            assertTrue(streamClosed.await(2, TimeUnit.SECONDS))
+            assertFalse(server.isRunning)
+        } finally {
+            server.stop()
+            client.shutdownNow()
+        }
+    }
+
+    @Test
     fun returnsNormalizedTimeoutResponse() {
         val neverCompletes = CountDownLatch(1)
         val server = LinkGalleryHttpServer(

@@ -108,7 +108,9 @@ class LinkGalleryForegroundService : Service() {
     private var lastPublishedState: LinkGalleryServiceState? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val reconnectPolicy = ServiceReconnectPolicy()
-    private val desktopLastSeen = mutableMapOf<String, Long>()
+    private val desktopActivity = DesktopActivityTracker(ACTIVE_SESSION_MILLIS)
+    @Volatile
+    private var destroying = false
     private val refreshAdvertising = Runnable { refreshAdvertisingForCurrentNetwork() }
     private val expireDesktopSessions = Runnable { publishState() }
     private val expireTransferStatus = Runnable {
@@ -170,10 +172,8 @@ class LinkGalleryForegroundService : Service() {
                 pairingManager,
                 pairingManager,
                 onAuthenticatedAccess = { desktop ->
-                    mainHandler.post {
-                        desktopLastSeen[desktop.desktopId] = System.currentTimeMillis()
-                        publishState()
-                    }
+                    desktopActivity.record(desktop.desktopId, System.currentTimeMillis())
+                    publishState()
                 },
                 transferStatusRegistry = transferStatusRegistry,
             ),
@@ -203,10 +203,11 @@ class LinkGalleryForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        destroying = true
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
-        mainHandler.removeCallbacksAndMessages(null)
         stopAdvertising()
         httpServer.stop()
+        mainHandler.removeCallbacksAndMessages(null)
         advertisedPort = null
         LinkGalleryServiceRuntime.detach(this)
         super.onDestroy()
@@ -259,18 +260,22 @@ class LinkGalleryForegroundService : Service() {
     }
 
     private fun publishState() {
+        if (destroying) return
+        if (Looper.myLooper() != mainHandler.looper) {
+            mainHandler.post { publishState() }
+            return
+        }
         if (!::pairingManager.isInitialized) return
         val now = System.currentTimeMillis()
-        desktopLastSeen.entries.removeAll { now - it.value >= ACTIVE_SESSION_MILLIS }
         val credentials = pairingManager.pairedCredentials()
+        val activeDesktopIds = desktopActivity.activeIds(now)
         val activeDesktopNames = credentials
-            .filter { it.desktopId in desktopLastSeen }
+            .filter { it.desktopId in activeDesktopIds }
             .map { it.desktopName }
             .distinct()
             .sorted()
         mainHandler.removeCallbacks(expireDesktopSessions)
-        desktopLastSeen.values.minOfOrNull { it + ACTIVE_SESSION_MILLIS - now }
-            ?.coerceAtLeast(1)
+        desktopActivity.nextExpiryDelayMillis(now)
             ?.let { mainHandler.postDelayed(expireDesktopSessions, it) }
         val next = LinkGalleryServiceState(
             running = ::httpServer.isInitialized && httpServer.isRunning,

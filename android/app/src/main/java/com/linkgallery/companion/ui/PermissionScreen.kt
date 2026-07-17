@@ -136,6 +136,9 @@ fun PermissionScreen(
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
     onServiceRunningChange: (Boolean) -> Unit = {},
     onOpenPairingWindow: (String?) -> Long = { 0L },
+    notificationPermissionGranted: Boolean = true,
+    onNotificationPermissionRequest: () -> Unit = {},
+    onOpenNotificationSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val permissions = AndroidMediaPermissionGateway.requiredPermissions(
@@ -163,6 +166,9 @@ fun PermissionScreen(
         onServiceRunningChange = onServiceRunningChange,
         onPermissionRequest = { launcher.launch(permissions) },
         onOpenPairingWindow = onOpenPairingWindow,
+        notificationPermissionGranted = notificationPermissionGranted,
+        onNotificationPermissionRequest = onNotificationPermissionRequest,
+        onOpenNotificationSettings = onOpenNotificationSettings,
     )
 }
 
@@ -175,6 +181,9 @@ internal fun LinkGalleryApp(
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
     onServiceRunningChange: (Boolean) -> Unit = {},
     onOpenPairingWindow: (String?) -> Long = { 0L },
+    notificationPermissionGranted: Boolean = true,
+    onNotificationPermissionRequest: () -> Unit = {},
+    onOpenNotificationSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("linkgallery_preferences", Context.MODE_PRIVATE) }
@@ -335,6 +344,9 @@ internal fun LinkGalleryApp(
                             strings = strings,
                             language = language,
                             onLanguageChange = ::setLanguage,
+                            notificationPermissionGranted = notificationPermissionGranted,
+                            onNotificationPermissionRequest = onNotificationPermissionRequest,
+                            onOpenNotificationSettings = onOpenNotificationSettings,
                         )
                 }
             }
@@ -355,6 +367,9 @@ internal fun PermissionContent(
     onOpenPairingWindow: (String?) -> Long = { 0L },
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
     onServiceRunningChange: (Boolean) -> Unit = {},
+    notificationPermissionGranted: Boolean = true,
+    onNotificationPermissionRequest: () -> Unit = {},
+    onOpenNotificationSettings: () -> Unit = {},
 ) {
     LinkGalleryApp(
         connectionGuide = connectionGuide,
@@ -364,6 +379,9 @@ internal fun PermissionContent(
         onOpenPairingWindow = onOpenPairingWindow,
         serviceState = serviceState,
         onServiceRunningChange = onServiceRunningChange,
+        notificationPermissionGranted = notificationPermissionGranted,
+        onNotificationPermissionRequest = onNotificationPermissionRequest,
+        onOpenNotificationSettings = onOpenNotificationSettings,
     )
 }
 
@@ -689,6 +707,9 @@ private fun DevicesPage(
     strings: UiStrings,
     language: UiLanguage,
     onLanguageChange: (UiLanguage) -> Unit,
+    notificationPermissionGranted: Boolean,
+    onNotificationPermissionRequest: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
     val ipv4Address = remember(serviceState.addresses) {
@@ -757,6 +778,44 @@ private fun DevicesPage(
             }
         }
         Spacer(Modifier.height(12.dp))
+        if (!notificationPermissionGranted) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = LgCanvas),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, LgLine, RoundedCornerShape(18.dp))
+                    .testTag("notification_permission_card"),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(strings.notificationPermissionNeeded, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        strings.notificationPermissionDetail,
+                        color = LgMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 3.dp),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(
+                            onClick = onOpenNotificationSettings,
+                            modifier = Modifier.testTag("open_notification_settings"),
+                        ) {
+                            Text(strings.openSettings)
+                        }
+                        TextButton(
+                            onClick = onNotificationPermissionRequest,
+                            modifier = Modifier.testTag("request_notification_permission"),
+                        ) {
+                            Text(strings.allowNotifications)
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
         Card(
             colors = CardDefaults.cardColors(containerColor = LgCanvas),
             shape = RoundedCornerShape(18.dp),
@@ -1617,6 +1676,13 @@ private class UiStrings(val uiLanguage: UiLanguage) {
     val pair get() = t("Pair", "配对")
     val savingToComputer get() = t("Saving to computer", "正在保存到电脑")
     val stopSharing get() = t("Stop sharing", "停止共享")
+    val notificationPermissionNeeded get() = t("Sharing notification is hidden", "共享通知未显示")
+    val notificationPermissionDetail get() = t(
+        "Allow notifications so Android can show which computer is browsing and the Stop sharing action.",
+        "允许通知后，Android 才能显示正在浏览的电脑和“停止共享”操作。",
+    )
+    val allowNotifications get() = t("Allow notifications", "允许通知")
+    val openSettings get() = t("Open settings", "打开设置")
     val pocketSource get() = t("Pocket source", "Pocket 设备来源")
     val pocketIssueDetail get() = t("Shown after the Android device-source API is added", "等待 Android 设备来源接口完成后显示")
     val issue get() = t("Issue", "Issue")

@@ -134,6 +134,32 @@ class PermissionScreenUiTest {
         compose.runOnIdle { assertEquals(false, serviceEnabled) }
     }
 
+    @Test
+    fun deniedNotificationPermissionExplainsMissingStopActionAndOffersSettings() {
+        var requested = false
+        var openedSettings = false
+        compose.setContent {
+            PermissionContent(
+                connectionGuide = emulatorGuide(),
+                permissionGranted = true,
+                onPermissionRequest = {},
+                notificationPermissionGranted = false,
+                onNotificationPermissionRequest = { requested = true },
+                onOpenNotificationSettings = { openedSettings = true },
+            )
+        }
+
+        compose.onNodeWithTag("tab_connection").performClick()
+        compose.onNodeWithTag("notification_permission_card").assertIsDisplayed()
+        compose.onNodeWithTag("request_notification_permission").performClick()
+        compose.onNodeWithTag("open_notification_settings").performClick()
+
+        compose.runOnIdle {
+            assertTrue(requested)
+            assertTrue(openedSettings)
+        }
+    }
+
     private fun emulatorGuide() = createConnectionGuide(
         isEmulator = true,
         lanAddresses = emptyList(),
