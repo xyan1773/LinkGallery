@@ -11,7 +11,7 @@ internal class DesktopActivityTracker(
     }
 
     fun record(desktopId: String, nowMillis: Long) = synchronized(lock) {
-        lastSeen[desktopId] = nowMillis
+        lastSeen[desktopId] = maxOf(lastSeen[desktopId] ?: Long.MIN_VALUE, nowMillis)
     }
 
     fun activeIds(nowMillis: Long): Set<String> = synchronized(lock) {
