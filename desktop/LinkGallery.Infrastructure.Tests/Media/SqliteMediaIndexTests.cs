@@ -154,6 +154,59 @@ public sealed class SqliteMediaIndexTests
     }
 
     [TestMethod]
+    public async Task AllAlbumsLoadsEveryPageAndKeepsVideoOnlyAlbumsDistinct()
+    {
+        var items = Enumerable.Range(1, 620)
+            .Select(id => Item(
+                id,
+                modifiedSeconds: id,
+                type: MediaType.Video,
+                relativePath: $"Movies/Album-{id:D4}"))
+            .ToArray();
+        var source = new FakeMediaSource(items);
+        var index = new SqliteMediaIndex(_databasePath);
+        await new IncrementalMediaIndexSynchronizer(index)
+            .SynchronizeAsync(source, CancellationToken.None);
+
+        var albums = await index.GetAllAlbumsAsync(
+            source.Device.Id,
+            searchText: null,
+            cancellationToken: CancellationToken.None);
+
+        Assert.HasCount(620, albums);
+        Assert.HasCount(620, albums.Select(static album => album.AlbumId).Distinct().ToArray());
+        Assert.IsTrue(albums.All(static album =>
+            album.MediaCount == 1 && album.PhotoCount == 0 && album.VideoCount == 1));
+    }
+
+    [TestMethod]
+    public async Task SearchAllLoadsMoreThanOnePageFromSelectedAlbum()
+    {
+        var items = Enumerable.Range(1, 620)
+            .Select(id => Item(id, modifiedSeconds: id, relativePath: "DCIM/Large Album"))
+            .ToArray();
+        var source = new FakeMediaSource(items);
+        var index = new SqliteMediaIndex(_databasePath);
+        await new IncrementalMediaIndexSynchronizer(index)
+            .SynchronizeAsync(source, CancellationToken.None);
+
+        var media = await index.SearchAllAsync(
+            new MediaIndexQuery(
+                DeviceId: source.Device.Id,
+                SearchText: null,
+                Types: null,
+                FromInclusive: null,
+                ToExclusive: null,
+                Limit: 20,
+                Offset: 0,
+                AlbumId: "dcim/large album"),
+            CancellationToken.None);
+
+        Assert.HasCount(620, media);
+        Assert.IsTrue(media.All(static item => item.AlbumId == "dcim/large album"));
+    }
+
+    [TestMethod]
     public async Task LargeLibrarySyncReportsReadablePageAndWriteProgress()
     {
         var items = Enumerable.Range(1, 1_421)
