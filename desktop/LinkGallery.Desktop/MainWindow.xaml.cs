@@ -2009,7 +2009,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void ApplyResponsiveLayout(bool animateNavigation = false)
     {
-        if (NavigationColumn is null || NavigationPanel is null || SearchColumn is null || ToolbarBorder is null)
+        if (NavigationColumn is null || NavigationPanel is null || ToolbarBorder is null)
         {
             return;
         }
@@ -2027,7 +2027,6 @@ public partial class MainWindow : Window, IDisposable
             targetNavigationWidth,
             animateNavigation,
             iconRail ? () => ApplyNavigationContentVisibility(iconRail, compact) : null);
-        SearchColumn.Width = new GridLength(1, GridUnitType.Star);
         ToolbarBorder.Padding = compact ? new Thickness(20, 12, 10, 12) : new Thickness(32, 12, 14, 12);
         SearchButton.Visibility = Visibility.Collapsed;
         if (iconRail && !animateNavigation)
@@ -2036,11 +2035,36 @@ public partial class MainWindow : Window, IDisposable
         }
 
         var availableToolbarWidth = Math.Max(0, ActualWidth - targetNavigationWidth);
-        var showToolbarDevice = CanShowToolbarDevicePanel(targetNavigationWidth);
-        DevicePanel.Visibility = showToolbarDevice
+        var toolbarContentWidth = Math.Max(
+            0,
+            availableToolbarWidth - ToolbarBorder.Padding.Left - ToolbarBorder.Padding.Right);
+        ToolbarTitlePanel.MinWidth = compact ? 180 : 210;
+        ToolbarTitlePanel.MaxWidth = compact ? 180 : 300;
+
+        var supportsSearch = _currentPage is "Gallery" or "Albums";
+        SearchChrome.Width = toolbarContentWidth switch
+        {
+            >= 1100 => 360,
+            >= 900 => 300,
+            _ => 200,
+        };
+        SearchChrome.Visibility = supportsSearch && toolbarContentWidth >= 650
             ? Visibility.Visible
             : Visibility.Collapsed;
-        DateFilterComboBox.Visibility = availableToolbarWidth >= (showToolbarDevice ? 1280 : 850)
+
+        var showTypeFilter = _currentPage == "Gallery" && toolbarContentWidth >= 1000;
+        var showDateFilter = _currentPage == "Gallery" && toolbarContentWidth >= 1120;
+        TypeFilterComboBox.Visibility = showTypeFilter ? Visibility.Visible : Visibility.Collapsed;
+        DateFilterComboBox.Visibility = showDateFilter ? Visibility.Visible : Visibility.Collapsed;
+        FilterPanel.Visibility = showTypeFilter || showDateFilter
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        var showToolbarDevice =
+            _currentPage is "Gallery" or "Albums" &&
+            CanShowToolbarDevicePanel(targetNavigationWidth) &&
+            toolbarContentWidth >= (_currentPage == "Gallery" ? 1450 : 1180);
+        DevicePanel.Visibility = showToolbarDevice
             ? Visibility.Visible
             : Visibility.Collapsed;
         if (SidebarToggleButton is not null)
@@ -2629,11 +2653,11 @@ public partial class MainWindow : Window, IDisposable
             : L("Search albums", "搜索相册");
         NewAlbumButton.Visibility = Visibility.Collapsed;
         EnterIpButton.Visibility = page == "Devices" ? Visibility.Visible : Visibility.Collapsed;
-        ApplyResponsiveLayout();
         FindDevicesButton.Visibility = page == "Devices" ? Visibility.Visible : Visibility.Collapsed;
         CopyAlbumButton.Visibility = page == "AlbumDetail" ? Visibility.Visible : Visibility.Collapsed;
         PageActionBar.Visibility = page is "Gallery" or "AlbumDetail" ? Visibility.Visible : Visibility.Collapsed;
         GridViewButton.Visibility = Visibility.Collapsed;
+        ApplyResponsiveLayout();
         if (page != "Devices")
         {
             SetManualConnectionOpen(false);

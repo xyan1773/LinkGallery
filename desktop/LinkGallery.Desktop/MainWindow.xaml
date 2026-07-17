@@ -380,17 +380,13 @@
                         Background="#F9FFFFFF"
                         BorderBrush="{StaticResource LgBrushLine}"
                         BorderThickness="0,0,0,1">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="16" />
-                            <ColumnDefinition x:Name="SearchColumn" Width="*" MinWidth="160" MaxWidth="360" />
-                            <ColumnDefinition Width="0" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="0" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Grid x:Name="ToolbarLayoutGrid"
+                          AutomationProperties.AutomationId="ToolbarLayoutGrid">
+                        <StackPanel x:Name="ToolbarLeftPanel"
+                                    AutomationProperties.AutomationId="ToolbarLeftPanel"
+                                    HorizontalAlignment="Left"
+                                    Orientation="Horizontal"
+                                    VerticalAlignment="Center">
                             <Button x:Name="SidebarToggleButton"
                                     AutomationProperties.AutomationId="SidebarToggleButton"
                                     Margin="0,0,10,0"
@@ -407,11 +403,12 @@
                                     HorizontalAlignment="Left"
                                     VerticalAlignment="Center"
                                     Visibility="Collapsed" />
-                            <StackPanel MinWidth="210">
+                            <StackPanel x:Name="ToolbarTitlePanel" MinWidth="210" MaxWidth="300">
                                 <TextBlock x:Name="PageTitleText"
                                            FontSize="28"
                                            FontWeight="SemiBold"
                                            Foreground="{StaticResource LgBrushInk}"
+                                           TextTrimming="CharacterEllipsis"
                                            Text="Albums" />
                                 <TextBlock x:Name="StatusText"
                                            AutomationProperties.AutomationId="StatusText"
@@ -423,14 +420,15 @@
                             </StackPanel>
                         </StackPanel>
                         <Border x:Name="SearchChrome"
-                                Grid.Column="2"
+                                AutomationProperties.AutomationId="SearchChrome"
+                                Width="360"
                                 Padding="42,0,14,0"
                                 Height="44"
                                 Background="{StaticResource LgBrushSurfaceAlt}"
                                 BorderBrush="{StaticResource LgBrushLine}"
                                 BorderThickness="1"
                                 CornerRadius="12"
-                                HorizontalAlignment="Stretch"
+                                HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
                             <Grid>
                                 <TextBlock Text="&#xE721;"
@@ -460,7 +458,6 @@
                             </Grid>
                         </Border>
                         <Button x:Name="SearchButton"
-                                Grid.Column="3"
                                 AutomationProperties.AutomationId="SearchButton"
                                 Margin="18,0,0,0"
                                 Click="OnSearchClick"
@@ -469,30 +466,34 @@
                                 HorizontalAlignment="Left"
                                 VerticalAlignment="Center"
                                 Visibility="Collapsed" />
-                        <StackPanel x:Name="FilterPanel"
-                                    Grid.Column="4"
-                                    Margin="12,0,0,0"
+                        <StackPanel x:Name="ToolbarRightPanel"
+                                    AutomationProperties.AutomationId="ToolbarRightPanel"
+                                    HorizontalAlignment="Right"
                                     Orientation="Horizontal"
                                     VerticalAlignment="Center">
-                            <ComboBox x:Name="TypeFilterComboBox"
-                                      AutomationProperties.AutomationId="TypeFilterComboBox"
-                                      Width="100"
-                                      SelectionChanged="OnSearchFilterChanged"
-                                      SelectedIndex="0"
-                                      Style="{StaticResource LgComboBox}">
-                                <ComboBoxItem Content="All types" Tag="all" />
-                                <ComboBoxItem Content="Photos" Tag="image" />
-                                <ComboBoxItem Content="Videos" Tag="video" />
-                            </ComboBox>
-                            <ComboBox x:Name="DateFilterComboBox"
-                                      AutomationProperties.AutomationId="DateFilterComboBox"
-                                      Width="120"
-                                      Margin="8,0,0,0"
-                                      SelectionChanged="OnSearchFilterChanged"
-                                      SelectedIndex="0"
-                                      Style="{StaticResource LgComboBox}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
+                            <StackPanel x:Name="FilterPanel"
+                                        Margin="12,0,0,0"
+                                        Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <ComboBox x:Name="TypeFilterComboBox"
+                                          AutomationProperties.AutomationId="TypeFilterComboBox"
+                                          Width="100"
+                                          SelectionChanged="OnSearchFilterChanged"
+                                          SelectedIndex="0"
+                                          Style="{StaticResource LgComboBox}">
+                                    <ComboBoxItem Content="All types" Tag="all" />
+                                    <ComboBoxItem Content="Photos" Tag="image" />
+                                    <ComboBoxItem Content="Videos" Tag="video" />
+                                </ComboBox>
+                                <ComboBox x:Name="DateFilterComboBox"
+                                          AutomationProperties.AutomationId="DateFilterComboBox"
+                                          Width="120"
+                                          Margin="8,0,0,0"
+                                          SelectionChanged="OnSearchFilterChanged"
+                                          SelectedIndex="0"
+                                          Style="{StaticResource LgComboBox}" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Border x:Name="DevicePanel"
                                     AutomationProperties.AutomationId="ToolbarDevicePanel"
                                     Margin="0,0,14,0"
@@ -548,11 +549,13 @@
                                     Style="{StaticResource LgCommandButton}"
                                     Visibility="Collapsed" />
                             <Button x:Name="CopyAlbumButton"
+                                    AutomationProperties.AutomationId="CopyAlbumButton"
                                     Margin="12,0,0,0"
                                     Content="Copy album"
                                     Click="OnCopyAlbumClick"
                                     Style="{StaticResource LgCommandButton}"
                                     Visibility="Collapsed" />
+                            </StackPanel>
                         </StackPanel>
                     </Grid>
                 </Border>
