@@ -16,4 +16,9 @@
   <ItemGroup>
     <ProjectReference Include="..\LinkGallery.Infrastructure\LinkGallery.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\protocol\fixtures\*.json"
+          Link="Fixtures\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

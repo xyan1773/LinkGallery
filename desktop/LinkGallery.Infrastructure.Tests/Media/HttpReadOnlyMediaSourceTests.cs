@@ -166,10 +166,7 @@ public sealed class HttpReadOnlyMediaSourceTests
                     """
                     {"id":"phone-1","name":"Pixel","platform":"android","model":"Pixel 9","battery":72,"mediaCount":1}
                     """),
-                "/api/v1/media" => Json(
-                    """
-                    {"items":[{"id":"m1","fileName":"IMG.jpg","type":"image","fileSize":2048,"width":100,"height":80,"durationMilliseconds":null,"takenAt":"2026-06-30T01:00:00Z","modifiedAt":"2026-06-30T01:01:00Z","albumId":"camera-1","albumName":"Camera","relativePath":"DCIM/Camera","thumbnailUrl":"/api/v1/media/m1/thumbnail?size=256","sourceDevice":null,"sourceApplication":null,"isEditedExport":false}],"nextCursor":"cursor-2","hasMore":true,"total":42}
-                    """),
+                "/api/v1/media" => Json(Fixture("media-page.json")),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             };
         });
@@ -180,24 +177,29 @@ public sealed class HttpReadOnlyMediaSourceTests
         var page = await source.GetMediaPageAsync(
             new MediaQuery(
                 Limit: 50,
-                Types: new HashSet<MediaType> { MediaType.Image },
-                AlbumId: "camera-1"),
+                Types: new HashSet<MediaType> { MediaType.Video },
+                AlbumId: "camera"),
             CancellationToken.None);
 
         Assert.AreEqual("Pixel", device.Name);
         Assert.AreEqual(72, device.BatteryPercent);
         Assert.AreEqual(1, device.MediaCount);
         Assert.HasCount(1, page.Items);
-        Assert.IsTrue(page.HasMore);
-        Assert.AreEqual("cursor-2", page.NextCursor);
-        Assert.AreEqual(42, page.Total);
+        Assert.IsFalse(page.HasMore);
+        Assert.IsNull(page.NextCursor);
+        Assert.AreEqual(1, page.Total);
         Assert.AreEqual("phone-1", page.Items[0].DeviceId);
-        Assert.AreEqual(MediaType.Image, page.Items[0].Type);
-        Assert.AreEqual("camera-1", page.Items[0].AlbumId);
-        Assert.AreEqual("/api/v1/media/m1/thumbnail?size=256", page.Items[0].ThumbnailUrl);
+        Assert.AreEqual(MediaType.Video, page.Items[0].Type);
+        Assert.AreEqual("camera", page.Items[0].AlbumId);
+        Assert.AreEqual(42, page.Items[0].Generation);
+        Assert.AreEqual("DJI Pocket 3", page.Items[0].SourceDevice);
+        Assert.AreEqual("DJI Mimo", page.Items[0].SourceApplication);
+        Assert.AreEqual(
+            "/api/v1/media/fixture-media-1/thumbnail?size=256",
+            page.Items[0].ThumbnailUrl);
         StringAssert.Contains(handler.LastRequestUri?.Query, "limit=50");
-        StringAssert.Contains(handler.LastRequestUri?.Query, "type=image");
-        StringAssert.Contains(handler.LastRequestUri?.Query, "albumId=camera-1");
+        StringAssert.Contains(handler.LastRequestUri?.Query, "type=video");
+        StringAssert.Contains(handler.LastRequestUri?.Query, "albumId=camera");
     }
 
     [TestMethod]
@@ -268,7 +270,7 @@ public sealed class HttpReadOnlyMediaSourceTests
     public async Task ForbiddenProblemIsExposedAsTypedHttpException()
     {
         var handler = new StubHandler(_ => Json(
-            """{"code":"permission_denied","message":"Media permission required"}""",
+            Fixture("problem.json"),
             HttpStatusCode.Forbidden));
         using var client = new HttpClient(handler);
         var source = new HttpReadOnlyMediaSource(client, new Uri("http://phone/api/v1/"));
@@ -318,6 +320,9 @@ public sealed class HttpReadOnlyMediaSourceTests
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+
+    private static string Fixture(string name) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", name));
 
     private static ByteArrayContent CreateRangeContent(byte[] bytes, long from, long to, long length)
     {

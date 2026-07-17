@@ -19,7 +19,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Lint OpenAPI
-        run: npx --yes @redocly/cli@2.35.1 lint protocol/openapi.yaml
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/test-results/protocol
+          npx --yes @redocly/cli@2.35.1 lint protocol/openapi.yaml 2>&1 \
+            | tee artifacts/test-results/protocol/protocol-lint.txt
+      - name: Upload protocol report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: protocol-test-report
+          path: artifacts/test-results/protocol
+          if-no-files-found: warn
 
   desktop:
     name: Desktop
@@ -36,7 +47,18 @@ jobs:
       - name: Build
         run: dotnet build LinkGallery.sln --configuration Release --no-restore
       - name: Test
-        run: dotnet test LinkGallery.sln --configuration Release --no-build --collect:"XPlat Code Coverage"
+        run: >-
+          dotnet test LinkGallery.sln --configuration Release --no-build
+          --results-directory artifacts/test-results/desktop
+          --logger:"trx;LogFileName=desktop-tests.trx"
+          --collect:"XPlat Code Coverage"
+      - name: Upload desktop test reports and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-test-report
+          path: artifacts/test-results/desktop
+          if-no-files-found: warn
 
   android:
     name: Android
@@ -53,3 +75,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - name: Build and test
         run: ./gradlew assembleDebug testDebugUnitTest
+      - name: Upload Android unit-test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-test-report
+          path: |
+            android/app/build/test-results/testDebugUnitTest
+            android/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: warn
