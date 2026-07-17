@@ -18,7 +18,6 @@ data class MediaSourceClassification(
  * explicit export/editor marker.
  */
 object Pocket3MediaClassifier {
-    private val djiFileName = Regex("^DJI_[0-9]{6,}.*", RegexOption.IGNORE_CASE)
     private val pocketMarker = Regex("(^|[^a-z0-9])(?:osmo[ _-]?)?pocket[ _-]?3([^a-z0-9]|$)")
     private val exportMarker = Regex("(^|[/ _.-])(export(?:ed)?|editor|edited|render(?:ed)?)([/ _.-]|$)")
 
@@ -36,9 +35,7 @@ object Pocket3MediaClassifier {
         val album = normalize(albumName)
         val path = normalize(relativePath)
         val owner = normalize(ownerPackageName)
-        val make = normalize(metadataMake)
         val model = normalize(metadataModel)
-        val encoding = normalize(codec)
         val mime = normalize(mimeType)
 
         val isMedia = mime.isEmpty() || mime.startsWith("image/") || mime.startsWith("video/")
@@ -48,12 +45,10 @@ object Pocket3MediaClassifier {
             it.contains("dji mimo") || it.contains("dji_mimo") || it.contains("dji.mimo")
         }
         val explicitPocket = listOf(album, path, model).any(pocketMarker::containsMatchIn)
-        val djiMetadata = make == "dji" || make.contains("dji") ||
-            model.contains("dji") || encoding.contains("dji")
-        val djiLocation = album.contains("dji") || path.contains("dji")
-        val corroboratedDjiName = djiFileName.containsMatchIn(name) &&
-            (mimoEvidence || djiLocation || djiMetadata)
-        val isPocket3 = explicitPocket || corroboratedDjiName
+        // Generic DJI names, manufacturer metadata, codecs, and Mimo directories do
+        // not distinguish Pocket 3 from drones, Action cameras, or older Pockets.
+        // Keep sourceDevice unknown unless the evidence names Pocket 3 explicitly.
+        val isPocket3 = explicitPocket
 
         val explicitExport = listOf(name, album, path).any(exportMarker::containsMatchIn)
         return MediaSourceClassification(

@@ -1314,7 +1314,11 @@
                                         <TextBlock x:Name="InspectorResolutionText" HorizontalAlignment="Right" Text="-" />
                                     </Grid>
                                     <Grid Margin="0,12,0,0">
-                                        <TextBlock x:Name="InspectorDeviceLabelText" Foreground="{StaticResource LgBrushMuted}" Text="Device" />
+                                        <TextBlock x:Name="InspectorSourceLabelText" Foreground="{StaticResource LgBrushMuted}" Text="Source" />
+                                        <TextBlock x:Name="InspectorSourceText" HorizontalAlignment="Right" Text="-" />
+                                    </Grid>
+                                    <Grid Margin="0,12,0,0">
+                                        <TextBlock x:Name="InspectorDeviceLabelText" Foreground="{StaticResource LgBrushMuted}" Text="Via phone" />
                                         <TextBlock x:Name="InspectorDeviceText" HorizontalAlignment="Right" Text="-" />
                                     </Grid>
                                 </StackPanel>

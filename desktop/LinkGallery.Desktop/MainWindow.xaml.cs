@@ -431,7 +431,8 @@ public partial class MainWindow : Window, IDisposable
         InspectorTypeLabelText.Text = L("Type", "类型");
         InspectorSizeLabelText.Text = L("Size", "大小");
         InspectorResolutionLabelText.Text = L("Resolution", "分辨率");
-        InspectorDeviceLabelText.Text = L("Device", "设备");
+        InspectorSourceLabelText.Text = L("Source", "来源");
+        InspectorDeviceLabelText.Text = L("Via phone", "通过手机");
         ClosePromptTitleText.Text = L("Close LinkGallery?", "关闭 LinkGallery？");
         ClosePromptBodyText.Text = L(
             "Hide the app to the tray so transfers and cache tasks can continue, or quit LinkGallery completely.",
@@ -2871,6 +2872,7 @@ public partial class MainWindow : Window, IDisposable
             InspectorTypeText.Text = "-";
             InspectorSizeText.Text = "-";
             InspectorResolutionText.Text = "-";
+            InspectorSourceText.Text = "-";
             InspectorDeviceText.Text = "-";
             return;
         }
@@ -2888,6 +2890,10 @@ public partial class MainWindow : Window, IDisposable
         InspectorResolutionText.Text = item.Width.HasValue && item.Height.HasValue
             ? $"{item.Width.Value} × {item.Height.Value}"
             : "-";
+        InspectorSourceText.Text = MediaSourcePresentation.Describe(
+            item,
+            L("Unknown", "未知"),
+            L("Edited export", "编辑导出"));
         InspectorDeviceText.Text = GetMediaDeviceDisplayName(item);
     }
 
@@ -2903,6 +2909,7 @@ public partial class MainWindow : Window, IDisposable
         InspectorTypeText.Text = L("Mixed", "多种类型");
         InspectorSizeText.Text = "-";
         InspectorResolutionText.Text = "-";
+        InspectorSourceText.Text = "-";
         InspectorDeviceText.Text = "-";
     }
 
@@ -3061,12 +3068,6 @@ public partial class MainWindow : Window, IDisposable
             string.Equals(paired.DeviceId, item.DeviceId, StringComparison.Ordinal))
         {
             return paired.DisplayName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(item.SourceDevice) &&
-            !string.Equals(item.SourceDevice, item.DeviceId, StringComparison.Ordinal))
-        {
-            return item.SourceDevice;
         }
 
         return L("Saved device", "已保存设备");
