@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using LinkGallery.Application.Media;
+using LinkGallery.Application.Transfers;
 using LinkGallery.Domain.Media;
 using LinkGallery.Infrastructure.Media;
 
@@ -220,6 +221,47 @@ public sealed class HttpReadOnlyMediaSourceTests
         await source.GetDeviceInfoAsync(CancellationToken.None);
 
         Assert.AreEqual("Bearer secret-token", authorization);
+    }
+
+    [TestMethod]
+    public async Task TransferStatusPostsSanitizedContractWithBearerToken()
+    {
+        HttpMethod? method = null;
+        string? authorization = null;
+        string? body = null;
+        var handler = new StubHandler(async (request, cancellationToken) =>
+        {
+            method = request.Method;
+            authorization = request.Headers.Authorization?.ToString();
+            body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var client = new HttpClient(handler);
+        var source = new HttpReadOnlyMediaSource(
+            client,
+            new Uri("http://phone:39570/api/v1/"),
+            accessToken: "secret-token");
+
+        await source.PublishTransferStatusAsync(
+            new RemoteTransferStatus(
+                "task_1",
+                "Pictures",
+                2,
+                5,
+                40,
+                100,
+                "running",
+                7,
+                10_000),
+            CancellationToken.None);
+
+        Assert.AreEqual(HttpMethod.Post, method);
+        Assert.AreEqual("Bearer secret-token", authorization);
+        StringAssert.Contains(body, "\"destinationName\":\"Pictures\"");
+        Assert.IsFalse(body?.Contains("C:\\", StringComparison.Ordinal) == true);
+        Assert.AreEqual(
+            "http://phone:39570/api/v1/transfer/status",
+            handler.LastRequestUri?.AbsoluteUri);
     }
 
     [TestMethod]

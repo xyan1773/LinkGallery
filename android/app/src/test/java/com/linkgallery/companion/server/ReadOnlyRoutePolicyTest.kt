@@ -28,4 +28,12 @@ class ReadOnlyRoutePolicyTest {
         assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/pair/cancel"))
         assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/pair/start"))
     }
+
+    @Test
+    fun transferStatusIsTheOnlyAuthenticatedNonMediaWrite() {
+        assertTrue(ReadOnlyRoutePolicy.permits("POST", "/api/v1/transfer/status"))
+        assertTrue(ReadOnlyRoutePolicy.requiresAuthentication("POST", "/api/v1/transfer/status"))
+        assertFalse(ReadOnlyRoutePolicy.permits("PUT", "/api/v1/transfer/status"))
+        assertFalse(ReadOnlyRoutePolicy.permits("POST", "/api/v1/transfer/file"))
+    }
 }

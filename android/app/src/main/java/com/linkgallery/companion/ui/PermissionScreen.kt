@@ -51,6 +51,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -328,6 +329,7 @@ internal fun PermissionContent(
     onPermissionRequest: () -> Unit,
     onOpenPairingWindow: (String?) -> Long = { 0L },
     serviceState: LinkGalleryServiceState = LinkGalleryServiceState(running = true),
+    onServiceRunningChange: (Boolean) -> Unit = {},
 ) {
     LinkGalleryApp(
         connectionGuide = connectionGuide,
@@ -336,6 +338,7 @@ internal fun PermissionContent(
         onPermissionRequest = onPermissionRequest,
         onOpenPairingWindow = onOpenPairingWindow,
         serviceState = serviceState,
+        onServiceRunningChange = onServiceRunningChange,
     )
 }
 
@@ -748,6 +751,62 @@ private fun DevicesPage(
                 Text(strings.pair, color = LgBlue, fontWeight = FontWeight.SemiBold)
             },
         )
+        serviceState.transferStatus?.let { transfer ->
+            Spacer(Modifier.height(10.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = LgCanvas),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, LgLine, RoundedCornerShape(18.dp))
+                    .testTag("transfer_status_card"),
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(strings.savingToComputer, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "${transfer.desktopName} · ${transfer.destinationName}",
+                                color = LgMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("transfer_destination"),
+                            )
+                        }
+                        TextButton(
+                            onClick = { onServiceRunningChange(false) },
+                            modifier = Modifier.testTag("stop_sharing"),
+                        ) {
+                            Text(strings.stopSharing)
+                        }
+                    }
+                    LinearProgressIndicator(
+                        progress = { transfer.progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp)
+                            .testTag("transfer_progress"),
+                        color = LgBlueStrong,
+                        trackColor = LgBlueSoft,
+                    )
+                    Text(
+                        strings.transferProgress(
+                            transfer.completedItems,
+                            transfer.totalItems,
+                            transfer.progress,
+                        ),
+                        color = LgMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+        }
         AnimatedVisibility(visible = showSettings) {
             Column {
                 SettingRow(
@@ -1456,6 +1515,8 @@ private class UiStrings(val uiLanguage: UiLanguage) {
     val pairedComputer get() = t("Paired computer", "已配对电脑")
     val noPairedDesktop get() = t("No paired desktop yet", "还没有已配对电脑")
     val pair get() = t("Pair", "配对")
+    val savingToComputer get() = t("Saving to computer", "正在保存到电脑")
+    val stopSharing get() = t("Stop sharing", "停止共享")
     val pocketSource get() = t("Pocket source", "Pocket 设备来源")
     val pocketIssueDetail get() = t("Shown after the Android device-source API is added", "等待 Android 设备来源接口完成后显示")
     val issue get() = t("Issue", "Issue")
@@ -1509,6 +1570,11 @@ private class UiStrings(val uiLanguage: UiLanguage) {
         t("${formatCount(value)} items", "${formatCount(value)} 项")
 
     fun selectedCount(value: Int): String = t("Selected $value", "已选 $value 张")
+
+    fun transferProgress(completed: Int, total: Int, progress: Float): String = t(
+        "$completed/$total items · ${(progress * 100).toInt()}%",
+        "$completed/$total 项 · ${(progress * 100).toInt()}%",
+    )
 }
 
 private fun formatCount(value: Int): String =

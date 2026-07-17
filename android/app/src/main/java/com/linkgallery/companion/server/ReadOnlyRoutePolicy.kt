@@ -15,10 +15,13 @@ object ReadOnlyRoutePolicy {
         "/api/v1/pair/cancel",
     )
     private const val PAIR_REVOKE_ROUTE = "/api/v1/pair/revoke"
+    private const val TRANSFER_STATUS_ROUTE = "/api/v1/transfer/status"
 
     fun permits(method: String, routeTemplate: String): Boolean =
         if (method.equals("POST", ignoreCase = true)) {
-            routeTemplate in unauthenticatedPairingRoutes || routeTemplate == PAIR_REVOKE_ROUTE
+            routeTemplate in unauthenticatedPairingRoutes ||
+                routeTemplate == PAIR_REVOKE_ROUTE ||
+                routeTemplate == TRANSFER_STATUS_ROUTE
         } else {
             method.equals("GET", ignoreCase = true) &&
                 (routeTemplate in mediaReadRoutes ||

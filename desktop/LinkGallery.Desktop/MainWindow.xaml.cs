@@ -127,6 +127,13 @@ public partial class MainWindow : Window, IDisposable
     private CancellationTokenSource? _queryCancellation;
     private CancellationTokenSource? _viewerPreviewCancellation;
     private CachingReadOnlyMediaSource? _source;
+    private IRemoteTransferStatusSink? _transferStatusSink;
+    private readonly HashSet<Guid> _reportedTransferIds = [];
+    private bool _transferStatusInFlight;
+    private long _transferStatusSequence;
+    private string? _lastReportedTransferTaskId;
+    private string? _lastReportedDestinationName;
+    private DateTimeOffset _nextTransferStatusUpdate;
     private string? _activeDeviceId;
     private string? _activeAccessToken;
     private string? _pendingPairingCode;
@@ -959,6 +966,7 @@ public partial class MainWindow : Window, IDisposable
                 _httpClient,
                 apiAddress,
                 accessToken: authorization.AccessToken);
+            _transferStatusSink = httpSource;
             var cacheRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LinkGallery",
@@ -3565,7 +3573,8 @@ public partial class MainWindow : Window, IDisposable
                     ? Path.Combine(destinationDirectory, SanitizePathSegment(item.AlbumName))
                     : destinationDirectory;
                 Directory.CreateDirectory(itemDestination);
-                await _transferCoordinator.EnqueueAsync(item, itemDestination);
+                var job = await _transferCoordinator.EnqueueAsync(item, itemDestination);
+                _reportedTransferIds.Add(job.Id);
             }
 
             RefreshTransferRows();
@@ -3651,7 +3660,132 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void OnTransferRefreshTick(object? sender, EventArgs e) => RefreshTransferRows();
+    private async void OnTransferRefreshTick(object? sender, EventArgs e)
+    {
+        RefreshTransferRows();
+        await PublishTransferStatusAsync();
+    }
+
+    private async Task PublishTransferStatusAsync()
+    {
+        if (_transferStatusInFlight || _transferStatusSink is null || _activeDeviceId is null)
+        {
+            return;
+        }
+        var now = DateTimeOffset.UtcNow;
+        if (now < _nextTransferStatusUpdate)
+        {
+            return;
+        }
+        var deviceJobs = _transferCoordinator.GetJobs()
+            .Where(job => string.Equals(job.DeviceId, _activeDeviceId, StringComparison.Ordinal))
+            .ToArray();
+        if (_reportedTransferIds.Count == 0)
+        {
+            foreach (var job in deviceJobs.Where(static job => !job.IsTerminal))
+            {
+                _reportedTransferIds.Add(job.Id);
+            }
+        }
+        var batch = deviceJobs.Where(job => _reportedTransferIds.Contains(job.Id)).ToArray();
+        if (batch.Length == 0 && _lastReportedTransferTaskId is null)
+        {
+            return;
+        }
+
+        RemoteTransferStatus status;
+        if (batch.Length == 0 || batch.All(static job => job.IsTerminal))
+        {
+            var state = batch.Any(static job => job.Status == TransferStatus.Failed)
+                ? "failed"
+                : batch.Any(static job => job.Status == TransferStatus.Cancelled)
+                    ? "cancelled"
+                    : "completed";
+            status = CreateRemoteTransferStatus(
+                _lastReportedTransferTaskId ??
+                    batch.Min(static job => job.Id).ToString("N", CultureInfo.InvariantCulture),
+                _lastReportedDestinationName ??
+                    batch.Select(static job => SafeDestinationDisplayName(job.DestinationPath)).FirstOrDefault() ??
+                    "Selected folder",
+                batch,
+                state,
+                now);
+        }
+        else
+        {
+            var taskId = batch.Min(static job => job.Id).ToString("N", CultureInfo.InvariantCulture);
+            var destinations = batch
+                .Select(static job => SafeDestinationDisplayName(job.DestinationPath))
+                .Distinct(StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
+            var destinationName = destinations.Length == 1 ? destinations[0] : "Multiple folders";
+            var state = batch.All(static job => job.Status == TransferStatus.Paused)
+                ? "paused"
+                : "running";
+            _lastReportedTransferTaskId = taskId;
+            _lastReportedDestinationName = destinationName;
+            status = CreateRemoteTransferStatus(taskId, destinationName, batch, state, now);
+        }
+
+        _transferStatusInFlight = true;
+        _nextTransferStatusUpdate = now.AddSeconds(1);
+        try
+        {
+            await _transferStatusSink.PublishTransferStatusAsync(status, CancellationToken.None);
+            if (status.State is "completed" or "cancelled" or "failed")
+            {
+                _reportedTransferIds.Clear();
+                _lastReportedTransferTaskId = null;
+                _lastReportedDestinationName = null;
+            }
+        }
+        catch (HttpRequestException)
+        {
+            // Transfer status is advisory. The phone expires stale state automatically.
+        }
+        catch (TimeoutException)
+        {
+            // Do not interfere with the reliable copy pipeline for presentation-only status.
+        }
+        finally
+        {
+            _transferStatusInFlight = false;
+        }
+    }
+
+    private RemoteTransferStatus CreateRemoteTransferStatus(
+        string taskId,
+        string destinationName,
+        IReadOnlyCollection<TransferJob> jobs,
+        string state,
+        DateTimeOffset now)
+    {
+        _transferStatusSequence = Math.Max(
+            _transferStatusSequence + 1,
+            now.ToUnixTimeMilliseconds());
+        return new RemoteTransferStatus(
+            taskId,
+            destinationName,
+            jobs.Count(static job => job.Status == TransferStatus.Completed),
+            Math.Max(1, jobs.Count),
+            jobs.Sum(static job => job.BytesTransferred),
+            jobs.Sum(static job => job.TotalBytes),
+            state,
+            _transferStatusSequence,
+            now.AddSeconds(10).ToUnixTimeMilliseconds());
+    }
+
+    private static string SafeDestinationDisplayName(string destinationPath)
+    {
+        var directory = Path.GetDirectoryName(destinationPath);
+        var name = string.IsNullOrWhiteSpace(directory)
+            ? null
+            : Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
+        return string.IsNullOrWhiteSpace(name) || name.Any(character =>
+            character == '/' || character == '\\' || character == ':' || char.IsControl(character))
+            ? "Selected folder"
+            : name.Length <= 80 ? name : name[..80];
+    }
 
     private void RefreshTransferRows()
     {
@@ -3942,6 +4076,7 @@ public partial class MainWindow : Window, IDisposable
         _viewerPreviewCancellation = null;
         _source?.Dispose();
         _source = null;
+        _transferStatusSink = null;
         _activeDeviceId = null;
         _activeAccessToken = null;
         _activePairedDevice = null;

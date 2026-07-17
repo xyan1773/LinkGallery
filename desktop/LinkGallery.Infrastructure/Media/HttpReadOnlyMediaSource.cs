@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LinkGallery.Application.Media;
+using LinkGallery.Application.Transfers;
 using LinkGallery.Domain.Devices;
 using LinkGallery.Domain.Media;
 
@@ -15,7 +16,8 @@ public sealed class HttpReadOnlyMediaSource :
     IReadOnlyMediaSource,
     IIncrementalMediaSource,
     IMediaPlaybackUriSource,
-    IEntityAwareMediaSource
+    IEntityAwareMediaSource,
+    IRemoteTransferStatusSink
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -258,6 +260,54 @@ public sealed class HttpReadOnlyMediaSource :
         return new Uri(
             _apiBaseAddress,
             $"media/{Uri.EscapeDataString(remoteId)}/content");
+    }
+
+    public async Task PublishTransferStatusAsync(
+        RemoteTransferStatus status,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_requestTimeout);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(_apiBaseAddress, "transfer/status"))
+        {
+            Content = JsonContent.Create(status, options: JsonOptions),
+        };
+        if (_accessToken is not null)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+        }
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await _httpClient.SendAsync(request, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new MediaSourceTimeoutException(
+                $"Transfer status update exceeded {_requestTimeout.TotalSeconds:0} seconds.",
+                exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new MediaSourceConnectionException(
+                ClassifyConnectionFailure(exception),
+                "Unable to publish transfer status to the phone.",
+                exception);
+        }
+
+        using (response)
+        {
+            if (response.IsSuccessStatusCode)
+            {
+                return;
+            }
+            var message = await ReadProblemMessageAsync(response, cancellationToken).ConfigureAwait(false);
+            throw new MediaSourceHttpException(response.StatusCode, message);
+        }
     }
 
     private async Task<T> GetJsonAsync<T>(string relativePath, CancellationToken cancellationToken)

@@ -33,6 +33,7 @@ class ApiController(
     private val pairingCoordinator: PairingCoordinator = DisabledPairingCoordinator,
     private val accessTokenAuthenticator: AccessTokenAuthenticator = RejectingAccessTokenAuthenticator,
     private val onAuthenticatedAccess: (AuthenticatedPairing) -> Unit = {},
+    private val transferStatusRegistry: TransferStatusRegistry = TransferStatusRegistry(),
 ) {
     suspend fun handle(
         method: String,
@@ -45,17 +46,18 @@ class ApiController(
             return problem(404, "not_found", "The requested route does not exist.")
         }
         val bearerToken = bearerToken(headers)
-        if (
-            ReadOnlyRoutePolicy.requiresAuthentication(method, path) &&
-            accessTokenAuthenticator != AllowAllAccessTokenAuthenticator
-        ) {
+        var authenticatedPairing: AuthenticatedPairing? = null
+        if (ReadOnlyRoutePolicy.requiresAuthentication(method, path)) {
             if (bearerToken == null) {
-                return problem(401, "authentication_required", "Authorization: Bearer token is required.")
+                if (accessTokenAuthenticator != AllowAllAccessTokenAuthenticator) {
+                    return problem(401, "authentication_required", "Authorization: Bearer token is required.")
+                }
             }
-            val authenticated = accessTokenAuthenticator.authenticate(bearerToken)
+            val authenticated = accessTokenAuthenticator.authenticate(bearerToken.orEmpty())
             if (authenticated == null) {
                 return problem(403, "authentication_failed", "The access token is invalid or revoked.")
             }
+            authenticatedPairing = authenticated
             onAuthenticatedAccess(authenticated)
         }
 
@@ -65,6 +67,7 @@ class ApiController(
             PAIR_CONFIRM_PATH -> postPairConfirm(body)
             PAIR_CANCEL_PATH -> postPairCancel(body)
             PAIR_REVOKE_PATH -> postPairRevoke(bearerToken)
+            TRANSFER_STATUS_PATH -> postTransferStatus(body, checkNotNull(authenticatedPairing))
             DEVICE_PATH -> getDevice()
             MEDIA_SYNC_STATE_PATH -> getMediaSyncState()
             MEDIA_CHANGES_PATH -> {
@@ -484,6 +487,29 @@ class ApiController(
         return ApiResponse(200, Json.ok())
     }
 
+    private fun postTransferStatus(body: String, desktop: AuthenticatedPairing): ApiResponse {
+        val request = try {
+            val fields = JsonFields.parse(body)
+            TransferStatusUpdate(
+                taskId = fields.required("taskId"),
+                destinationName = fields.required("destinationName"),
+                completedItems = fields.required("completedItems").toInt(),
+                totalItems = fields.required("totalItems").toInt(),
+                completedBytes = fields.required("completedBytes").toLong(),
+                totalBytes = fields.required("totalBytes").toLong(),
+                state = fields.required("state"),
+                sequence = fields.required("sequence").toLong(),
+                expiresAtEpochMillis = fields.required("expiresAtEpochMillis").toLong(),
+            )
+        } catch (_: IllegalArgumentException) {
+            return problem(400, "invalid_transfer_status", "The transfer status JSON is invalid.")
+        }
+        return when (val result = transferStatusRegistry.update(desktop, request)) {
+            is TransferStatusResult.Accepted -> ApiResponse(200, Json.ok())
+            is TransferStatusResult.Rejected -> problem(result.status, result.code, result.message)
+        }
+    }
+
     private fun bearerToken(headers: Map<String, String>): String? {
         val header = header(headers, "Authorization") ?: return null
         val prefix = "Bearer "
@@ -497,6 +523,7 @@ class ApiController(
         const val PAIR_CONFIRM_PATH = "/api/v1/pair/confirm"
         const val PAIR_CANCEL_PATH = "/api/v1/pair/cancel"
         const val PAIR_REVOKE_PATH = "/api/v1/pair/revoke"
+        const val TRANSFER_STATUS_PATH = "/api/v1/transfer/status"
         const val DEVICE_PATH = "/api/v1/device"
         const val MEDIA_PATH = "/api/v1/media"
         const val MEDIA_SYNC_STATE_PATH = "/api/v1/media/sync/state"
@@ -519,7 +546,7 @@ class ApiController(
 
         companion object {
             private val FIELD_PATTERN = Regex(
-                """"([^"\\]*(?:\\.[^"\\]*)*)"\s*:\s*("([^"\\]*(?:\\.[^"\\]*)*)"|null)""",
+                """"([^"\\]*(?:\\.[^"\\]*)*)"\s*:\s*("([^"\\]*(?:\\.[^"\\]*)*)"|null|-?\d+)""",
             )
 
             fun parse(body: String): JsonFields {
@@ -531,7 +558,11 @@ class ApiController(
                 FIELD_PATTERN.findAll(trimmed).forEach { match ->
                     val key = unescape(match.groupValues[1])
                     val rawValue = match.groupValues[2]
-                    values[key] = if (rawValue == "null") null else unescape(match.groupValues[3])
+                    values[key] = when {
+                        rawValue == "null" -> null
+                        rawValue.startsWith('"') -> unescape(match.groupValues[3])
+                        else -> rawValue
+                    }
                 }
                 return JsonFields(values)
             }

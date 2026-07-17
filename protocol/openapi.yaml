@@ -90,6 +90,35 @@ paths:
           description: Pairing credential revoked
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /transfer/status:
+    post:
+      summary: Publish sanitized, ephemeral save progress for the Android UI
+      description: >
+        The paired Windows client remains the owner of all destination paths and file
+        operations. This endpoint accepts only a display name and bounded progress;
+        full paths, drive letters, and path separators are rejected by the server.
+      operationId: publishTransferStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferStatusUpdate"
+      responses:
+        "200":
+          description: Status accepted or terminal status cleared
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Sequence replay rejected
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /device:
     get:
       summary: Get information about this phone
@@ -508,6 +537,52 @@ components:
       properties:
         pairingSessionId:
           type: string
+    TransferStatusUpdate:
+      type: object
+      required:
+        - taskId
+        - destinationName
+        - completedItems
+        - totalItems
+        - completedBytes
+        - totalBytes
+        - state
+        - sequence
+        - expiresAtEpochMillis
+      properties:
+        taskId:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{1,80}$"
+        destinationName:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: A user-facing folder label, never a full path or drive-qualified name.
+        completedItems:
+          type: integer
+          minimum: 0
+        totalItems:
+          type: integer
+          minimum: 1
+        completedBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        state:
+          type: string
+          enum: [running, paused, completed, cancelled, failed]
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+        expiresAtEpochMillis:
+          type: integer
+          format: int64
+          description: Must be in the future and no more than 120 seconds from receipt.
     DeviceInfo:
       type: object
       required: [id, name, platform, mediaCount]

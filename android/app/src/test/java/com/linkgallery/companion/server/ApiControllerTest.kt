@@ -28,6 +28,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.startCoroutine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -514,6 +515,64 @@ class ApiControllerTest {
     }
 
     @Test
+    fun transferStatusRequiresAuthRejectsReplayAndNeverAcceptsAPath() {
+        var now = 1_000L
+        val registry = TransferStatusRegistry(nowMillis = { now })
+        val authenticator = object : com.linkgallery.companion.pairing.AccessTokenAuthenticator {
+            override fun authenticate(accessToken: String) =
+                if (accessToken == "status-token") {
+                    com.linkgallery.companion.pairing.AuthenticatedPairing("desktop-1", "Studio PC")
+                } else {
+                    null
+                }
+
+            override fun revoke(accessToken: String): Boolean = false
+        }
+        val controller = controller(
+            accessTokenAuthenticator = authenticator,
+            transferStatusRegistry = registry,
+        )
+        fun body(destination: String, sequence: Long) =
+            """{"taskId":"task_1","destinationName":"$destination","completedItems":1,"totalItems":2,"completedBytes":50,"totalBytes":100,"state":"running","sequence":$sequence,"expiresAtEpochMillis":10000}"""
+
+        val unauthenticated = runSuspend {
+            controller.handle("POST", "/api/v1/transfer/status", body = body("Pictures", 1))
+        }
+        val accepted = runSuspend {
+            controller.handle(
+                "POST",
+                "/api/v1/transfer/status",
+                headers = mapOf("Authorization" to "Bearer status-token"),
+                body = body("Pictures", 1),
+            )
+        }
+        val replay = runSuspend {
+            controller.handle(
+                "POST",
+                "/api/v1/transfer/status",
+                headers = mapOf("Authorization" to "Bearer status-token"),
+                body = body("Pictures", 1),
+            )
+        }
+        val pathLeak = runSuspend {
+            controller.handle(
+                "POST",
+                "/api/v1/transfer/status",
+                headers = mapOf("Authorization" to "Bearer status-token"),
+                body = body("C:\\\\Users\\\\Alice", 2),
+            )
+        }
+
+        assertEquals(401, unauthenticated.status)
+        assertEquals(200, accepted.status)
+        assertEquals("Studio PC", registry.current()?.desktopName)
+        assertEquals(409, replay.status)
+        assertEquals(400, pathLeak.status)
+        now = 10_000L
+        assertNull(registry.current())
+    }
+
+    @Test
     fun revokeInvalidatesPairedToken() {
         val pairingManager = PairingManager()
         pairingManager.openPairingWindow(nowMillis = System.currentTimeMillis())
@@ -572,6 +631,7 @@ class ApiControllerTest {
         pairingManager: PairingManager? = null,
         accessTokenAuthenticator: com.linkgallery.companion.pairing.AccessTokenAuthenticator =
             AllowAllAccessTokenAuthenticator,
+        transferStatusRegistry: TransferStatusRegistry = TransferStatusRegistry(),
     ): ApiController = ApiController(
         publicDeviceInfoProvider = PublicDeviceInfoProvider {
             PublicDeviceInfo(
@@ -590,6 +650,7 @@ class ApiControllerTest {
         mediaRepository = repository,
         pairingCoordinator = pairingManager ?: com.linkgallery.companion.pairing.DisabledPairingCoordinator,
         accessTokenAuthenticator = accessTokenAuthenticator,
+        transferStatusRegistry = transferStatusRegistry,
     )
 
     private class FakeMediaRepository(

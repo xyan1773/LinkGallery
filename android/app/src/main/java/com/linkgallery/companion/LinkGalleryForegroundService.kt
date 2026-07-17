@@ -26,8 +26,10 @@ import com.linkgallery.companion.server.AndroidDeviceInfoProvider
 import com.linkgallery.companion.server.AndroidFriendlyDeviceNameProvider
 import com.linkgallery.companion.server.AndroidPublicDeviceInfoProvider
 import com.linkgallery.companion.server.ApiController
+import com.linkgallery.companion.server.ActiveTransferStatus
 import com.linkgallery.companion.server.LinkGalleryHttpServer
 import com.linkgallery.companion.server.RequestLogger
+import com.linkgallery.companion.server.TransferStatusRegistry
 import com.linkgallery.companion.ui.AndroidConnectionEnvironment
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +41,7 @@ data class LinkGalleryServiceState(
     val pairingCode: String? = null,
     val pairedDesktopNames: List<String> = emptyList(),
     val activeDesktopNames: List<String> = emptyList(),
+    val transferStatus: ActiveTransferStatus? = null,
 )
 
 object LinkGalleryServiceRuntime {
@@ -108,6 +111,11 @@ class LinkGalleryForegroundService : Service() {
     private val desktopLastSeen = mutableMapOf<String, Long>()
     private val refreshAdvertising = Runnable { refreshAdvertisingForCurrentNetwork() }
     private val expireDesktopSessions = Runnable { publishState() }
+    private val expireTransferStatus = Runnable {
+        transferStatus = null
+        publishState()
+    }
+    private var transferStatus: ActiveTransferStatus? = null
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = scheduleAdvertisingRefresh()
@@ -139,6 +147,17 @@ class LinkGalleryForegroundService : Service() {
             AndroidMediaStoreDataSource(applicationContext, contentResolver),
             permissionGateway,
         )
+        val transferStatusRegistry = TransferStatusRegistry(onChanged = { status ->
+            mainHandler.post {
+                transferStatus = status
+                mainHandler.removeCallbacks(expireTransferStatus)
+                status?.let {
+                    val delay = (it.expiresAtEpochMillis - System.currentTimeMillis()).coerceAtLeast(1)
+                    mainHandler.postDelayed(expireTransferStatus, delay)
+                }
+                publishState()
+            }
+        })
         httpServer = LinkGalleryHttpServer(
             ApiController(
                 publicDeviceInfoProvider,
@@ -156,6 +175,7 @@ class LinkGalleryForegroundService : Service() {
                         publishState()
                     }
                 },
+                transferStatusRegistry = transferStatusRegistry,
             ),
             logger = RequestLogger { method, target, status, elapsedMilliseconds ->
                 Log.i("LinkGalleryHttp", "$method $target $status ${elapsedMilliseconds}ms")
@@ -262,6 +282,7 @@ class LinkGalleryForegroundService : Service() {
                 .distinct()
                 .sorted(),
             activeDesktopNames = activeDesktopNames,
+            transferStatus = transferStatus,
         )
         if (next == lastPublishedState) return
         lastPublishedState = next
