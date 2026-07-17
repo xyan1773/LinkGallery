@@ -12,6 +12,7 @@
         WindowStyle="SingleBorderWindow"
         ResizeMode="CanResizeWithGrip"
         Loaded="OnWindowLoaded"
+        Deactivated="OnWindowDeactivated"
         Closing="OnWindowClosing"
         SizeChanged="OnWindowSizeChanged">
     <Window.Resources>
@@ -610,6 +611,7 @@
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                                      ScrollViewer.ScrollChanged="OnTimelineScrollChanged"
+                                     PreviewMouseWheel="OnGalleryNavigationStarted"
                                      VirtualizingPanel.CacheLength="1,1"
                                      VirtualizingPanel.CacheLengthUnit="Page"
                                      VirtualizingPanel.IsContainerVirtualizable="True"
@@ -676,7 +678,7 @@
                                                                     PreviewKeyDown="OnMediaTileKeyDown"
                                                                     Loaded="OnTimelineItemLoaded"
                                                                     Unloaded="OnTimelineItemUnloaded"
-                                                                    PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp">
+                                                                    Click="OnMediaTileClick">
                                                                 <Button.Style>
                                                                     <Style TargetType="Button">
                                                                         <Setter Property="BorderBrush" Value="Transparent" />
@@ -870,6 +872,8 @@
                                      ScrollViewer.CanContentScroll="True"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.ScrollChanged="OnAlbumDetailScrollChanged"
+                                     PreviewMouseWheel="OnGalleryNavigationStarted"
                                      VirtualizingPanel.CacheLength="1,1"
                                      VirtualizingPanel.CacheLengthUnit="Page"
                                      VirtualizingPanel.IsContainerVirtualizable="True"
@@ -934,7 +938,7 @@
                                                                 PreviewKeyDown="OnMediaTileKeyDown"
                                                                 Loaded="OnTimelineItemLoaded"
                                                                 Unloaded="OnTimelineItemUnloaded"
-                                                                PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp">
+                                                                Click="OnMediaTileClick">
                                                             <Button.Style>
                                                                 <Style TargetType="Button">
                                                                     <Setter Property="BorderBrush" Value="Transparent" />

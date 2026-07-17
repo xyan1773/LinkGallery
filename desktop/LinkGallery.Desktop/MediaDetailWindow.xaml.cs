@@ -30,7 +30,7 @@ public partial class MediaDetailWindow : Window, IDisposable
     private bool _isUpdatingProgress;
     private bool _isSeeking;
     private bool _isBuffering;
-    private bool _videoFallbackMode;
+    private LoopbackMediaPlaybackServer? _playbackServer;
     private bool _disposed;
 
     public MediaDetailWindow(
@@ -194,7 +194,8 @@ public partial class MediaDetailWindow : Window, IDisposable
         }
         else if (_source is not null && !_source.IsOffline)
         {
-            source = _source.GetOriginalUri(Current.RemoteId);
+            _playbackServer = new LoopbackMediaPlaybackServer(_source, Current);
+            source = _playbackServer.SourceUri;
         }
         else
         {
@@ -203,7 +204,6 @@ public partial class MediaDetailWindow : Window, IDisposable
         }
 
         VideoPlayer.Source = source;
-        _videoFallbackMode = false;
         VideoProgress.Maximum = Math.Max(Current.DurationMilliseconds ?? 0, 1);
         VideoProgress.IsEnabled = false;
         PlayPauseButton.IsEnabled = false;
@@ -411,17 +411,15 @@ public partial class MediaDetailWindow : Window, IDisposable
 
     private void OnPlayPauseClick(object sender, RoutedEventArgs e) => TogglePlayback();
 
+    private void OnVideoVolumeChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> e) => VideoPlayer.Volume = e.NewValue;
+
     private void TogglePlayback()
     {
         if (!_videoState.CanControl)
         {
             VideoStatusText.Text = "视频仍在加载，请稍候…";
-            return;
-        }
-
-        if (_videoFallbackMode)
-        {
-            ToggleFallbackPlayback();
             return;
         }
 
@@ -492,7 +490,12 @@ public partial class MediaDetailWindow : Window, IDisposable
             return;
         }
 
-        MarkVideoFallbackReady();
+        _videoOpenTimer.Stop();
+        _videoState.MarkFailed();
+        var detail = string.IsNullOrWhiteSpace(e.ErrorException?.Message)
+            ? "播放器无法打开该视频格式或视频流。"
+            : e.ErrorException.Message;
+        ShowError($"视频播放失败：{detail}");
     }
 
     private void OnVideoBufferingStarted(object sender, RoutedEventArgs e)
@@ -519,44 +522,15 @@ public partial class MediaDetailWindow : Window, IDisposable
         if (_videoState.Status == VideoPlaybackStatus.Loading &&
             VideoPanel.Visibility == Visibility.Visible)
         {
-            MarkVideoFallbackReady();
+            ShowError("视频加载超时。请检查设备连接后重试。");
         }
-    }
-
-    private void MarkVideoFallbackReady()
-    {
-        _videoOpenTimer.Stop();
-        _videoFallbackMode = true;
-        _videoState.MarkReady();
-        VideoProgress.Maximum = Math.Max(Current.DurationMilliseconds ?? 0, 1);
-        VideoProgress.IsEnabled = true;
-        PlayPauseButton.IsEnabled = true;
-        PlayPauseButton.Content = "播放";
-        VideoStatusText.Text = "已就绪 · 点击播放";
-        UpdateVideoTime(TimeSpan.Zero);
-    }
-
-    private void ToggleFallbackPlayback()
-    {
-        if (_videoState.Status == VideoPlaybackStatus.Playing)
-        {
-            _videoState.Pause();
-            _playbackTimer.Stop();
-            VideoStatusText.Text = "已暂停";
-            PlayPauseButton.Content = "播放";
-            return;
-        }
-
-        _videoState.Play();
-        VideoStatusText.Text = "正在播放";
-        PlayPauseButton.Content = "暂停";
     }
 
     private void OnVideoProgressChanged(
         object sender,
         RoutedPropertyChangedEventArgs<double> e)
     {
-        if (_isUpdatingProgress || (!_videoFallbackMode && !VideoPlayer.NaturalDuration.HasTimeSpan))
+        if (_isUpdatingProgress || !VideoPlayer.NaturalDuration.HasTimeSpan)
         {
             return;
         }
@@ -567,10 +541,7 @@ public partial class MediaDetailWindow : Window, IDisposable
             return;
         }
 
-        if (!_videoFallbackMode)
-        {
-            VideoPlayer.Position = TimeSpan.FromMilliseconds(e.NewValue);
-        }
+        VideoPlayer.Position = TimeSpan.FromMilliseconds(e.NewValue);
         VideoStatusText.Text = _videoState.Status == VideoPlaybackStatus.Playing
             ? "正在定位…"
             : "已定位";
@@ -608,10 +579,7 @@ public partial class MediaDetailWindow : Window, IDisposable
             ? VideoPlayer.Position
             : TimeSpan.FromMilliseconds(VideoProgress.Value);
         _isSeeking = false;
-        if (!_videoFallbackMode)
-        {
-            VideoPlayer.Position = target;
-        }
+        VideoPlayer.Position = target;
         _videoState.CompleteSeek();
 
         _isUpdatingProgress = true;
@@ -663,8 +631,9 @@ public partial class MediaDetailWindow : Window, IDisposable
         _videoOpenTimer.Stop();
         VideoPlayer.Stop();
         VideoPlayer.Source = null;
+        _playbackServer?.Dispose();
+        _playbackServer = null;
         _videoState.Reset();
-        _videoFallbackMode = false;
         _isSeeking = false;
         _isBuffering = false;
         PlayPauseButton.Content = "播放";

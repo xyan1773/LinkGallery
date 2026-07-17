@@ -84,6 +84,7 @@
                     <MediaElement x:Name="VideoPlayer"
                                   LoadedBehavior="Manual"
                                   UnloadedBehavior="Manual"
+                                  Volume="0.8"
                                   ScrubbingEnabled="True"
                                   Stretch="Uniform"
                                   MediaOpened="OnVideoOpened"
@@ -102,6 +103,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Button x:Name="PlayPauseButton"
@@ -125,6 +127,23 @@
                                    VerticalAlignment="Center"
                                    Foreground="#CCFFFFFF"
                                    Text="00:00 / 00:00" />
+                        <StackPanel Grid.Column="3"
+                                    Margin="16,0,0,0"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal">
+                            <TextBlock Margin="0,0,8,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="#CCFFFFFF"
+                                       Text="音量" />
+                            <Slider x:Name="VideoVolume"
+                                    AutomationProperties.AutomationId="VideoVolume"
+                                    Width="88"
+                                    VerticalAlignment="Center"
+                                    Minimum="0"
+                                    Maximum="1"
+                                    Value="0.8"
+                                    ValueChanged="OnVideoVolumeChanged" />
+                        </StackPanel>
                     </Grid>
                 </Grid>
 

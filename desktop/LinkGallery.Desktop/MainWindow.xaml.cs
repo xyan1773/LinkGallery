@@ -119,6 +119,7 @@ public partial class MainWindow : Window, IDisposable
     private bool _isSelectionMode;
     private bool _transferGatePaused;
     private MediaRow? _viewerRow;
+    private MediaDetailWindow? _detailWindow;
     private double _viewerZoom = 1;
     private CancellationTokenSource? _connectionCancellation;
     private CancellationTokenSource? _backgroundSyncCancellation;
@@ -1564,19 +1565,24 @@ public partial class MainWindow : Window, IDisposable
         var mediaItems = TimelineRows.Select(static row => row.Item).ToArray();
         var albums = mediaItems
             .GroupBy(
-                static item => string.IsNullOrWhiteSpace(item.AlbumName)
-                    ? "Unsorted"
-                    : item.AlbumName,
-                StringComparer.CurrentCultureIgnoreCase)
+                static item => string.IsNullOrWhiteSpace(item.AlbumId)
+                    ? $"path:{item.RelativePath?.Trim().Replace('\\', '/').Trim('/').ToLowerInvariant() ?? "__unsorted"}"
+                    : item.AlbumId,
+                StringComparer.Ordinal)
             .OrderByDescending(static group => group.Count())
             .ThenBy(static group => group.Key, StringComparer.CurrentCultureIgnoreCase)
             .Select(group => CreateAlbumRow(
-                group.Key,
+                group.Select(static item => item.AlbumName)
+                    .FirstOrDefault(static name => !string.IsNullOrWhiteSpace(name)) ?? "Unsorted",
                 group.Count(),
                 group.Count(static item => item.Type == MediaType.Image),
                 group.Count(static item => item.Type == MediaType.Video),
                 AlbumCoverBrush(group.Key),
-                "Device"))
+                "Device",
+                group.Select(static item => item.AlbumId)
+                    .FirstOrDefault(static albumId => !string.IsNullOrWhiteSpace(albumId)),
+                group.Select(static item => item.RelativePath)
+                    .FirstOrDefault(static path => !string.IsNullOrWhiteSpace(path))))
             .ToArray();
 
         AlbumRows.Clear();
@@ -1625,7 +1631,7 @@ public partial class MainWindow : Window, IDisposable
                 DeviceAlbumRows.Add(album);
             }
 
-            foreach (var album in albums.Take(3))
+            foreach (var album in albums)
             {
                 SidebarDeviceAlbumRows.Add(album);
             }
@@ -1668,12 +1674,10 @@ public partial class MainWindow : Window, IDisposable
     private async Task RefreshDeviceAlbumsFromIndexAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_activeDeviceId)) return;
-        var indexedAlbums = await _mediaIndex.GetAlbumsAsync(
+        var indexedAlbums = await _mediaIndex.GetAllAlbumsAsync(
             _activeDeviceId,
             searchText: null,
-            limit: 500,
-            offset: 0,
-            cancellationToken);
+            cancellationToken: cancellationToken);
         AlbumRows.Clear();
         DeviceAlbumRows.Clear();
         SidebarDeviceAlbumRows.Clear();
@@ -1690,10 +1694,7 @@ public partial class MainWindow : Window, IDisposable
                 indexed.RelativePath);
             AlbumRows.Add(row);
             DeviceAlbumRows.Add(row);
-            if (SidebarDeviceAlbumRows.Count < 3)
-            {
-                SidebarDeviceAlbumRows.Add(row);
-            }
+            SidebarDeviceAlbumRows.Add(row);
         }
         var visibility = DeviceAlbumRows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         SidebarDeviceAlbumsHeading.Visibility = visibility;
@@ -2553,7 +2554,7 @@ public partial class MainWindow : Window, IDisposable
             "Videos" => new HashSet<MediaType> { MediaType.Video },
             _ => null,
         };
-        var indexedItems = await _mediaIndex.SearchAsync(
+        var indexedItems = await _mediaIndex.SearchAllAsync(
             new MediaIndexQuery(
                 DeviceId: _activeDeviceId,
                 SearchText: null,
@@ -2629,9 +2630,10 @@ public partial class MainWindow : Window, IDisposable
         {
             UpdateSettingsSummary(refreshCacheStats: true);
         }
-        if (page is not ("Gallery" or "AlbumDetail"))
+        if (page is not ("Gallery" or "AlbumDetail") &&
+            InspectorPanel.Visibility == Visibility.Visible)
         {
-            InspectorPanel.Visibility = Visibility.Collapsed;
+            CloseInspector();
         }
 
         BackToAlbumsButton.Visibility = page == "AlbumDetail" ? Visibility.Visible : Visibility.Collapsed;
@@ -2751,7 +2753,7 @@ public partial class MainWindow : Window, IDisposable
         UpdateSelectionUi();
     }
 
-    private void OnMediaTilePreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    private void OnMediaTileClick(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: MediaRow row })
         {
@@ -2763,7 +2765,6 @@ public partial class MainWindow : Window, IDisposable
             row.IsSelected = !row.IsSelected;
 
             UpdateSelectionUi();
-            e.Handled = true;
             return;
         }
 
@@ -2775,7 +2776,6 @@ public partial class MainWindow : Window, IDisposable
         }
 
         UpdateSelectionUi();
-        e.Handled = true;
     }
 
     private void OnMediaTileKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -2903,10 +2903,7 @@ public partial class MainWindow : Window, IDisposable
     private void CloseInspector()
     {
         _isInspectorDragging = false;
-        if (ReferenceEquals(Mouse.Captured, InspectorPanel))
-        {
-            Mouse.Capture(null);
-        }
+        Mouse.Capture(null);
 
         ResetInspectorTranslation();
         InspectorPanel.Visibility = Visibility.Collapsed;
@@ -2916,6 +2913,29 @@ public partial class MainWindow : Window, IDisposable
         }
 
         ClearSelectedRows();
+    }
+
+    private void OnWindowDeactivated(object? sender, EventArgs e)
+    {
+        _isInspectorDragging = false;
+        Mouse.Capture(null);
+        AnimateInspectorBack();
+    }
+
+    private void OnGalleryNavigationStarted(object sender, MouseWheelEventArgs e)
+    {
+        if (InspectorPanel.Visibility == Visibility.Visible)
+        {
+            CloseInspector();
+        }
+    }
+
+    private void OnAlbumDetailScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.VerticalChange != 0 && InspectorPanel.Visibility == Visibility.Visible)
+        {
+            CloseInspector();
+        }
     }
 
     private void OnInspectorClickAway(object sender, MouseButtonEventArgs e)
@@ -3126,82 +3146,36 @@ public partial class MainWindow : Window, IDisposable
         OpenMediaViewer(selected);
     }
 
-    private async void OpenMediaViewer(MediaRow row)
+    private void OpenMediaViewer(MediaRow row)
     {
-        // A WPF double-click is raised before the second mouse-up. Release the
-        // recycled media tile so the newly-visible overlay receives input now,
-        // rather than only after Windows deactivates and reactivates the window.
         Mouse.Capture(null);
-        _viewerPreviewCancellation?.Cancel();
-        _viewerPreviewCancellation?.Dispose();
-        _viewerPreviewCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            _connectionCancellation?.Token ?? CancellationToken.None);
-        var cancellationToken = _viewerPreviewCancellation.Token;
-        _viewerRow = row;
-        _viewerZoom = 1;
-        ViewerPhotoScale.ScaleX = 1;
-        ViewerPhotoScale.ScaleY = 1;
-        ViewerPhoto.Background = Brushes.Black;
-        ViewerImage.Source = row.Thumbnail;
-        ViewerImage.Visibility = row.Thumbnail is null ? Visibility.Collapsed : Visibility.Visible;
-        ViewerNameText.Text = row.Item.FileName;
-        ViewerMetaText.Text = row.Item.TakenAt.LocalDateTime.ToString("d MMMM yyyy · HH:mm", CultureInfo.InvariantCulture);
-        ViewerOverlay.Visibility = Visibility.Visible;
-        ViewerPreviewProgress.Visibility = Visibility.Visible;
-        ViewerOverlay.Focus();
-        ViewerCloseButton.Focus();
-
-        // Present the already-decoded timeline thumbnail before cache or network IO.
-        await Dispatcher.Yield(DispatcherPriority.Render);
-
-        try
+        var rows = (_currentPage == "AlbumDetail" ? AlbumDetailRows : TimelineRows).ToArray();
+        var selectedIndex = Array.FindIndex(rows, candidate => ReferenceEquals(candidate, row));
+        if (selectedIndex < 0)
         {
-            var previewKey = DecodedThumbnailKey.Create(row.Item, ViewerPreviewSize);
-            if (!_decodedPreviews.TryGetValue(previewKey, out var preview))
-            {
-                preview = await TryLoadCachedThumbnailAsync(
-                    row.Item,
-                    ViewerPreviewSize,
-                    cancellationToken);
-                if (preview is null && _source is { IsOffline: false } source)
-                {
-                    await using var stream = await source.OpenThumbnailAsync(
-                        row.Item.RemoteId,
-                        ViewerPreviewSize,
-                        cancellationToken);
-                    preview = await Task.Run(
-                        () => DecodeBitmap(stream, ViewerPreviewSize, row.Item),
-                        cancellationToken);
-                }
-
-                if (preview is not null)
-                {
-                    RememberDecodedPreview(previewKey, preview);
-                }
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (preview is not null && ReferenceEquals(_viewerRow, row))
-            {
-                ViewerImage.Source = preview;
-                ViewerImage.Visibility = Visibility.Visible;
-            }
+            return;
         }
-        catch (OperationCanceledException)
+
+        _detailWindow?.Close();
+        var detail = new MediaDetailWindow(
+            rows.Select(static candidate => candidate.Item).ToArray(),
+            selectedIndex,
+            _source,
+            _localCopies,
+            _thumbnailCache)
         {
-        }
-        catch (Exception exception) when (
-            ThumbnailLoadFailurePolicy.KeepsPlaceholder(exception) ||
-            exception is IOException or UnauthorizedAccessException or NotSupportedException)
+            Owner = this,
+        };
+        _detailWindow = detail;
+        detail.Closed += OnMediaDetailClosed;
+        detail.Show();
+    }
+
+    private void OnMediaDetailClosed(object? sender, EventArgs e)
+    {
+        if (ReferenceEquals(_detailWindow, sender))
         {
-            // The already-visible timeline thumbnail remains as the offline fallback.
-        }
-        finally
-        {
-            if (ReferenceEquals(_viewerRow, row))
-            {
-                ViewerPreviewProgress.Visibility = Visibility.Collapsed;
-            }
+            _detailWindow = null;
         }
     }
 
@@ -3256,6 +3230,11 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnTimelineScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        if (e.VerticalChange != 0 && InspectorPanel.Visibility == Visibility.Visible)
+        {
+            CloseInspector();
+        }
+
         if (e.VerticalChange <= 0 ||
             e.VerticalOffset < e.ExtentHeight - e.ViewportHeight - (e.ViewportHeight * 1.5))
         {
@@ -3933,6 +3912,8 @@ public partial class MainWindow : Window, IDisposable
 
     private void Disconnect(bool clearTimeline)
     {
+        _detailWindow?.Close();
+        _detailWindow = null;
         _deviceRefreshTimer.Stop();
         _transferSourceResolver.Clear();
         _backgroundSyncCancellation?.Cancel();
