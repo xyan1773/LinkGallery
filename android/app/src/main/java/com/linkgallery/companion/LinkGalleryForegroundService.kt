@@ -9,7 +9,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.linkgallery.companion.discovery.AndroidNsdServiceRegistrar
@@ -36,6 +38,7 @@ data class LinkGalleryServiceState(
     val addresses: List<String> = emptyList(),
     val pairingCode: String? = null,
     val pairedDesktopNames: List<String> = emptyList(),
+    val activeDesktopNames: List<String> = emptyList(),
 )
 
 object LinkGalleryServiceRuntime {
@@ -100,10 +103,15 @@ class LinkGalleryForegroundService : Service() {
     private var advertisedPort: Int? = null
     private var cachedAddresses: List<String> = emptyList()
     private var lastPublishedState: LinkGalleryServiceState? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val reconnectPolicy = ServiceReconnectPolicy()
+    private val desktopLastSeen = mutableMapOf<String, Long>()
+    private val refreshAdvertising = Runnable { refreshAdvertisingForCurrentNetwork() }
+    private val expireDesktopSessions = Runnable { publishState() }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = restartAdvertising(refreshAddresses = true)
-        override fun onLost(network: Network) = restartAdvertising(refreshAddresses = true)
+        override fun onAvailable(network: Network) = scheduleAdvertisingRefresh()
+        override fun onLost(network: Network) = scheduleAdvertisingRefresh()
     }
 
     override fun onCreate() {
@@ -142,6 +150,12 @@ class LinkGalleryForegroundService : Service() {
                 repository,
                 pairingManager,
                 pairingManager,
+                onAuthenticatedAccess = { desktop ->
+                    mainHandler.post {
+                        desktopLastSeen[desktop.desktopId] = System.currentTimeMillis()
+                        publishState()
+                    }
+                },
             ),
             logger = RequestLogger { method, target, status, elapsedMilliseconds ->
                 Log.i("LinkGalleryHttp", "$method $target $status ${elapsedMilliseconds}ms")
@@ -152,7 +166,7 @@ class LinkGalleryForegroundService : Service() {
         publicDeviceInfoProvider.rotateInstanceId()
         cachedAddresses = AndroidConnectionEnvironment.lanIpv4Addresses()
         httpServer.start()
-        restartAdvertising(refreshAddresses = false)
+        refreshAdvertisingForCurrentNetwork()
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         connectivityManager.registerDefaultNetworkCallback(networkCallback)
         publishState()
@@ -170,8 +184,8 @@ class LinkGalleryForegroundService : Service() {
 
     override fun onDestroy() {
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
-        udpDiscoveryResponder.stop()
-        nsdRegistrar.unregister()
+        mainHandler.removeCallbacksAndMessages(null)
+        stopAdvertising()
         httpServer.stop()
         advertisedPort = null
         LinkGalleryServiceRuntime.detach(this)
@@ -190,15 +204,26 @@ class LinkGalleryForegroundService : Service() {
 
     fun activePairingCode(): String? = pairingManager.activeVerificationCode()
 
-    private fun restartAdvertising(refreshAddresses: Boolean = false) {
+    private fun scheduleAdvertisingRefresh() {
+        mainHandler.removeCallbacks(refreshAdvertising)
+        mainHandler.postDelayed(refreshAdvertising, NETWORK_SETTLE_DELAY_MILLIS)
+    }
+
+    private fun refreshAdvertisingForCurrentNetwork() {
+        cachedAddresses = AndroidConnectionEnvironment.lanIpv4Addresses()
+        if (cachedAddresses.isEmpty()) {
+            stopAdvertising()
+            publishState()
+            mainHandler.postDelayed(refreshAdvertising, reconnectPolicy.nextDelayMillis())
+            return
+        }
+        reconnectPolicy.reset()
+        restartAdvertising()
+    }
+
+    private fun restartAdvertising() {
         val port = httpServer.localPort ?: return
-        if (advertisedPort != null) {
-            udpDiscoveryResponder.stop()
-            nsdRegistrar.unregister()
-        }
-        if (refreshAddresses) {
-            cachedAddresses = AndroidConnectionEnvironment.lanIpv4Addresses()
-        }
+        stopAdvertising()
         publicDeviceInfoProvider.rotateInstanceId()
         nsdRegistrar.register(port)
         udpDiscoveryResponder.start(port)
@@ -206,17 +231,37 @@ class LinkGalleryForegroundService : Service() {
         publishState()
     }
 
+    private fun stopAdvertising() {
+        if (advertisedPort == null) return
+        udpDiscoveryResponder.stop()
+        nsdRegistrar.unregister()
+        advertisedPort = null
+    }
+
     private fun publishState() {
         if (!::pairingManager.isInitialized) return
+        val now = System.currentTimeMillis()
+        desktopLastSeen.entries.removeAll { now - it.value >= ACTIVE_SESSION_MILLIS }
+        val credentials = pairingManager.pairedCredentials()
+        val activeDesktopNames = credentials
+            .filter { it.desktopId in desktopLastSeen }
+            .map { it.desktopName }
+            .distinct()
+            .sorted()
+        mainHandler.removeCallbacks(expireDesktopSessions)
+        desktopLastSeen.values.minOfOrNull { it + ACTIVE_SESSION_MILLIS - now }
+            ?.coerceAtLeast(1)
+            ?.let { mainHandler.postDelayed(expireDesktopSessions, it) }
         val next = LinkGalleryServiceState(
             running = ::httpServer.isInitialized && httpServer.isRunning,
             port = if (::httpServer.isInitialized) httpServer.localPort else null,
             addresses = cachedAddresses,
             pairingCode = pairingManager.activeVerificationCode(),
-            pairedDesktopNames = pairingManager.pairedCredentials()
+            pairedDesktopNames = credentials
                 .map { it.desktopName }
                 .distinct()
                 .sorted(),
+            activeDesktopNames = activeDesktopNames,
         )
         if (next == lastPublishedState) return
         lastPublishedState = next
@@ -249,8 +294,8 @@ class LinkGalleryForegroundService : Service() {
         )
         val detail = when {
             !state.running -> "Starting read-only media sharing"
-            state.pairedDesktopNames.isNotEmpty() ->
-                "Available to ${state.pairedDesktopNames.joinToString()}"
+            state.activeDesktopNames.isNotEmpty() ->
+                "Sharing with ${state.activeDesktopNames.joinToString()}"
             else -> "Read-only media sharing is active"
         }
         return Notification.Builder(this, CHANNEL_ID)
@@ -273,5 +318,7 @@ class LinkGalleryForegroundService : Service() {
         const val CHANNEL_ID = "linkgallery-media-service"
         const val NOTIFICATION_ID = 39570
         const val ACTION_STOP = "com.linkgallery.companion.STOP_SERVICE"
+        const val NETWORK_SETTLE_DELAY_MILLIS = 350L
+        const val ACTIVE_SESSION_MILLIS = 90_000L
     }
 }

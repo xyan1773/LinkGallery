@@ -12,6 +12,7 @@ import com.linkgallery.companion.media.MediaThumbnailResult
 import com.linkgallery.companion.media.MediaSyncStateResult
 import com.linkgallery.companion.media.MediaType
 import com.linkgallery.companion.pairing.AccessTokenAuthenticator
+import com.linkgallery.companion.pairing.AuthenticatedPairing
 import com.linkgallery.companion.pairing.AllowAllAccessTokenAuthenticator
 import com.linkgallery.companion.pairing.DisabledPairingCoordinator
 import com.linkgallery.companion.pairing.PairCancelRequest
@@ -31,6 +32,7 @@ class ApiController(
     private val mediaRepository: MediaRepository,
     private val pairingCoordinator: PairingCoordinator = DisabledPairingCoordinator,
     private val accessTokenAuthenticator: AccessTokenAuthenticator = RejectingAccessTokenAuthenticator,
+    private val onAuthenticatedAccess: (AuthenticatedPairing) -> Unit = {},
 ) {
     suspend fun handle(
         method: String,
@@ -50,9 +52,11 @@ class ApiController(
             if (bearerToken == null) {
                 return problem(401, "authentication_required", "Authorization: Bearer token is required.")
             }
-            if (accessTokenAuthenticator.authenticate(bearerToken) == null) {
+            val authenticated = accessTokenAuthenticator.authenticate(bearerToken)
+            if (authenticated == null) {
                 return problem(403, "authentication_failed", "The access token is invalid or revoked.")
             }
+            onAuthenticatedAccess(authenticated)
         }
 
         return when (path) {
