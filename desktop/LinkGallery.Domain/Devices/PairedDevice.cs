@@ -27,6 +27,7 @@ public sealed class PairedDevice
 {
     public required string DeviceId { get; init; }
     public required string DisplayName { get; set; }
+    public bool IsDisplayNameCustom { get; set; }
     public string? Manufacturer { get; set; }
     public string? Model { get; set; }
     public required string IdentityPublicKey { get; init; }

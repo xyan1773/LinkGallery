@@ -31,6 +31,7 @@ public sealed class ThumbnailDiskCache : IDisposable
     private readonly long _maximumBytes;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _entryLocks = new();
     private readonly SemaphoreSlim _maintenanceLock = new(1, 1);
+    private long _estimatedBytes;
 
     public ThumbnailDiskCache(string directory, long maximumBytes)
     {
@@ -39,6 +40,8 @@ public sealed class ThumbnailDiskCache : IDisposable
         _directory = Path.GetFullPath(directory);
         _maximumBytes = maximumBytes;
         Directory.CreateDirectory(_directory);
+        _estimatedBytes = Directory.EnumerateFiles(_directory, "*.jpg")
+            .Sum(static path => new FileInfo(path).Length);
     }
 
     public long MaximumBytes => _maximumBytes;
@@ -94,7 +97,11 @@ public sealed class ThumbnailDiskCache : IDisposable
                 }
             }
 
-            await EnforceLimitAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Add(ref _estimatedBytes, new FileInfo(path).Length);
+            if (Volatile.Read(ref _estimatedBytes) > _maximumBytes)
+            {
+                await EnforceLimitAsync(cancellationToken).ConfigureAwait(false);
+            }
             return OpenRead(path);
         }
         finally
@@ -113,6 +120,7 @@ public sealed class ThumbnailDiskCache : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 File.Delete(file);
             }
+            Volatile.Write(ref _estimatedBytes, 0);
         }
         finally
         {
@@ -136,14 +144,20 @@ public sealed class ThumbnailDiskCache : IDisposable
         await _maintenanceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (Volatile.Read(ref _estimatedBytes) <= _maximumBytes)
+            {
+                return;
+            }
+
             var files = Directory.EnumerateFiles(_directory, "*.jpg")
                 .Select(static path => new FileInfo(path))
                 .OrderBy(static file => file.LastAccessTimeUtc)
                 .ToArray();
             var total = files.Sum(static file => file.Length);
+            var targetBytes = Math.Max(0, (long)(_maximumBytes * 0.9));
             foreach (var file in files)
             {
-                if (total <= _maximumBytes)
+                if (total <= targetBytes)
                 {
                     break;
                 }
@@ -152,6 +166,7 @@ public sealed class ThumbnailDiskCache : IDisposable
                 total -= file.Length;
                 file.Delete();
             }
+            Volatile.Write(ref _estimatedBytes, total);
         }
         finally
         {

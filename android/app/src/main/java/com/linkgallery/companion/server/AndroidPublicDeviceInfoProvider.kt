@@ -8,6 +8,7 @@ import java.util.UUID
 class AndroidPublicDeviceInfoProvider(
     private val context: Context,
     private val identityProvider: DeviceIdentityProvider,
+    private val friendlyDeviceNameProvider: AndroidFriendlyDeviceNameProvider,
     private val apiVersion: Int = 1,
     private val pairingAvailableProvider: () -> Boolean = { false },
 ) : PublicDeviceInfoProvider {
@@ -21,7 +22,7 @@ class AndroidPublicDeviceInfoProvider(
         val identity = identityProvider.getOrCreate()
         return PublicDeviceInfo(
             deviceId = identity.deviceId,
-            deviceName = Build.MODEL.ifBlank { "Android device" },
+            deviceName = friendlyDeviceNameProvider.get(),
             manufacturer = Build.MANUFACTURER.ifBlank { "Android" },
             model = Build.MODEL.ifBlank { "Android device" },
             apiVersion = apiVersion,

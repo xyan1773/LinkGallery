@@ -43,7 +43,7 @@ public sealed class SqlitePairedDeviceStoreTests
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT
-                (SELECT COUNT(*) FROM device_schema_migrations WHERE version = 1),
+                (SELECT COUNT(*) FROM device_schema_migrations WHERE version IN (1, 2)),
                 (SELECT COUNT(*) FROM sqlite_master
                  WHERE type = 'table' AND name IN ('paired_devices', 'device_addresses'));
             """;
@@ -93,6 +93,60 @@ public sealed class SqlitePairedDeviceStoreTests
         Assert.AreEqual("credential-phone-1", stored.CredentialKey);
         CollectionAssert.Contains(columns, "credential_key");
         CollectionAssert.DoesNotContain(columns, "access_token");
+    }
+
+    [TestMethod]
+    public async Task PersistsUserDefinedDeviceNameFlag()
+    {
+        using var store = new SqlitePairedDeviceStore(_databasePath);
+        var device = Device(status: PairedDeviceStatus.Offline);
+        device.DisplayName = "客厅手机";
+        device.IsDisplayNameCustom = true;
+
+        await store.UpsertPairedDeviceAsync(device, CancellationToken.None);
+
+        var stored = (await store.ListPairedDevicesAsync(CancellationToken.None)).Single();
+        Assert.AreEqual("客厅手机", stored.DisplayName);
+        Assert.IsTrue(stored.IsDisplayNameCustom);
+    }
+
+    [TestMethod]
+    public async Task MigratesExistingDatabaseWithDeviceNameFlagDefaultingToAutomatic()
+    {
+        await using (var connection = new SqliteConnection($"Data Source={_databasePath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE paired_devices (
+                    device_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    manufacturer TEXT NULL,
+                    model TEXT NULL,
+                    identity_public_key TEXT NOT NULL,
+                    certificate_fingerprint TEXT NOT NULL,
+                    credential_key TEXT NOT NULL,
+                    last_host TEXT NULL,
+                    last_port INTEGER NULL,
+                    last_instance_id TEXT NULL,
+                    last_seen_at TEXT NULL,
+                    last_connected_at TEXT NULL,
+                    auto_connect INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'offline',
+                    created_at TEXT NOT NULL
+                );
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        using var store = new SqlitePairedDeviceStore(_databasePath);
+        await store.InitializeAsync();
+
+        await using var migrated = new SqliteConnection($"Data Source={_databasePath}");
+        await migrated.OpenAsync();
+        await using var inspect = migrated.CreateCommand();
+        inspect.CommandText = "SELECT COUNT(*) FROM pragma_table_info('paired_devices') WHERE name = 'display_name_custom';";
+        Assert.AreEqual(1L, (long)(await inspect.ExecuteScalarAsync())!);
     }
 
     [TestMethod]

@@ -17,6 +17,7 @@ namespace LinkGallery.Desktop;
 public partial class MediaDetailWindow : Window, IDisposable
 {
     private static readonly ThumbnailSize OfflinePreviewSize = new(320, 240);
+    private static readonly ThumbnailSize ViewerPreviewSize = new(1600, 1600);
     private readonly IReadOnlyList<MediaItem> _items;
     private readonly CachingReadOnlyMediaSource? _source;
     private readonly LocalCopyCatalog _localCopies;
@@ -86,7 +87,7 @@ public partial class MediaDetailWindow : Window, IDisposable
         PhotoImage.Source = null;
         PhotoScale.ScaleX = PhotoScale.ScaleY = 1;
         SetPanel(LoadingPanel);
-        LoadingText.Text = "正在加载…";
+        LoadingText.Text = "正在准备高质量预览…";
         UpdateMetadata();
 
         try
@@ -113,20 +114,22 @@ public partial class MediaDetailWindow : Window, IDisposable
 
     private async Task LoadPhotoAsync(LocalCopy? localCopy, CancellationToken cancellationToken)
     {
-        await using var content = localCopy is not null
-            ? new FileStream(
-                localCopy.LocalPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                81920,
-                FileOptions.Asynchronous)
-            : await OpenRemoteOrCachedPhotoAsync(cancellationToken);
-
-        await using var memory = new MemoryStream();
-        await content.CopyToAsync(memory, cancellationToken);
-        var bytes = memory.ToArray();
-        var bitmap = await Task.Run(() => DecodePhoto(bytes), cancellationToken);
+        BitmapSource bitmap;
+        if (localCopy is not null)
+        {
+            bitmap = await Task.Run(
+                () => DecodeLocalPhoto(localCopy.LocalPath, ViewerPreviewSize.Width),
+                cancellationToken);
+        }
+        else
+        {
+            await using var content = await OpenRemoteOrCachedPhotoAsync(
+                ViewerPreviewSize,
+                cancellationToken);
+            bitmap = await Task.Run(
+                () => DecodePreview(content, ViewerPreviewSize.Width),
+                cancellationToken);
+        }
         cancellationToken.ThrowIfCancellationRequested();
 
         PhotoImage.Source = bitmap;
@@ -134,36 +137,53 @@ public partial class MediaDetailWindow : Window, IDisposable
         SetZoomControls(Visibility.Visible);
     }
 
-    private async Task<Stream> OpenRemoteOrCachedPhotoAsync(CancellationToken cancellationToken)
+    private async Task<Stream> OpenRemoteOrCachedPhotoAsync(
+        ThumbnailSize size,
+        CancellationToken cancellationToken)
     {
         if (_source is null)
         {
-            return await OpenCachedThumbnailOrThrowAsync(cancellationToken);
+            return await OpenCachedThumbnailOrThrowAsync(size, cancellationToken);
         }
 
         if (_source.IsOffline)
         {
-            return await OpenCachedThumbnailOrThrowAsync(cancellationToken);
+            return await OpenCachedThumbnailOrThrowAsync(size, cancellationToken);
         }
 
         try
         {
-            return await _source.OpenOriginalAsync(Current.RemoteId, 0, cancellationToken);
+            // MediaStore performs the display-sized decode on Android. The desktop
+            // never downloads or expands the source-resolution original for preview.
+            return await _source.OpenThumbnailAsync(Current.RemoteId, size, cancellationToken);
         }
         catch (HttpRequestException) when (
+            _thumbnailCache.IsThumbnailCached(Current, size) ||
             _thumbnailCache.IsThumbnailCached(Current, OfflinePreviewSize))
         {
-            return await OpenCachedThumbnailOrThrowAsync(cancellationToken);
+            return await OpenCachedThumbnailOrThrowAsync(size, cancellationToken);
         }
     }
 
     private async Task<Stream> OpenCachedThumbnailOrThrowAsync(
-        CancellationToken cancellationToken) =>
-        await _thumbnailCache.OpenCachedThumbnailAsync(
+        ThumbnailSize size,
+        CancellationToken cancellationToken)
+    {
+        var cached = await _thumbnailCache.OpenCachedThumbnailAsync(
+            Current,
+            size,
+            cancellationToken);
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        cached = await _thumbnailCache.OpenCachedThumbnailAsync(
             Current,
             OfflinePreviewSize,
-            cancellationToken) ??
-        throw new IOException("设备离线，且此照片只有元数据。");
+            cancellationToken);
+        return cached ?? throw new IOException("设备离线，且此照片只有元数据。");
+    }
 
     private void LoadVideo(LocalCopy? localCopy)
     {
@@ -229,7 +249,9 @@ public partial class MediaDetailWindow : Window, IDisposable
             return;
         }
 
-        var cached = _thumbnailCache.IsThumbnailCached(Current, OfflinePreviewSize);
+        var cached =
+            _thumbnailCache.IsThumbnailCached(Current, ViewerPreviewSize) ||
+            _thumbnailCache.IsThumbnailCached(Current, OfflinePreviewSize);
         AvailabilityText.Text = cached ? "有缓存（缩略图）" : "仅元数据";
         if (_source is not null && !_source.IsOffline)
         {
@@ -237,14 +259,49 @@ public partial class MediaDetailWindow : Window, IDisposable
         }
     }
 
-    private static BitmapSource DecodePhoto(byte[] bytes)
+    private static BitmapSource DecodeLocalPhoto(string path, int decodePixelWidth)
     {
-        using var stream = new MemoryStream(bytes, writable: false);
-        var frame = BitmapFrame.Create(
-            stream,
-            BitmapCreateOptions.PreservePixelFormat,
-            BitmapCacheOption.OnLoad);
-        var orientation = ReadOrientation(frame.Metadata as BitmapMetadata);
+        ushort orientation;
+        using (var metadataStream = new FileStream(
+                   path,
+                   FileMode.Open,
+                   FileAccess.Read,
+                   FileShare.Read,
+                   4096,
+                   FileOptions.SequentialScan))
+        {
+            var frame = BitmapFrame.Create(
+                metadataStream,
+                BitmapCreateOptions.DelayCreation | BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnDemand);
+            orientation = ReadOrientation(frame.Metadata as BitmapMetadata);
+        }
+
+        using var imageStream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            81920,
+            FileOptions.SequentialScan);
+        return ApplyOrientation(DecodePreview(imageStream, decodePixelWidth), orientation);
+    }
+
+    private static BitmapImage DecodePreview(Stream stream, int decodePixelWidth)
+    {
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+        image.DecodePixelWidth = decodePixelWidth;
+        image.StreamSource = stream;
+        image.EndInit();
+        image.Freeze();
+        return image;
+    }
+
+    private static BitmapSource ApplyOrientation(BitmapSource frame, ushort orientation)
+    {
         BitmapSource result = orientation switch
         {
             2 => Transform(frame, new ScaleTransform(-1, 1)),

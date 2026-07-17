@@ -269,7 +269,9 @@ public sealed class CachingReadOnlyMediaSource :
         var types = query.Types is null
             ? ""
             : string.Join(',', query.Types.OrderBy(static type => type));
-        return $"{query.Cursor ?? "<first>"}|{query.Limit}|{types}";
+        var album = Convert.ToBase64String(
+            Encoding.UTF8.GetBytes(query.AlbumId ?? string.Empty));
+        return $"{query.Cursor ?? "<first>"}|{query.Limit}|{types}|album:{album}";
     }
 
     private static bool IsConnectionFailure(Exception exception) =>

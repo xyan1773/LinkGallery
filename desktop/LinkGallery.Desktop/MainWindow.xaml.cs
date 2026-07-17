@@ -11,6 +11,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using LinkGallery.Application.Media;
@@ -35,9 +36,19 @@ namespace LinkGallery.Desktop;
 public partial class MainWindow : Window, IDisposable
 {
     private const int PageSize = 100;
-    private const int DecodedThumbnailCapacity = 128;
+    private const int MediaRowsPerVisualGroup = 40;
+    private const int DecodedThumbnailCapacity = 192;
+    private const int DecodedPreviewCapacity = 8;
     private static readonly JsonSerializerOptions PreferencesJsonOptions = new() { WriteIndented = true };
+    private static readonly Dictionary<string, string> KnownDeviceMarketingNames =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["24129PN74C"] = "Xiaomi 15",
+            ["24129PN74G"] = "Xiaomi 15",
+            ["24129PN74I"] = "Xiaomi 15",
+        };
     private static readonly ThumbnailSize TimelineThumbnailSize = new(256, 256);
+    private static readonly ThumbnailSize ViewerPreviewSize = new(1280, 1280);
     private enum UiLanguage
     {
         English,
@@ -58,6 +69,12 @@ public partial class MainWindow : Window, IDisposable
         public string? CloseBehavior { get; set; }
 
         public string? DesktopId { get; set; }
+
+        public bool? PreserveAlbumFolders { get; set; }
+
+        public bool? ReduceMotion { get; set; }
+
+        public bool? NavigationHidden { get; set; }
     }
 
     private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
@@ -65,6 +82,8 @@ public partial class MainWindow : Window, IDisposable
     private readonly SemaphoreSlim _queryGate = new(1, 1);
     private readonly Dictionary<DecodedThumbnailKey, ImageSource> _decodedThumbnails = [];
     private readonly Queue<DecodedThumbnailKey> _decodedThumbnailOrder = [];
+    private readonly Dictionary<DecodedThumbnailKey, ImageSource> _decodedPreviews = [];
+    private readonly Queue<DecodedThumbnailKey> _decodedPreviewOrder = [];
     private readonly SqliteMediaIndex _mediaIndex;
     private readonly BackgroundIndexGate _backgroundIndexGate = new();
     private readonly IncrementalMediaIndexSynchronizer _synchronizer;
@@ -83,9 +102,15 @@ public partial class MainWindow : Window, IDisposable
     private readonly PersistentTransferCoordinator _transferCoordinator;
     private readonly DispatcherTimer _transferRefreshTimer;
     private readonly DispatcherTimer _toastTimer;
+    private readonly DispatcherTimer _deviceRefreshTimer;
+    private Task? _thumbnailStatsRefresh;
+    private (int Count, long Bytes)? _cachedThumbnailStats;
     private string _downloadDirectory;
     private bool _preserveAlbumFolders = true;
     private bool _reduceMotion;
+    private bool _isNavigationHidden;
+    private bool _isNavigationPreviewOpen;
+    private int _navigationAnimationVersion;
     private UiLanguage _language = UiLanguage.English;
     private CloseBehavior _closeBehavior = CloseBehavior.AskEveryTime;
     private string _desktopId = Guid.NewGuid().ToString("N");
@@ -98,17 +123,25 @@ public partial class MainWindow : Window, IDisposable
     private CancellationTokenSource? _connectionCancellation;
     private CancellationTokenSource? _backgroundSyncCancellation;
     private CancellationTokenSource? _queryCancellation;
+    private CancellationTokenSource? _viewerPreviewCancellation;
     private CachingReadOnlyMediaSource? _source;
     private string? _activeDeviceId;
     private string? _activeAccessToken;
     private string? _pendingPairingCode;
     private PairedDevice? _activePairedDevice;
+    private PairedDevice? _savedDeviceCard;
+    private LinkGallery.Domain.Devices.Device? _connectedDevice;
     private Uri? _activeApiAddress;
+    private bool _isDeviceOnline;
+    private bool _deviceRefreshInFlight;
+    private bool _isInspectorDragging;
+    private System.Windows.Point _inspectorDragStart;
     private string? _remoteNextCursor;
     private bool _hasMoreRemoteItems;
     private bool _hasMoreIndexedItems;
     private int _indexedOffset;
     private bool _isLoadingPage;
+    private bool _suppressConnectionModal;
     private string _currentPage = "Albums";
     private readonly HashSet<string> _loadedRemoteIds = new(StringComparer.Ordinal);
     private bool _disposed;
@@ -148,7 +181,26 @@ public partial class MainWindow : Window, IDisposable
             Interval = TimeSpan.FromMilliseconds(1800),
         };
         _toastTimer.Tick += OnToastTimerTick;
+        _deviceRefreshTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(15),
+        };
+        _deviceRefreshTimer.Tick += OnDeviceRefreshTick;
         InitializeComponent();
+        ClampWindowToWorkArea();
+        AddHandler(
+            PreviewMouseLeftButtonDownEvent,
+            new MouseButtonEventHandler(OnButtonPressStarted),
+            handledEventsToo: true);
+        AddHandler(
+            PreviewMouseLeftButtonDownEvent,
+            new MouseButtonEventHandler(OnInspectorClickAway),
+            handledEventsToo: true);
+        AddHandler(
+            PreviewMouseLeftButtonUpEvent,
+            new MouseButtonEventHandler(OnButtonPressEnded),
+            handledEventsToo: true);
+        ApplyMotionPreference();
         DataContext = this;
         PopulateDateFilters();
         _downloadDirectory = ResolveDefaultDownloadDirectory();
@@ -156,11 +208,76 @@ public partial class MainWindow : Window, IDisposable
         UpdateSwitchVisuals();
         UpdateSelectionUi();
         ApplyLanguage();
+        ApplyResponsiveLayout();
     }
 
     private bool IsChinese => _language == UiLanguage.Chinese;
 
     private string L(string english, string chinese) => IsChinese ? chinese : english;
+
+    private static string ResolveAutomaticDeviceName(
+        string? reportedName,
+        string? model,
+        string? manufacturer = null)
+    {
+        foreach (var candidate in new[] { model, reportedName })
+        {
+            if (!string.IsNullOrWhiteSpace(candidate) &&
+                KnownDeviceMarketingNames.TryGetValue(candidate.Trim(), out var marketingName))
+            {
+                return marketingName;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(reportedName))
+        {
+            return reportedName.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            return model.Trim();
+        }
+
+        return string.IsNullOrWhiteSpace(manufacturer)
+            ? "Android device"
+            : $"{manufacturer.Trim()} device";
+    }
+
+    private static string ResolveEffectiveDeviceName(
+        LinkGallery.Domain.Devices.Device? connected,
+        PairedDevice? saved)
+    {
+        if (saved?.IsDisplayNameCustom == true)
+        {
+            return saved.DisplayName;
+        }
+
+        return ResolveAutomaticDeviceName(
+            connected?.Name ?? saved?.DisplayName,
+            connected?.Model ?? saved?.Model,
+            saved?.Manufacturer);
+    }
+
+    private async Task NormalizeSavedDeviceNamesAsync(
+        IEnumerable<PairedDevice> devices,
+        CancellationToken cancellationToken)
+    {
+        foreach (var device in devices.Where(static device => !device.IsDisplayNameCustom))
+        {
+            var resolved = ResolveAutomaticDeviceName(
+                device.DisplayName,
+                device.Model,
+                device.Manufacturer);
+            if (string.Equals(device.DisplayName, resolved, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            device.DisplayName = resolved;
+            await _pairedDeviceStore.UpsertPairedDeviceAsync(device, cancellationToken);
+        }
+    }
 
     private void PopulateDateFilters()
     {
@@ -237,6 +354,9 @@ public partial class MainWindow : Window, IDisposable
         SidebarMyAlbumsEmptyText.Text = L("No custom albums yet", "还没有自定义相册");
         NavDevicesLabelText.Text = L("Devices", "设备");
         NavSettingsLabelText.Text = L("Settings", "设置");
+        SidebarToggleButton.ToolTip = _isNavigationHidden
+            ? L("Pin navigation open", "固定展开侧边栏")
+            : L("Auto-hide navigation", "自动收起侧边栏");
         UpdateOnlineIndicators();
 
         BackToAlbumsButton.Content = L("‹ Albums", "‹ 相册");
@@ -248,7 +368,6 @@ public partial class MainWindow : Window, IDisposable
         CopyAlbumButton.Content = L("Copy album", "复制相册");
 
         SmartAlbumsTitleText.Text = L("Smart Albums", "智能相册");
-        SeeAllSmartButton.Content = L("See all", "查看全部");
         DeviceAlbumsTitleText.Text = L("Device Albums", "设备相册");
         ManageSourcesButton.Content = L("Manage sources", "管理来源");
         MyAlbumsTitleText.Text = L("My Albums", "我的相册");
@@ -265,6 +384,14 @@ public partial class MainWindow : Window, IDisposable
         BrowseDevicePhotosButton.Content = L("Browse photos", "浏览照片");
         DisconnectButton.Content = L("Disconnect", "断开连接");
         ForgetDeviceButton.Content = L("Forget device", "忘记设备");
+        RenameDeviceButton.ToolTip = L("Rename device", "重命名设备");
+        RenameDeviceTitleText.Text = L("Rename device", "重命名设备");
+        RenameDeviceSubtitleText.Text = L(
+            "This name is stored on this computer and will not be overwritten when the device reconnects.",
+            "此名称保存在本机，设备重新连接后也不会被系统型号覆盖。");
+        UseDetectedDeviceNameButton.Content = L("Use detected name", "使用识别名称");
+        CancelRenameDeviceButton.Content = L("Cancel", "取消");
+        SaveRenameDeviceButton.Content = L("Save", "保存");
         ManualConnectionTitleText.Text = L("Connect with address code", "使用地址码连接");
         ManualConnectionSubtitleText.Text = L(
             "On the phone, enable pairing and enter its eight-character address code here.",
@@ -310,6 +437,7 @@ public partial class MainWindow : Window, IDisposable
         UpdateLanguageButtonStyles();
         UpdateCloseBehaviorButtonStyles();
         UpdateTrayMenu();
+        RefreshDevicePresentation();
         UpdatePageSubtitle(_currentPage);
     }
 
@@ -360,6 +488,14 @@ public partial class MainWindow : Window, IDisposable
             {
                 _desktopId = preferences.DesktopId;
             }
+
+            if (preferences?.PreserveAlbumFolders is bool preserveAlbumFolders)
+            {
+                _preserveAlbumFolders = preserveAlbumFolders;
+            }
+
+            _reduceMotion = preferences?.ReduceMotion ?? !SystemParameters.ClientAreaAnimation;
+            _isNavigationHidden = preferences?.NavigationHidden ?? false;
         }
         catch (JsonException)
         {
@@ -379,6 +515,9 @@ public partial class MainWindow : Window, IDisposable
                 Language = _language.ToString(),
                 CloseBehavior = _closeBehavior.ToString(),
                 DesktopId = _desktopId,
+                PreserveAlbumFolders = _preserveAlbumFolders,
+                ReduceMotion = _reduceMotion,
+                NavigationHidden = _isNavigationHidden,
             };
             var json = JsonSerializer.Serialize(preferences, PreferencesJsonOptions);
             File.WriteAllText(_preferencesPath, json);
@@ -425,10 +564,47 @@ public partial class MainWindow : Window, IDisposable
             "LinkGallery");
     }
 
-    private void UpdateSettingsSummary()
+    private void UpdateSettingsSummary(bool refreshCacheStats = false)
     {
         DownloadFolderValueText.Text = _downloadDirectory;
-        var (count, bytes) = GetThumbnailCacheStats();
+        if (_cachedThumbnailStats is { } stats)
+        {
+            ShowThumbnailCacheStats(stats);
+        }
+        else
+        {
+            ThumbnailCacheValueText.Text = L("Calculating cache size...", "正在统计缓存…");
+        }
+
+        if ((refreshCacheStats || _cachedThumbnailStats is null) &&
+            _thumbnailStatsRefresh is not { IsCompleted: false })
+        {
+            _thumbnailStatsRefresh = RefreshThumbnailCacheStatsAsync();
+        }
+    }
+
+    private async Task RefreshThumbnailCacheStatsAsync()
+    {
+        try
+        {
+            var stats = await Task.Run(GetThumbnailCacheStats);
+            if (_disposed)
+            {
+                return;
+            }
+
+            _cachedThumbnailStats = stats;
+            ShowThumbnailCacheStats(stats);
+        }
+        finally
+        {
+            _thumbnailStatsRefresh = null;
+        }
+    }
+
+    private void ShowThumbnailCacheStats((int Count, long Bytes) stats)
+    {
+        var (count, bytes) = stats;
         ThumbnailCacheValueText.Text = count == 0
             ? L("No cached previews", "没有缓存预览")
             : L(
@@ -438,10 +614,13 @@ public partial class MainWindow : Window, IDisposable
 
     private void UpdateOnlineIndicators()
     {
-        var online = _source is { IsOffline: false };
+        var online = _isDeviceOnline && _source is { IsOffline: false };
+        var onlineCount = online ? 1 : 0;
         NavDevicesOnlineDot.Visibility = online ? Visibility.Visible : Visibility.Collapsed;
         StatusOnlineDot.Visibility = online ? Visibility.Visible : Visibility.Collapsed;
-        DeviceStatusText.Text = online ? L("Online", "在线") : L("Offline", "离线");
+        DeviceStatusText.Text = L(
+            onlineCount == 1 ? "1 device online" : $"{onlineCount} devices online",
+            $"{onlineCount} 台设备在线");
     }
 
     private void UpdateSwitchVisuals()
@@ -515,6 +694,7 @@ public partial class MainWindow : Window, IDisposable
 
     private AlbumRow? _activeAlbum;
     private string _activeAlbumFilter = "All";
+    private AlbumDetailCacheKey? _loadedAlbumDetailKey;
 
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
@@ -531,14 +711,20 @@ public partial class MainWindow : Window, IDisposable
                 L("No media in local cache", "本地缓存中还没有媒体"),
                 CancellationToken.None);
             UpdateIndexedStatus();
-            var savedDevice = (await _pairedDeviceStore.ListPairedDevicesAsync(CancellationToken.None))
-                .FirstOrDefault(device =>
+            var pairedDevices = await _pairedDeviceStore.ListPairedDevicesAsync(CancellationToken.None);
+            await NormalizeSavedDeviceNamesAsync(pairedDevices, CancellationToken.None);
+            _savedDeviceCard = pairedDevices
+                .OrderByDescending(static device => device.LastConnectedAt ?? device.CreatedAt)
+                .FirstOrDefault();
+            RefreshDevicePresentation();
+            var savedDevice = pairedDevices.FirstOrDefault(device =>
                     device.AutoConnect &&
                     !string.IsNullOrWhiteSpace(device.LastHost) &&
                     device.LastPort.HasValue);
             if (savedDevice is not null)
             {
                 AddressTextBox.Text = $"{savedDevice.LastHost}:{savedDevice.LastPort}";
+                _suppressConnectionModal = true;
                 OnConnectClick(ConnectButton, new RoutedEventArgs());
             }
         }
@@ -557,21 +743,6 @@ public partial class MainWindow : Window, IDisposable
             UpdateAddressHint();
         }
     }
-
-    private void OnWindowMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ButtonState == MouseButtonState.Pressed)
-        {
-            DragMove();
-        }
-    }
-
-    private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
-
-    private void OnMaximizeRestoreClick(object sender, RoutedEventArgs e) =>
-        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-
-    private void OnCloseWindowClick(object sender, RoutedEventArgs e) => Close();
 
     private void ShowClosePrompt()
     {
@@ -756,7 +927,10 @@ public partial class MainWindow : Window, IDisposable
         }
 
         Disconnect(clearTimeline: true);
-        SetManualConnectionOpen(true);
+        if (!_suppressConnectionModal)
+        {
+            SetManualConnectionOpen(true);
+        }
 
         try
         {
@@ -789,6 +963,7 @@ public partial class MainWindow : Window, IDisposable
             _activeDeviceId = device.Id;
             _activeAccessToken = authorization.AccessToken;
             _activePairedDevice = authorization.PairedDevice;
+            _savedDeviceCard = authorization.PairedDevice;
             _activeApiAddress = apiAddress;
             _transferSourceResolver.SetSource(device.Id, _source);
             authorization.PairedDevice.LastConnectedAt = DateTimeOffset.UtcNow;
@@ -812,6 +987,9 @@ public partial class MainWindow : Window, IDisposable
                 cancellationToken);
 
             ShowDevice(device);
+            SetLoading(false);
+            SetManualConnectionOpen(false);
+            _deviceRefreshTimer.Start();
             DisconnectButton.IsEnabled = true;
             ForgetDeviceButton.IsEnabled = true;
             StatusText.Text = L(
@@ -828,12 +1006,18 @@ public partial class MainWindow : Window, IDisposable
         catch (OperationCanceledException)
         {
             StatusText.Text = L("Connection cancelled", "连接已取消");
-            SetManualConnectionOpen(true);
+            if (!_suppressConnectionModal)
+            {
+                SetManualConnectionOpen(true);
+            }
         }
         catch (Exception exception)
         {
             ShowConnectionError(exception);
-            SetManualConnectionOpen(true);
+            if (!_suppressConnectionModal)
+            {
+                SetManualConnectionOpen(true);
+            }
             await LoadIndexedPageAsync(
                 reset: true,
                 L("Phone unavailable and local cache is empty", "手机当前不可用，本地缓存中还没有媒体"),
@@ -842,6 +1026,7 @@ public partial class MainWindow : Window, IDisposable
         finally
         {
             SetLoading(false);
+            _suppressConnectionModal = false;
         }
     }
 
@@ -912,7 +1097,10 @@ public partial class MainWindow : Window, IDisposable
         var device = new PairedDevice
         {
             DeviceId = publicInfo.DeviceId,
-            DisplayName = publicInfo.DeviceName,
+            DisplayName = ResolveAutomaticDeviceName(
+                publicInfo.DeviceName,
+                publicInfo.Model,
+                publicInfo.Manufacturer),
             Manufacturer = publicInfo.Manufacturer,
             Model = publicInfo.Model,
             IdentityPublicKey = publicInfo.CertificateFingerprint,
@@ -962,9 +1150,9 @@ public partial class MainWindow : Window, IDisposable
 
             TimelineRows.Clear();
             TimelineGroups.Clear();
-            RefreshAlbumRows();
             _loadedRemoteIds.Clear();
             AppendTimelineItems(DeduplicateRemoteItems(page.Items));
+            RefreshAlbumRows();
             _remoteNextCursor = page.NextCursor;
             _hasMoreRemoteItems = page.HasMore || page.NextCursor is not null;
             _hasMoreIndexedItems = false;
@@ -1029,6 +1217,7 @@ public partial class MainWindow : Window, IDisposable
         try
         {
             var sync = await _synchronizer.SynchronizeAsync(source, progress, cancellationToken);
+            _loadedAlbumDetailKey = null;
             await RefreshDeviceAlbumsFromIndexAsync(cancellationToken);
             var syncMode = sync.WasFullScan ? L("full index", "完整索引") : L("incremental update", "增量更新");
             StatusText.Text = L(
@@ -1106,24 +1295,124 @@ public partial class MainWindow : Window, IDisposable
 
     private void ShowDevice(LinkGallery.Domain.Devices.Device device)
     {
-        DeviceNameText.Text = device.Name;
-        DeviceModelText.Text = string.IsNullOrWhiteSpace(device.Model)
-            ? device.Platform
-            : $"{device.Model} · {device.Platform}";
-        BatteryText.Text = device.BatteryPercent.HasValue
-            ? L($"Battery {device.BatteryPercent}%", $"电量 {device.BatteryPercent}%")
-            : L("Battery unknown", "电量未知");
-        MediaCountText.Text = L($"{device.MediaCount:N0} media items", $"共 {device.MediaCount:N0} 项媒体");
+        _connectedDevice = device;
+        _isDeviceOnline = true;
+        if (_activePairedDevice is not null)
+        {
+            if (!_activePairedDevice.IsDisplayNameCustom)
+            {
+                _activePairedDevice.DisplayName = ResolveAutomaticDeviceName(
+                    device.Name,
+                    device.Model,
+                    _activePairedDevice.Manufacturer);
+            }
+            _activePairedDevice.Model = device.Model;
+            _activePairedDevice.LastSeenAt = DateTimeOffset.UtcNow;
+            _activePairedDevice.Status = PairedDeviceStatus.Online;
+            _savedDeviceCard = _activePairedDevice;
+        }
+
+        RefreshDevicePresentation();
+    }
+
+    private void RefreshDevicePresentation()
+    {
+        var online = _isDeviceOnline &&
+                     _source is { IsOffline: false } &&
+                     _connectedDevice is not null;
+        var saved = _activePairedDevice ?? _savedDeviceCard;
+        var isLoading = LoadingProgress?.Visibility == Visibility.Visible;
+
         UpdateOnlineIndicators();
-        SyncStateText.Text = L($"{device.MediaCount:N0} media", $"{device.MediaCount:N0} 项媒体");
-        DevicePanel.Visibility = Visibility.Visible;
-        DeviceCardsGrid.Visibility = Visibility.Visible;
-        ConnectedDeviceCard.Visibility = Visibility.Visible;
-        DevicesEmptyText.Visibility = Visibility.Collapsed;
-        DeviceCardTitleText.Text = device.Name;
-        DeviceCardSubtitleText.Text = string.IsNullOrWhiteSpace(device.Model)
-            ? L($"Connected · {device.MediaCount:N0} items", $"已连接 · {device.MediaCount:N0} 项")
-            : L($"{device.Model} · Connected · {device.MediaCount:N0} items", $"{device.Model} · 已连接 · {device.MediaCount:N0} 项");
+        if (online && _connectedDevice is { } device)
+        {
+            var displayName = ResolveEffectiveDeviceName(device, saved);
+            DeviceNameText.Text = displayName;
+            DeviceModelText.Text = device.Platform;
+            BatteryText.Text = device.BatteryPercent.HasValue
+                ? L($"Battery {device.BatteryPercent}%", $"电量 {device.BatteryPercent}%")
+                : L("Battery unknown", "电量未知");
+            MediaCountText.Text = L($"{device.MediaCount:N0} media items", $"共 {device.MediaCount:N0} 项媒体");
+            SyncStateText.Text = L($"{device.MediaCount:N0} media", $"{device.MediaCount:N0} 项媒体");
+            DevicePanel.Visibility = CanShowToolbarDevicePanel()
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            DeviceCardsGrid.Visibility = Visibility.Visible;
+            ConnectedDeviceCard.Visibility = Visibility.Visible;
+            DevicesEmptyText.Visibility = Visibility.Collapsed;
+            DeviceCardTitleText.Text = displayName;
+            DeviceCardSubtitleText.Text = L(
+                $"Connected · {device.MediaCount:N0} items",
+                $"已连接 · {device.MediaCount:N0} 项");
+            BrowseDevicePhotosButton.Content = L("Browse photos", "浏览照片");
+        }
+        else if (saved is not null)
+        {
+            DevicePanel.Visibility = Visibility.Collapsed;
+            DeviceCardsGrid.Visibility = Visibility.Visible;
+            ConnectedDeviceCard.Visibility = Visibility.Visible;
+            DevicesEmptyText.Visibility = Visibility.Collapsed;
+            DeviceCardTitleText.Text = ResolveEffectiveDeviceName(null, saved);
+            DeviceCardSubtitleText.Text = L("Saved · Offline", "已保存 · 离线");
+            BrowseDevicePhotosButton.Content = L("Reconnect", "重新连接");
+        }
+        else
+        {
+            DevicePanel.Visibility = Visibility.Collapsed;
+            DeviceCardsGrid.Visibility = Visibility.Collapsed;
+            ConnectedDeviceCard.Visibility = Visibility.Collapsed;
+            DevicesEmptyText.Visibility = Visibility.Visible;
+        }
+
+        DisconnectButton.IsEnabled = !isLoading && online;
+        ForgetDeviceButton.IsEnabled = !isLoading && saved is not null;
+        RenameDeviceButton.IsEnabled = !isLoading && saved is not null;
+        if (_currentPage == "Devices")
+        {
+            UpdatePageSubtitle("Devices");
+        }
+
+        ApplyResponsiveLayout();
+    }
+
+    private async void OnDeviceRefreshTick(object? sender, EventArgs e)
+    {
+        if (_deviceRefreshInFlight || _source is not { IsOffline: false } source)
+        {
+            return;
+        }
+
+        _deviceRefreshInFlight = true;
+        try
+        {
+            var device = await GetDeviceInfoWithTimeoutAsync(
+                source,
+                _connectionCancellation?.Token ?? CancellationToken.None);
+            if (ReferenceEquals(_source, source))
+            {
+                ShowDevice(device);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            if (ReferenceEquals(_source, source))
+            {
+                _isDeviceOnline = false;
+                _connectedDevice = null;
+                if (_savedDeviceCard is not null)
+                {
+                    _savedDeviceCard.Status = PairedDeviceStatus.Offline;
+                }
+                RefreshDevicePresentation();
+            }
+        }
+        finally
+        {
+            _deviceRefreshInFlight = false;
+        }
     }
 
     private void SetEmptyState(string message)
@@ -1196,6 +1485,7 @@ public partial class MainWindow : Window, IDisposable
     private void AppendTimelineItems(IReadOnlyList<MediaItem> items)
     {
         var previousDate = TimelineRows.LastOrDefault()?.Item.TakenAt.LocalDateTime.Date;
+        var appendedRows = new List<MediaRow>(items.Count);
         foreach (var item in items)
         {
             var date = item.TakenAt.LocalDateTime.Date;
@@ -1203,16 +1493,32 @@ public partial class MainWindow : Window, IDisposable
                 ? date.ToString("yyyy年M月d日", CultureInfo.InvariantCulture)
                 : date.ToString("d MMMM yyyy", CultureInfo.InvariantCulture);
             var dateHeader = previousDate != date ? dateGroup : null;
-            TimelineRows.Add(new MediaRow(item, dateHeader, dateGroup));
+            var row = new MediaRow(item, dateHeader, dateGroup);
+            TimelineRows.Add(row);
+            appendedRows.Add(row);
             previousDate = date;
         }
 
-        RefreshTimelineGroups();
-        RefreshAlbumRows();
+        AppendTimelineGroups(appendedRows);
     }
 
-    private void RefreshTimelineGroups() =>
-        RefreshMediaGroups(TimelineRows, TimelineGroups);
+    private void AppendTimelineGroups(IEnumerable<MediaRow> rows)
+    {
+        foreach (var row in rows)
+        {
+            var group = TimelineGroups.LastOrDefault();
+            var startsNewDate =
+                group is null ||
+                !string.Equals(group.Date, row.DateGroup, StringComparison.Ordinal);
+            if (startsNewDate || group!.Rows.Count >= MediaRowsPerVisualGroup)
+            {
+                group = new MediaGroupRow(row.DateGroup, [], showHeader: startsNewDate);
+                TimelineGroups.Add(group);
+            }
+
+            group.Rows.Add(row);
+        }
+    }
 
     private void RefreshAlbumDetailGroups() =>
         RefreshMediaGroups(AlbumDetailRows, AlbumDetailGroups);
@@ -1226,7 +1532,12 @@ public partial class MainWindow : Window, IDisposable
                      .OrderByDescending(static row => row.Item.TakenAt)
                      .GroupBy(static row => row.DateGroup))
         {
-            target.Add(new MediaGroupRow(group.Key, group));
+            var showHeader = true;
+            foreach (var chunk in group.Chunk(MediaRowsPerVisualGroup))
+            {
+                target.Add(new MediaGroupRow(group.Key, chunk, showHeader));
+                showHeader = false;
+            }
         }
     }
 
@@ -1280,34 +1591,34 @@ public partial class MainWindow : Window, IDisposable
             0,
             0,
             0,
-            new SolidColorBrush(Color.FromRgb(0xB7, 0xC9, 0xD6)),
+            AlbumCoverBrush("smart:favorites"),
             "SmartFavorites"));
 
-        var isConnected = _source is { IsOffline: false };
-        if (isConnected)
-        {
-            SmartAlbumRows.Add(CreateAlbumRow(
+        SmartAlbumRows.Add(CreateAlbumRow(
                 L("Videos", "视频"),
                 mediaItems.Count(static item => item.Type == MediaType.Video),
                 0,
                 mediaItems.Count(static item => item.Type == MediaType.Video),
-                new SolidColorBrush(Color.FromRgb(0xD8, 0xB7, 0xA5)),
+                AlbumCoverBrush("smart:videos"),
                 "SmartVideos"));
             SmartAlbumRows.Add(CreateAlbumRow(
                 L("Screenshots", "截图"),
                 CountMatches(mediaItems, "screenshot"),
                 0,
                 0,
-                new SolidColorBrush(Color.FromRgb(0xC5, 0xB2, 0xD9)),
+                AlbumCoverBrush("smart:screenshots"),
                 "SmartScreenshots"));
             SmartAlbumRows.Add(CreateAlbumRow(
                 L("Recently Added", "最近添加"),
                 mediaItems.Count(static item => item.TakenAt >= DateTimeOffset.Now.AddDays(-30)),
                 0,
                 0,
-                new SolidColorBrush(Color.FromRgb(0xB7, 0xC9, 0xD6)),
+                AlbumCoverBrush("smart:recent"),
                 "SmartRecent"));
 
+        var isConnected = _source is { IsOffline: false };
+        if (isConnected)
+        {
             foreach (var album in albums)
             {
                 AlbumRows.Add(album);
@@ -1320,15 +1631,15 @@ public partial class MainWindow : Window, IDisposable
             }
         }
 
-        SidebarVideosButton.Visibility = isConnected ? Visibility.Visible : Visibility.Collapsed;
-        SidebarScreenshotsButton.Visibility = isConnected ? Visibility.Visible : Visibility.Collapsed;
+        SidebarVideosButton.Visibility = Visibility.Visible;
+        SidebarScreenshotsButton.Visibility = Visibility.Visible;
         SidebarDeviceAlbumsHeading.Visibility = isConnected && SidebarDeviceAlbumRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         SidebarDeviceAlbumsList.Visibility = isConnected && SidebarDeviceAlbumRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         DeviceAlbumsHeader.Visibility = isConnected && DeviceAlbumRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         DeviceAlbumsList.Visibility = isConnected && DeviceAlbumRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        MyAlbumsEmptyText.Visibility = MyAlbumRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        SidebarMyAlbumsEmptyButton.Visibility = SidebarMyAlbumRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        AlbumBadgeText.Text = (SmartAlbumRows.Count + DeviceAlbumRows.Count + MyAlbumRows.Count).ToString(CultureInfo.InvariantCulture);
+        MyAlbumsEmptyText.Visibility = Visibility.Collapsed;
+        SidebarMyAlbumsEmptyButton.Visibility = Visibility.Collapsed;
+        ApplyResponsiveLayout();
     }
 
     private AlbumRow CreateAlbumRow(
@@ -1389,9 +1700,7 @@ public partial class MainWindow : Window, IDisposable
         SidebarDeviceAlbumsList.Visibility = visibility;
         DeviceAlbumsHeader.Visibility = visibility;
         DeviceAlbumsList.Visibility = visibility;
-        AlbumBadgeText.Text =
-            (SmartAlbumRows.Count + DeviceAlbumRows.Count + MyAlbumRows.Count)
-            .ToString(CultureInfo.InvariantCulture);
+        ApplyResponsiveLayout();
     }
 
     private static int CountMatches(MediaItem[] mediaItems, string text) =>
@@ -1405,18 +1714,33 @@ public partial class MainWindow : Window, IDisposable
 
     private static SolidColorBrush AlbumCoverBrush(string key)
     {
+        var smartColor = key.ToLowerInvariant() switch
+        {
+            "smart:favorites" => Color.FromRgb(0xB7, 0xC9, 0xD6),
+            "smart:videos" => Color.FromRgb(0xD9, 0xB8, 0xA7),
+            "smart:screenshots" => Color.FromRgb(0x9F, 0xB6, 0xA0),
+            "smart:recent" => Color.FromRgb(0xC8, 0xB6, 0xD9),
+            _ => (Color?)null,
+        };
+        if (smartColor is { } color)
+        {
+            return new SolidColorBrush(color);
+        }
+
         Color[] palette =
         [
             Color.FromRgb(0xB7, 0xC9, 0xD6),
-            Color.FromRgb(0xD8, 0xB7, 0xA5),
-            Color.FromRgb(0xA4, 0xBC, 0xA5),
-            Color.FromRgb(0xC5, 0xB2, 0xD9),
-            Color.FromRgb(0xDB, 0xC9, 0x87),
-            Color.FromRgb(0x9D, 0xBB, 0xCA),
+            Color.FromRgb(0xD9, 0xB8, 0xA7),
+            Color.FromRgb(0x9F, 0xB6, 0xA0),
+            Color.FromRgb(0xC8, 0xB6, 0xD9),
+            Color.FromRgb(0xD8, 0xC5, 0x8B),
+            Color.FromRgb(0x9B, 0xB7, 0xC8),
+            Color.FromRgb(0xC5, 0xA6, 0xA6),
+            Color.FromRgb(0xAF, 0xC0, 0xD2),
         ];
 
         var hash = StringComparer.OrdinalIgnoreCase.GetHashCode(key);
-        return new SolidColorBrush(palette[Math.Abs(hash % palette.Length)]);
+        return new SolidColorBrush(palette[(hash & int.MaxValue) % palette.Length]);
     }
 
     private List<MediaItem> DeduplicateRemoteItems(IReadOnlyList<MediaItem> items)
@@ -1469,14 +1793,19 @@ public partial class MainWindow : Window, IDisposable
             await _thumbnailConcurrency.WaitAsync(cancellationToken);
             try
             {
-                var image = await TryLoadCachedThumbnailAsync(row.Item, cancellationToken);
+                var image = await TryLoadCachedThumbnailAsync(
+                    row.Item,
+                    TimelineThumbnailSize,
+                    cancellationToken);
                 if (image is null && _source is { IsOffline: false } source)
                 {
                     await using var stream = await source.OpenThumbnailAsync(
                         row.Item.RemoteId,
                         TimelineThumbnailSize,
                         cancellationToken);
-                    image = DecodeBitmap(stream, TimelineThumbnailSize.Width);
+                    image = await Task.Run(
+                        () => DecodeBitmap(stream, TimelineThumbnailSize, row.Item),
+                        cancellationToken);
                 }
 
                 if (image is not null)
@@ -1522,21 +1851,36 @@ public partial class MainWindow : Window, IDisposable
 
     private async Task<ImageSource?> TryLoadCachedThumbnailAsync(
         MediaItem item,
+        ThumbnailSize size,
         CancellationToken cancellationToken)
     {
         await using var stream = await _thumbnailCache.OpenCachedThumbnailAsync(
             item,
-            TimelineThumbnailSize,
+            size,
             cancellationToken);
-        return stream is null ? null : DecodeBitmap(stream, TimelineThumbnailSize.Width);
+        return stream is null
+            ? null
+            : await Task.Run(
+                () => DecodeBitmap(stream, size, item),
+                cancellationToken);
     }
 
-    private static BitmapImage DecodeBitmap(Stream stream, int decodePixelWidth)
+    private static BitmapImage DecodeBitmap(
+        Stream stream,
+        ThumbnailSize size,
+        MediaItem item)
     {
         var image = new BitmapImage();
         image.BeginInit();
         image.CacheOption = BitmapCacheOption.OnLoad;
-        image.DecodePixelWidth = decodePixelWidth;
+        if (item.Width is > 0 && item.Height is > 0 && item.Height > item.Width)
+        {
+            image.DecodePixelHeight = size.Height;
+        }
+        else
+        {
+            image.DecodePixelWidth = size.Width;
+        }
         image.StreamSource = stream;
         image.EndInit();
         image.Freeze();
@@ -1545,16 +1889,39 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnTimelineItemUnloaded(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: MediaRow row } &&
-            row.Thumbnail is null &&
-            row.IsThumbnailLoading)
+        if (sender is FrameworkElement { DataContext: MediaRow row })
         {
-            row.ThumbnailLoadCancellation?.Cancel();
+            if (row.IsThumbnailLoading)
+            {
+                row.ThumbnailLoadCancellation?.Cancel();
+            }
+
+            // A row can outlive its recycled visual container. Keep only the bounded
+            // decoded cache alive so long galleries do not retain every bitmap.
+            row.Thumbnail = null;
         }
     }
 
-    private void OnTimelineDoubleClick(object sender, MouseButtonEventArgs e) =>
+    private void OnTimelineDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        Mouse.Capture(null);
         OpenSelectedMedia();
+    }
+
+    private void OnMediaTileDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: MediaRow row })
+        {
+            return;
+        }
+
+        e.Handled = true;
+        Mouse.Capture(null);
+        SelectSingleRow(row);
+        UpdateSelectionUi();
+        OpenMediaViewer(row);
+    }
 
     private void OnOpenMediaClick(object sender, RoutedEventArgs e)
     {
@@ -1578,21 +1945,43 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnNavigationMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        NavigationColumn.Width = new GridLength(240);
-        ExpandedBrandText.Visibility = Visibility.Visible;
+        if (!_isNavigationHidden)
+        {
+            return;
+        }
+
+        _isNavigationPreviewOpen = true;
+        ApplyResponsiveLayout(animateNavigation: true);
+    }
+
+    private void OnNavigationMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_isNavigationHidden && !_isNavigationPreviewOpen)
+        {
+            _isNavigationPreviewOpen = true;
+            ApplyResponsiveLayout(animateNavigation: true);
+        }
     }
 
     private void OnNavigationMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
-        NavigationColumn.Width = new GridLength(240);
-        ExpandedBrandText.Visibility = Visibility.Visible;
+        if (!_isNavigationHidden)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!NavigationPanel.IsMouseOver)
+            {
+                _isNavigationPreviewOpen = false;
+                ApplyResponsiveLayout(animateNavigation: true);
+            }
+        });
     }
 
     private void OnAlbumCoverSizeChanged(object sender, SizeChangedEventArgs e) =>
         SetAspectHeight(sender, 1.5);
-
-    private void OnMediaTileSizeChanged(object sender, SizeChangedEventArgs e) =>
-        SetAspectHeight(sender, 1.18);
 
     private static void SetAspectHeight(object sender, double widthToHeightRatio)
     {
@@ -1602,10 +1991,154 @@ public partial class MainWindow : Window, IDisposable
         }
 
         var targetHeight = Math.Round(element.ActualWidth / widthToHeightRatio);
-        if (Math.Abs(element.Height - targetHeight) > 0.5)
+        if (double.IsNaN(element.Height) || Math.Abs(element.Height - targetHeight) > 0.5)
         {
             element.Height = targetHeight;
         }
+    }
+
+    private void ClampWindowToWorkArea()
+    {
+        var workArea = SystemParameters.WorkArea;
+        Width = Math.Min(1480, Math.Max(MinWidth, workArea.Width - 36));
+        Height = Math.Min(920, Math.Max(MinHeight, workArea.Height - 36));
+    }
+
+    private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e) =>
+        ApplyResponsiveLayout();
+
+    private void ApplyResponsiveLayout(bool animateNavigation = false)
+    {
+        if (NavigationColumn is null || NavigationPanel is null || SearchColumn is null || ToolbarBorder is null)
+        {
+            return;
+        }
+
+        var compact = ActualWidth < 1160;
+        var iconRail = _isNavigationHidden && !_isNavigationPreviewOpen;
+        var targetNavigationWidth = iconRail ? 72d : compact ? 180d : 240d;
+        NavigationPanel.Visibility = Visibility.Visible;
+        if (!iconRail)
+        {
+            ApplyNavigationContentVisibility(iconRail, compact);
+        }
+
+        SetNavigationWidth(
+            targetNavigationWidth,
+            animateNavigation,
+            iconRail ? () => ApplyNavigationContentVisibility(iconRail, compact) : null);
+        SearchColumn.Width = new GridLength(1, GridUnitType.Star);
+        ToolbarBorder.Padding = compact ? new Thickness(20, 12, 10, 12) : new Thickness(32, 12, 14, 12);
+        SearchButton.Visibility = Visibility.Collapsed;
+        if (iconRail && !animateNavigation)
+        {
+            ApplyNavigationContentVisibility(iconRail, compact);
+        }
+
+        var availableToolbarWidth = Math.Max(0, ActualWidth - targetNavigationWidth);
+        var showToolbarDevice = CanShowToolbarDevicePanel(targetNavigationWidth);
+        DevicePanel.Visibility = showToolbarDevice
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        DateFilterComboBox.Visibility = availableToolbarWidth >= (showToolbarDevice ? 1280 : 850)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        if (SidebarToggleButton is not null)
+        {
+            SidebarToggleButton.ToolTip = _isNavigationHidden
+                ? L("Pin navigation open", "固定展开侧边栏")
+                : L("Auto-hide navigation", "自动收起侧边栏");
+        }
+    }
+
+    private void ApplyNavigationContentVisibility(bool iconRail, bool compact)
+    {
+        ExpandedBrandStack.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        CompactBrandIcon.Visibility = iconRail ? Visibility.Visible : Visibility.Collapsed;
+        ExpandedBrandText.Visibility = !iconRail && !compact ? Visibility.Visible : Visibility.Collapsed;
+        NavGalleryLabelText.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        NavAlbumsLabelText.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        SidebarSmartAlbumsHeadingText.Visibility = iconRail ? Visibility.Hidden : Visibility.Visible;
+        SidebarFavoritesLabelText.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        SidebarVideosLabelText.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        SidebarScreenshotsLabelText.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        NavDevicesLabelText.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        NavSettingsLabelText.Visibility = iconRail ? Visibility.Collapsed : Visibility.Visible;
+        SidebarStatusCard.Visibility = iconRail ? Visibility.Hidden : Visibility.Visible;
+        SidebarDeviceAlbumsHeading.Visibility = SidebarDeviceAlbumRows.Count == 0
+            ? Visibility.Collapsed
+            : iconRail ? Visibility.Hidden : Visibility.Visible;
+        SidebarDeviceAlbumsList.Visibility = SidebarDeviceAlbumRows.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SidebarMyAlbumsHeadingText.Visibility = SidebarMyAlbumRows.Count == 0
+            ? Visibility.Collapsed
+            : iconRail ? Visibility.Hidden : Visibility.Visible;
+        SidebarMyAlbumsList.Visibility = SidebarMyAlbumRows.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void SetNavigationWidth(
+        double targetWidth,
+        bool animate,
+        Action? onCompleted = null)
+    {
+        var currentWidth = NavigationColumn.ActualWidth;
+        NavigationColumn.BeginAnimation(ColumnDefinition.WidthProperty, null);
+        NavigationColumn.Width = new GridLength(targetWidth);
+        var version = ++_navigationAnimationVersion;
+        if (!animate || currentWidth <= 0 || Math.Abs(currentWidth - targetWidth) < 0.5)
+        {
+            onCompleted?.Invoke();
+            return;
+        }
+
+        var animation = new GridLengthAnimation
+        {
+            From = new GridLength(currentWidth),
+            To = new GridLength(targetWidth),
+            Duration = TimeSpan.FromMilliseconds(_reduceMotion ? 80 : 180),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.Stop,
+        };
+        animation.Completed += (_, _) =>
+        {
+            if (version != _navigationAnimationVersion)
+            {
+                return;
+            }
+
+            NavigationColumn.BeginAnimation(ColumnDefinition.WidthProperty, null);
+            NavigationColumn.Width = new GridLength(targetWidth);
+            onCompleted?.Invoke();
+        };
+        NavigationColumn.BeginAnimation(
+            ColumnDefinition.WidthProperty,
+            animation,
+            HandoffBehavior.SnapshotAndReplace);
+    }
+
+    private bool CanShowToolbarDevicePanel(double? navigationWidth = null)
+    {
+        if (!_isDeviceOnline ||
+            _source is not { IsOffline: false } ||
+            _connectedDevice is null ||
+            NavigationColumn is null)
+        {
+            return false;
+        }
+
+        var width = navigationWidth ?? NavigationColumn.Width.Value;
+        return ActualWidth - width >= 1050;
+    }
+
+    private void OnSidebarToggleClick(object sender, RoutedEventArgs e)
+    {
+        _isNavigationHidden = !_isNavigationHidden;
+        _isNavigationPreviewOpen = false;
+        ApplyResponsiveLayout(animateNavigation: true);
+        SavePreferences();
     }
 
     private void OnNavClick(object sender, RoutedEventArgs e)
@@ -1616,7 +2149,108 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void OnBrowseDevicePhotosClick(object sender, RoutedEventArgs e) => ShowPage("Gallery");
+    private void OnBrowseDevicePhotosClick(object sender, RoutedEventArgs e)
+    {
+        if (_isDeviceOnline && _source is { IsOffline: false })
+        {
+            ShowPage("Gallery");
+            return;
+        }
+
+        var saved = _activePairedDevice ?? _savedDeviceCard;
+        if (saved is { LastHost.Length: > 0, LastPort: not null })
+        {
+            AddressTextBox.Text = $"{saved.LastHost}:{saved.LastPort.Value}";
+            OnConnectClick(ConnectButton, new RoutedEventArgs());
+            return;
+        }
+
+        SetManualConnectionOpen(true);
+    }
+
+    private void OnRenameDeviceClick(object sender, RoutedEventArgs e)
+    {
+        var device = _activePairedDevice ?? _savedDeviceCard;
+        if (device is null)
+        {
+            return;
+        }
+
+        RenameDeviceTextBox.Text = device.DisplayName;
+        UseDetectedDeviceNameButton.IsEnabled = device.IsDisplayNameCustom;
+        RenameDeviceModal.Visibility = Visibility.Visible;
+        Dispatcher.BeginInvoke(
+            DispatcherPriority.Input,
+            () =>
+            {
+                RenameDeviceTextBox.Focus();
+                RenameDeviceTextBox.SelectAll();
+            });
+    }
+
+    private void OnCancelRenameDeviceClick(object sender, RoutedEventArgs e) =>
+        RenameDeviceModal.Visibility = Visibility.Collapsed;
+
+    private void OnRenameDeviceModalBackgroundClick(object sender, MouseButtonEventArgs e)
+    {
+        if (ReferenceEquals(e.OriginalSource, RenameDeviceModal))
+        {
+            RenameDeviceModal.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async void OnSaveRenameDeviceClick(object sender, RoutedEventArgs e)
+    {
+        var device = _activePairedDevice ?? _savedDeviceCard;
+        var displayName = RenameDeviceTextBox.Text.Trim();
+        if (device is null || string.IsNullOrWhiteSpace(displayName))
+        {
+            ShowToast(L("Enter a device name", "请输入设备名称"));
+            return;
+        }
+
+        device.DisplayName = displayName;
+        device.IsDisplayNameCustom = true;
+        _savedDeviceCard = device;
+        await _pairedDeviceStore.UpsertPairedDeviceAsync(device, CancellationToken.None);
+        RenameDeviceModal.Visibility = Visibility.Collapsed;
+        RefreshDevicePresentation();
+        ShowToast(L("Device name saved", "设备名称已保存"));
+    }
+
+    private async void OnUseDetectedDeviceNameClick(object sender, RoutedEventArgs e)
+    {
+        var device = _activePairedDevice ?? _savedDeviceCard;
+        if (device is null)
+        {
+            return;
+        }
+
+        device.IsDisplayNameCustom = false;
+        device.DisplayName = ResolveAutomaticDeviceName(
+            _connectedDevice?.Name ?? device.DisplayName,
+            _connectedDevice?.Model ?? device.Model,
+            device.Manufacturer);
+        _savedDeviceCard = device;
+        await _pairedDeviceStore.UpsertPairedDeviceAsync(device, CancellationToken.None);
+        RenameDeviceModal.Visibility = Visibility.Collapsed;
+        RefreshDevicePresentation();
+        ShowToast(L("Detected device name restored", "已恢复识别名称"));
+    }
+
+    private void OnRenameDeviceTextBoxKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            OnSaveRenameDeviceClick(SaveRenameDeviceButton, new RoutedEventArgs());
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            RenameDeviceModal.Visibility = Visibility.Collapsed;
+            e.Handled = true;
+        }
+    }
 
     private void SetManualConnectionOpen(bool isOpen)
     {
@@ -1761,7 +2395,7 @@ public partial class MainWindow : Window, IDisposable
         return Task.CompletedTask;
     }
 
-    private void OnAlbumCardClick(object sender, MouseButtonEventArgs e)
+    private void OnAlbumCardClick(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: AlbumRow album })
         {
@@ -1842,6 +2476,8 @@ public partial class MainWindow : Window, IDisposable
     {
         if (GetSelectedRows().FirstOrDefault() is MediaRow row)
         {
+            e.Handled = true;
+            Mouse.Capture(null);
             OpenMediaViewer(row);
         }
     }
@@ -1859,18 +2495,33 @@ public partial class MainWindow : Window, IDisposable
         _activeAlbumFilter = "All";
         ShowPage("AlbumDetail");
         await RefreshAlbumDetailRowsAsync(CancellationToken.None);
+        UpdatePageSubtitle("AlbumDetail");
     }
 
     private async Task RefreshAlbumDetailRowsAsync(CancellationToken cancellationToken)
     {
-        AlbumDetailRows.Clear();
-        AlbumDetailGroups.Clear();
         if (_activeAlbum is null)
         {
+            _loadedAlbumDetailKey = null;
+            AlbumDetailRows.Clear();
+            AlbumDetailGroups.Clear();
             AlbumDetailEmptyText.Visibility = Visibility.Visible;
             AlbumDetailList.Visibility = Visibility.Collapsed;
             return;
         }
+
+        var detailKey = AlbumDetailCacheKey.Create(
+            _activeDeviceId,
+            _activeAlbum,
+            _activeAlbumFilter);
+        if (_loadedAlbumDetailKey == detailKey)
+        {
+            UpdateAlbumDetailPresentation();
+            return;
+        }
+
+        AlbumDetailRows.Clear();
+        AlbumDetailGroups.Clear();
 
         var selectedTypes = _activeAlbumFilter switch
         {
@@ -1904,6 +2555,12 @@ public partial class MainWindow : Window, IDisposable
         }
 
         RefreshAlbumDetailGroups();
+        _loadedAlbumDetailKey = detailKey;
+        UpdateAlbumDetailPresentation();
+    }
+
+    private void UpdateAlbumDetailPresentation()
+    {
         AlbumFilterAllButton.Style = _activeAlbumFilter == "All"
             ? (Style)FindResource("LgSegmentButtonActive")
             : (Style)FindResource("LgSegmentButton");
@@ -1944,6 +2601,10 @@ public partial class MainWindow : Window, IDisposable
         AlbumDetailPage.Visibility = page == "AlbumDetail" ? Visibility.Visible : Visibility.Collapsed;
         DevicePage.Visibility = page == "Devices" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility = page == "Settings" ? Visibility.Visible : Visibility.Collapsed;
+        if (page == "Settings")
+        {
+            UpdateSettingsSummary(refreshCacheStats: true);
+        }
         if (page is not ("Gallery" or "AlbumDetail"))
         {
             InspectorPanel.Visibility = Visibility.Collapsed;
@@ -1961,13 +2622,14 @@ public partial class MainWindow : Window, IDisposable
         };
         UpdatePageSubtitle(page);
         SearchChrome.Visibility = page is "Gallery" or "Albums" ? Visibility.Visible : Visibility.Collapsed;
-        SearchButton.Visibility = page is "Gallery" or "Albums" ? Visibility.Visible : Visibility.Collapsed;
+        SearchButton.Visibility = Visibility.Collapsed;
         FilterPanel.Visibility = page == "Gallery" ? Visibility.Visible : Visibility.Collapsed;
         SearchPlaceholderText.Text = page == "Gallery"
             ? L("Search media", "搜索媒体")
             : L("Search albums", "搜索相册");
-        NewAlbumButton.Visibility = page == "Albums" ? Visibility.Visible : Visibility.Collapsed;
+        NewAlbumButton.Visibility = Visibility.Collapsed;
         EnterIpButton.Visibility = page == "Devices" ? Visibility.Visible : Visibility.Collapsed;
+        ApplyResponsiveLayout();
         FindDevicesButton.Visibility = page == "Devices" ? Visibility.Visible : Visibility.Collapsed;
         CopyAlbumButton.Visibility = page == "AlbumDetail" ? Visibility.Visible : Visibility.Collapsed;
         PageActionBar.Visibility = page is "Gallery" or "AlbumDetail" ? Visibility.Visible : Visibility.Collapsed;
@@ -2006,9 +2668,10 @@ public partial class MainWindow : Window, IDisposable
                         $"{AlbumDetailRows.Count:N0} 项 · {AlbumKindLabel(_activeAlbum)}");
                 break;
             case "Devices":
-                StatusText.Text = _source is { IsOffline: false }
-                    ? L("1 connected source", "1 个已连接来源")
-                    : L("No connected source", "没有已连接来源");
+                var onlineCount = _isDeviceOnline && _source is { IsOffline: false } ? 1 : 0;
+                StatusText.Text = L(
+                    onlineCount == 1 ? "1 device online" : $"{onlineCount} devices online",
+                    $"{onlineCount} 台设备在线");
                 break;
             case "Settings":
                 StatusText.Text = L("Desktop preferences", "桌面端偏好设置");
@@ -2178,6 +2841,7 @@ public partial class MainWindow : Window, IDisposable
         }
 
         var item = row.Item;
+        ResetInspectorTranslation();
         InspectorPanel.Visibility = Visibility.Visible;
         InspectorPreviewBorder.Visibility = row.Thumbnail is null ? Visibility.Collapsed : Visibility.Visible;
         InspectorPreviewImage.Source = row.Thumbnail;
@@ -2189,13 +2853,12 @@ public partial class MainWindow : Window, IDisposable
         InspectorResolutionText.Text = item.Width.HasValue && item.Height.HasValue
             ? $"{item.Width.Value} × {item.Height.Value}"
             : "-";
-        InspectorDeviceText.Text = string.IsNullOrWhiteSpace(item.SourceDevice)
-            ? item.DeviceId
-            : item.SourceDevice;
+        InspectorDeviceText.Text = GetMediaDeviceDisplayName(item);
     }
 
     private void UpdateInspectorForSelection(int count)
     {
+        ResetInspectorTranslation();
         InspectorPanel.Visibility = Visibility.Visible;
         InspectorPreviewBorder.Visibility = Visibility.Collapsed;
         InspectorPreviewImage.Source = null;
@@ -2210,6 +2873,18 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnCloseInspectorClick(object sender, RoutedEventArgs e)
     {
+        CloseInspector();
+    }
+
+    private void CloseInspector()
+    {
+        _isInspectorDragging = false;
+        if (ReferenceEquals(Mouse.Captured, InspectorPanel))
+        {
+            Mouse.Capture(null);
+        }
+
+        ResetInspectorTranslation();
         InspectorPanel.Visibility = Visibility.Collapsed;
         if (_isSelectionMode)
         {
@@ -2218,6 +2893,179 @@ public partial class MainWindow : Window, IDisposable
 
         ClearSelectedRows();
     }
+
+    private void OnInspectorClickAway(object sender, MouseButtonEventArgs e)
+    {
+        if (InspectorPanel.Visibility != Visibility.Visible ||
+            e.OriginalSource is not DependencyObject source ||
+            IsDescendantOf(source, InspectorPanel) ||
+            FindMediaRow(source) is not null)
+        {
+            return;
+        }
+
+        CloseInspector();
+    }
+
+    private void OnInspectorDragStarted(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left ||
+            e.OriginalSource is not DependencyObject source ||
+            IsInspectorInteractiveElement(source))
+        {
+            return;
+        }
+
+        _isInspectorDragging = true;
+        _inspectorDragStart = e.GetPosition(this);
+        InspectorTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+        InspectorPanel.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void OnInspectorDragMoved(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_isInspectorDragging || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        InspectorTranslate.X = Math.Max(0, e.GetPosition(this).X - _inspectorDragStart.X);
+        e.Handled = true;
+    }
+
+    private void OnInspectorDragEnded(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isInspectorDragging || e.ChangedButton != MouseButton.Left)
+        {
+            return;
+        }
+
+        var shouldClose = InspectorTranslate.X >= 72;
+        _isInspectorDragging = false;
+        if (ReferenceEquals(Mouse.Captured, InspectorPanel))
+        {
+            Mouse.Capture(null);
+        }
+
+        if (shouldClose)
+        {
+            CloseInspector();
+        }
+        else
+        {
+            AnimateInspectorBack();
+        }
+
+        e.Handled = true;
+    }
+
+    private void OnInspectorLostMouseCapture(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_isInspectorDragging)
+        {
+            return;
+        }
+
+        _isInspectorDragging = false;
+        AnimateInspectorBack();
+    }
+
+    private void AnimateInspectorBack()
+    {
+        if (_reduceMotion)
+        {
+            ResetInspectorTranslation();
+            return;
+        }
+
+        InspectorTranslate.BeginAnimation(
+            TranslateTransform.XProperty,
+            new DoubleAnimation(0, TimeSpan.FromMilliseconds(150))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            });
+    }
+
+    private void ResetInspectorTranslation()
+    {
+        InspectorTranslate.BeginAnimation(TranslateTransform.XProperty, null);
+        InspectorTranslate.X = 0;
+    }
+
+    private string GetMediaDeviceDisplayName(MediaItem item)
+    {
+        if (_connectedDevice is { } connected &&
+            string.Equals(connected.Id, item.DeviceId, StringComparison.Ordinal))
+        {
+            return connected.Name;
+        }
+
+        var paired = _activePairedDevice ?? _savedDeviceCard;
+        if (paired is not null &&
+            string.Equals(paired.DeviceId, item.DeviceId, StringComparison.Ordinal))
+        {
+            return paired.DisplayName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.SourceDevice) &&
+            !string.Equals(item.SourceDevice, item.DeviceId, StringComparison.Ordinal))
+        {
+            return item.SourceDevice;
+        }
+
+        return L("Saved device", "已保存设备");
+    }
+
+    private static MediaRow? FindMediaRow(DependencyObject source)
+    {
+        for (DependencyObject? current = source; current is not null; current = GetParent(current))
+        {
+            if (current is FrameworkElement { DataContext: MediaRow row })
+            {
+                return row;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsDescendantOf(DependencyObject source, DependencyObject ancestor)
+    {
+        for (DependencyObject? current = source; current is not null; current = GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsInspectorInteractiveElement(DependencyObject source)
+    {
+        for (DependencyObject? current = source; current is not null; current = GetParent(current))
+        {
+            if (current is System.Windows.Controls.Button or
+                System.Windows.Controls.TextBox or
+                System.Windows.Controls.ComboBox or
+                System.Windows.Controls.Primitives.ScrollBar)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DependencyObject? GetParent(DependencyObject current) =>
+        current switch
+        {
+            Visual or System.Windows.Media.Media3D.Visual3D => VisualTreeHelper.GetParent(current),
+            FrameworkContentElement content => content.Parent,
+            _ => LogicalTreeHelper.GetParent(current),
+        };
 
     private static string FormatMediaKind(MediaItem item)
     {
@@ -2254,9 +3102,17 @@ public partial class MainWindow : Window, IDisposable
         OpenMediaViewer(selected);
     }
 
-    private void OpenMediaViewer(MediaRow row)
+    private async void OpenMediaViewer(MediaRow row)
     {
-        _backgroundIndexGate.Pause("viewer");
+        // A WPF double-click is raised before the second mouse-up. Release the
+        // recycled media tile so the newly-visible overlay receives input now,
+        // rather than only after Windows deactivates and reactivates the window.
+        Mouse.Capture(null);
+        _viewerPreviewCancellation?.Cancel();
+        _viewerPreviewCancellation?.Dispose();
+        _viewerPreviewCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _connectionCancellation?.Token ?? CancellationToken.None);
+        var cancellationToken = _viewerPreviewCancellation.Token;
         _viewerRow = row;
         _viewerZoom = 1;
         ViewerPhotoScale.ScaleX = 1;
@@ -2267,12 +3123,82 @@ public partial class MainWindow : Window, IDisposable
         ViewerNameText.Text = row.Item.FileName;
         ViewerMetaText.Text = row.Item.TakenAt.LocalDateTime.ToString("d MMMM yyyy · HH:mm", CultureInfo.InvariantCulture);
         ViewerOverlay.Visibility = Visibility.Visible;
+        ViewerPreviewProgress.Visibility = Visibility.Visible;
+        ViewerOverlay.Focus();
+        ViewerCloseButton.Focus();
+
+        // Present the already-decoded timeline thumbnail before cache or network IO.
+        await Dispatcher.Yield(DispatcherPriority.Render);
+
+        try
+        {
+            var previewKey = DecodedThumbnailKey.Create(row.Item, ViewerPreviewSize);
+            if (!_decodedPreviews.TryGetValue(previewKey, out var preview))
+            {
+                preview = await TryLoadCachedThumbnailAsync(
+                    row.Item,
+                    ViewerPreviewSize,
+                    cancellationToken);
+                if (preview is null && _source is { IsOffline: false } source)
+                {
+                    await using var stream = await source.OpenThumbnailAsync(
+                        row.Item.RemoteId,
+                        ViewerPreviewSize,
+                        cancellationToken);
+                    preview = await Task.Run(
+                        () => DecodeBitmap(stream, ViewerPreviewSize, row.Item),
+                        cancellationToken);
+                }
+
+                if (preview is not null)
+                {
+                    RememberDecodedPreview(previewKey, preview);
+                }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (preview is not null && ReferenceEquals(_viewerRow, row))
+            {
+                ViewerImage.Source = preview;
+                ViewerImage.Visibility = Visibility.Visible;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception) when (
+            ThumbnailLoadFailurePolicy.KeepsPlaceholder(exception) ||
+            exception is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // The already-visible timeline thumbnail remains as the offline fallback.
+        }
+        finally
+        {
+            if (ReferenceEquals(_viewerRow, row))
+            {
+                ViewerPreviewProgress.Visibility = Visibility.Collapsed;
+            }
+        }
+    }
+
+    private void RememberDecodedPreview(DecodedThumbnailKey key, ImageSource image)
+    {
+        if (!_decodedPreviews.TryAdd(key, image)) return;
+        _decodedPreviewOrder.Enqueue(key);
+        while (_decodedPreviewOrder.Count > DecodedPreviewCapacity)
+        {
+            _decodedPreviews.Remove(_decodedPreviewOrder.Dequeue());
+        }
     }
 
     private void OnCloseViewerClick(object sender, RoutedEventArgs e)
     {
-        _backgroundIndexGate.Resume("viewer");
+        _viewerPreviewCancellation?.Cancel();
+        _viewerPreviewCancellation?.Dispose();
+        _viewerPreviewCancellation = null;
         ViewerOverlay.Visibility = Visibility.Collapsed;
+        ViewerPreviewProgress.Visibility = Visibility.Collapsed;
+        ViewerImage.Source = null;
         _viewerRow = null;
         _viewerZoom = 1;
     }
@@ -2478,6 +3404,7 @@ public partial class MainWindow : Window, IDisposable
 
             _decodedThumbnails.Clear();
             _decodedThumbnailOrder.Clear();
+            _cachedThumbnailStats = (0, 0);
             UpdateSettingsSummary();
             StatusText.Text = L("Thumbnail cache cleared", "缩略图缓存已清理");
         }
@@ -2510,6 +3437,7 @@ public partial class MainWindow : Window, IDisposable
     {
         _preserveAlbumFolders = !_preserveAlbumFolders;
         UpdateSwitchVisuals();
+        SavePreferences();
         ShowToast(_preserveAlbumFolders
             ? L("Album folders preserved", "已保留相册文件夹")
             : L("Album folders off", "已关闭相册文件夹"));
@@ -2518,7 +3446,9 @@ public partial class MainWindow : Window, IDisposable
     private void OnMotionSwitchClick(object sender, MouseButtonEventArgs e)
     {
         _reduceMotion = !_reduceMotion;
+        ApplyMotionPreference();
         UpdateSwitchVisuals();
+        SavePreferences();
         ShowToast(_reduceMotion ? L("Reduced motion on", "已开启减少动画") : L("Reduced motion off", "已关闭减少动画"));
     }
 
@@ -2763,9 +3693,119 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
+    private void ApplyMotionPreference()
+    {
+        if (_reduceMotion)
+        {
+            ResetButtonScales(this);
+        }
+    }
+
+    private void OnButtonPressStarted(object sender, MouseButtonEventArgs e)
+    {
+        if (FindButton(e.OriginalSource as DependencyObject) is { } button)
+        {
+            var pressedScale = Equals(button.Tag, "AlbumCard") ? 0.98d : 0.97d;
+            AnimateButtonScale(button, _reduceMotion ? 1d : pressedScale, _reduceMotion ? 0 : 80);
+        }
+    }
+
+    private void OnButtonPressEnded(object sender, MouseButtonEventArgs e)
+    {
+        if (FindButton(e.OriginalSource as DependencyObject) is { } button)
+        {
+            AnimateButtonScale(button, 1d, _reduceMotion ? 0 : 120);
+        }
+    }
+
+    private static System.Windows.Controls.Button? FindButton(DependencyObject? source)
+    {
+        for (var current = source; current is not null;)
+        {
+            if (current is System.Windows.Controls.Button button)
+            {
+                return button;
+            }
+
+            current = current switch
+            {
+                Visual or System.Windows.Media.Media3D.Visual3D => VisualTreeHelper.GetParent(current),
+                FrameworkContentElement content => content.Parent,
+                _ => LogicalTreeHelper.GetParent(current),
+            };
+        }
+
+        return null;
+    }
+
+    private static void AnimateButtonScale(
+        System.Windows.Controls.Button button,
+        double target,
+        int durationMilliseconds)
+    {
+        var scale = EnsureMutableButtonScale(button);
+        if (scale is null)
+        {
+            return;
+        }
+
+        var duration = TimeSpan.FromMilliseconds(durationMilliseconds);
+        var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+        scale.BeginAnimation(
+            ScaleTransform.ScaleXProperty,
+            new DoubleAnimation(target, duration) { EasingFunction = easing });
+        scale.BeginAnimation(
+            ScaleTransform.ScaleYProperty,
+            new DoubleAnimation(target, duration) { EasingFunction = easing });
+    }
+
+    private static void ResetButtonScales(DependencyObject root)
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = VisualTreeHelper.GetChild(root, index);
+            if (child is System.Windows.Controls.Button button &&
+                EnsureMutableButtonScale(button) is { } scale)
+            {
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+                scale.ScaleX = 1;
+                scale.ScaleY = 1;
+            }
+
+            ResetButtonScales(child);
+        }
+    }
+
+    private static ScaleTransform? EnsureMutableButtonScale(System.Windows.Controls.Button button)
+    {
+        if (button.RenderTransform is not ScaleTransform scale)
+        {
+            return null;
+        }
+
+        if (scale.IsFrozen)
+        {
+            scale = scale.CloneCurrentValue();
+            button.RenderTransform = scale;
+        }
+
+        return scale;
+    }
+
     private async void OnDisconnectClick(object sender, RoutedEventArgs e)
     {
+        var saved = _activePairedDevice ?? _savedDeviceCard;
+        if (saved is not null)
+        {
+            saved.Status = PairedDeviceStatus.Offline;
+            _savedDeviceCard = saved;
+        }
         Disconnect(clearTimeline: true);
+        if (saved is not null)
+        {
+            await _pairedDeviceStore.UpsertPairedDeviceAsync(saved, CancellationToken.None);
+        }
         try
         {
             await LoadIndexedPageAsync(
@@ -2782,7 +3822,7 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnForgetDeviceClick(object sender, RoutedEventArgs e)
     {
-        var device = _activePairedDevice;
+        var device = _activePairedDevice ?? _savedDeviceCard;
         var accessToken = _activeAccessToken;
         var apiAddress = _activeApiAddress;
         if (device is null)
@@ -2809,6 +3849,7 @@ public partial class MainWindow : Window, IDisposable
 
         await _accessTokenStore.DeleteAsync(device.CredentialKey, CancellationToken.None);
         await _pairedDeviceStore.RemovePairedDeviceAsync(device.DeviceId, CancellationToken.None);
+        _savedDeviceCard = null;
         Disconnect(clearTimeline: true);
         ShowToast(remoteRevoked
             ? L("Pairing revoked and device forgotten", "已撤销配对并忘记设备")
@@ -2851,6 +3892,7 @@ public partial class MainWindow : Window, IDisposable
 
         Disconnect(clearTimeline: true);
         _transferRefreshTimer.Stop();
+        _deviceRefreshTimer.Stop();
         _transferCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _transferStore.Dispose();
         _thumbnailConcurrency.Dispose();
@@ -2867,6 +3909,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void Disconnect(bool clearTimeline)
     {
+        _deviceRefreshTimer.Stop();
         _transferSourceResolver.Clear();
         _backgroundSyncCancellation?.Cancel();
         _backgroundSyncCancellation?.Dispose();
@@ -2877,12 +3920,20 @@ public partial class MainWindow : Window, IDisposable
         _queryCancellation?.Cancel();
         _queryCancellation?.Dispose();
         _queryCancellation = null;
+        _viewerPreviewCancellation?.Cancel();
+        _viewerPreviewCancellation?.Dispose();
+        _viewerPreviewCancellation = null;
         _source?.Dispose();
         _source = null;
         _activeDeviceId = null;
         _activeAccessToken = null;
         _activePairedDevice = null;
         _activeApiAddress = null;
+        _connectedDevice = null;
+        _isDeviceOnline = false;
+        _loadedAlbumDetailKey = null;
+        AlbumDetailRows.Clear();
+        AlbumDetailGroups.Clear();
         _remoteNextCursor = null;
         _hasMoreRemoteItems = false;
         _hasMoreIndexedItems = false;
@@ -2890,12 +3941,12 @@ public partial class MainWindow : Window, IDisposable
         _loadedRemoteIds.Clear();
         _decodedThumbnails.Clear();
         _decodedThumbnailOrder.Clear();
-        DevicePanel.Visibility = Visibility.Collapsed;
-        DeviceCardsGrid.Visibility = Visibility.Collapsed;
-        ConnectedDeviceCard.Visibility = Visibility.Collapsed;
+        _decodedPreviews.Clear();
+        _decodedPreviewOrder.Clear();
+        _viewerRow = null;
+        ViewerImage.Source = null;
+        ViewerPreviewProgress.Visibility = Visibility.Collapsed;
         SetManualConnectionOpen(false);
-        DevicesEmptyText.Visibility = Visibility.Visible;
-        UpdateOnlineIndicators();
         SyncStateText.Text = L("Local cache", "本地缓存");
         TimelineScrollViewer.Visibility = Visibility.Collapsed;
         SetTimelineFooter(null);
@@ -2911,6 +3962,7 @@ public partial class MainWindow : Window, IDisposable
         DisconnectButton.IsEnabled = false;
         ForgetDeviceButton.IsEnabled = false;
         SetLoading(false);
+        RefreshDevicePresentation();
     }
 
     private void SetLoading(bool isLoading, string? status = null)
@@ -2927,9 +3979,11 @@ public partial class MainWindow : Window, IDisposable
 
         ConnectButton.IsEnabled = !isLoading;
         AddressTextBox.IsEnabled = !isLoading;
-        DisconnectButton.IsEnabled = isLoading || DevicePanel.Visibility == Visibility.Visible;
+        DisconnectButton.IsEnabled = isLoading || _isDeviceOnline;
         ForgetDeviceButton.IsEnabled =
-            !isLoading && DevicePanel.Visibility == Visibility.Visible && _activePairedDevice is not null;
+            !isLoading && (_activePairedDevice ?? _savedDeviceCard) is not null;
+        RenameDeviceButton.IsEnabled =
+            !isLoading && (_activePairedDevice ?? _savedDeviceCard) is not null;
         if (status is not null)
         {
             StatusText.Text = status;
@@ -3003,6 +4057,27 @@ public partial class MainWindow : Window, IDisposable
                 item.Generation ?? item.ModifiedAt.ToUnixTimeMilliseconds(),
                 size.Width,
                 size.Height);
+    }
+
+    private readonly record struct AlbumDetailCacheKey(
+        string? DeviceId,
+        string Kind,
+        string Name,
+        string? AlbumId,
+        string? RelativePath,
+        string Filter)
+    {
+        public static AlbumDetailCacheKey Create(
+            string? deviceId,
+            AlbumRow album,
+            string filter) =>
+            new(
+                deviceId,
+                album.Kind,
+                album.Name,
+                album.AlbumId,
+                album.RelativePath,
+                filter);
     }
 
     public sealed class MediaRow : INotifyPropertyChanged
@@ -3160,17 +4235,17 @@ public partial class MainWindow : Window, IDisposable
             Color[] palette =
             [
                 Color.FromRgb(0xB7, 0xC9, 0xD6),
-                Color.FromRgb(0xD8, 0xB7, 0xA5),
-                Color.FromRgb(0xA4, 0xBC, 0xA5),
-                Color.FromRgb(0xC5, 0xB2, 0xD9),
-                Color.FromRgb(0xDB, 0xC9, 0x87),
-                Color.FromRgb(0x9D, 0xBB, 0xCA),
-                Color.FromRgb(0xC6, 0xA5, 0xA5),
-                Color.FromRgb(0xAE, 0xC2, 0xD4),
+                Color.FromRgb(0xD9, 0xB8, 0xA7),
+                Color.FromRgb(0x9F, 0xB6, 0xA0),
+                Color.FromRgb(0xC8, 0xB6, 0xD9),
+                Color.FromRgb(0xD8, 0xC5, 0x8B),
+                Color.FromRgb(0x9B, 0xB7, 0xC8),
+                Color.FromRgb(0xC5, 0xA6, 0xA6),
+                Color.FromRgb(0xAF, 0xC0, 0xD2),
             ];
 
             var hash = StringComparer.OrdinalIgnoreCase.GetHashCode(key);
-            var brush = new SolidColorBrush(palette[Math.Abs(hash % palette.Length)]);
+            var brush = new SolidColorBrush(palette[(hash & int.MaxValue) % palette.Length]);
             brush.Freeze();
             return brush;
         }
@@ -3178,13 +4253,19 @@ public partial class MainWindow : Window, IDisposable
 
     public sealed class MediaGroupRow
     {
-        public MediaGroupRow(string date, IEnumerable<MediaRow> rows)
+        public MediaGroupRow(
+            string date,
+            IEnumerable<MediaRow> rows,
+            bool showHeader = true)
         {
             Date = date;
             Rows = new ObservableCollection<MediaRow>(rows);
+            HeaderVisibility = showHeader ? Visibility.Visible : Visibility.Collapsed;
         }
 
         public string Date { get; }
+
+        public Visibility HeaderVisibility { get; }
 
         public ObservableCollection<MediaRow> Rows { get; }
     }
@@ -3331,8 +4412,7 @@ public partial class MainWindow : Window, IDisposable
 public sealed class JustifiedGalleryPanel : System.Windows.Controls.Panel
 {
     private const double TargetRowHeight = 168;
-    private const double MinimumRowHeight = 96;
-    private const double MaximumSparseRowHeight = 280;
+    private const double TargetRowHeightTolerance = 0.25;
     private const double ItemGap = 6;
     private const double FallbackWidth = 960;
 
@@ -3399,32 +4479,61 @@ public sealed class JustifiedGalleryPanel : System.Windows.Controls.Panel
         }
 
         var start = 0;
-        var ratioSum = 0d;
         var y = 0d;
-        for (var index = 0; index < InternalChildren.Count; index++)
+        while (start < InternalChildren.Count)
         {
-            ratioSum += GetAspectRatio(InternalChildren[index]);
-            var count = index - start + 1;
-            var filledWidthAtTarget = ratioSum * TargetRowHeight + Math.Max(0, count - 1) * ItemGap;
-            var shouldCloseRow = filledWidthAtTarget >= width || index == InternalChildren.Count - 1;
-            if (!shouldCloseRow)
+            var ratioSum = 0d;
+            var completedRow = false;
+            for (var index = start; index < InternalChildren.Count; index++)
+            {
+                var previousRatioSum = ratioSum;
+                ratioSum += GetAspectRatio(InternalChildren[index]);
+                var count = index - start + 1;
+                var gaps = Math.Max(0, count - 1) * ItemGap;
+                var targetWidth = ratioSum * TargetRowHeight + gaps;
+                if (targetWidth < width)
+                {
+                    continue;
+                }
+
+                var end = index + 1;
+                var height = (width - gaps) / Math.Max(0.1, ratioSum);
+                if (count > 1)
+                {
+                    var previousCount = count - 1;
+                    var previousGaps = Math.Max(0, previousCount - 1) * ItemGap;
+                    var previousHeight = (width - previousGaps) / Math.Max(0.1, previousRatioSum);
+                    var previousIsWithinTolerance = previousHeight <=
+                        TargetRowHeight * (1 + TargetRowHeightTolerance);
+                    if (previousIsWithinTolerance &&
+                        Math.Abs(previousHeight - TargetRowHeight) < Math.Abs(height - TargetRowHeight))
+                    {
+                        end = index;
+                        height = previousHeight;
+                    }
+                }
+
+                rows.Add(new GalleryRow(start, end, y, height, StretchToWidth: true));
+                y += height + ItemGap;
+                start = end;
+                completedRow = true;
+                break;
+            }
+
+            if (completedRow)
             {
                 continue;
             }
 
-            var isLastRow = index == InternalChildren.Count - 1;
-            var gaps = Math.Max(0, count - 1) * ItemGap;
-            var justifiedHeight = (width - gaps) / Math.Max(0.1, ratioSum);
-            var stretch = !isLastRow || count > 1;
-            var height = isLastRow
-                ? count == 1
-                    ? TargetRowHeight
-                    : Math.Clamp(justifiedHeight, MinimumRowHeight, MaximumSparseRowHeight)
-                : Math.Max(MinimumRowHeight, justifiedHeight);
-            rows.Add(new GalleryRow(start, index + 1, y, height, stretch));
-            y += height + ItemGap;
-            start = index + 1;
-            ratioSum = 0;
+            // Flickr-style widow row: retain the target height and natural widths.
+            // Never enlarge a short final row merely to fill the container.
+            rows.Add(new GalleryRow(
+                start,
+                InternalChildren.Count,
+                y,
+                TargetRowHeight,
+                StretchToWidth: false));
+            start = InternalChildren.Count;
         }
 
         return rows;
@@ -3441,5 +4550,57 @@ public sealed class JustifiedGalleryPanel : System.Windows.Controls.Panel
         bool StretchToWidth)
     {
         public double Bottom => Top + Height;
+    }
+}
+
+public sealed class GridLengthAnimation : AnimationTimeline
+{
+    public static readonly DependencyProperty FromProperty = DependencyProperty.Register(
+        nameof(From),
+        typeof(GridLength),
+        typeof(GridLengthAnimation),
+        new PropertyMetadata(new GridLength(0)));
+
+    public static readonly DependencyProperty ToProperty = DependencyProperty.Register(
+        nameof(To),
+        typeof(GridLength),
+        typeof(GridLengthAnimation),
+        new PropertyMetadata(new GridLength(0)));
+
+    public static readonly DependencyProperty EasingFunctionProperty = DependencyProperty.Register(
+        nameof(EasingFunction),
+        typeof(IEasingFunction),
+        typeof(GridLengthAnimation));
+
+    public GridLength From
+    {
+        get => (GridLength)GetValue(FromProperty);
+        set => SetValue(FromProperty, value);
+    }
+
+    public GridLength To
+    {
+        get => (GridLength)GetValue(ToProperty);
+        set => SetValue(ToProperty, value);
+    }
+
+    public IEasingFunction? EasingFunction
+    {
+        get => (IEasingFunction?)GetValue(EasingFunctionProperty);
+        set => SetValue(EasingFunctionProperty, value);
+    }
+
+    public override Type TargetPropertyType => typeof(GridLength);
+
+    protected override Freezable CreateInstanceCore() => new GridLengthAnimation();
+
+    public override object GetCurrentValue(
+        object defaultOriginValue,
+        object defaultDestinationValue,
+        AnimationClock animationClock)
+    {
+        var progress = animationClock.CurrentProgress ?? 0;
+        progress = EasingFunction?.Ease(progress) ?? progress;
+        return new GridLength(From.Value + ((To.Value - From.Value) * progress));
     }
 }

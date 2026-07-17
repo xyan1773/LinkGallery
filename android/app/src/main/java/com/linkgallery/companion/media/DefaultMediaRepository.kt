@@ -1,13 +1,25 @@
 package com.linkgallery.companion.media
 
 import java.time.Instant
-import java.security.MessageDigest
+import java.util.LinkedHashMap
 
 class DefaultMediaRepository(
     private val dataSource: MediaStoreDataSource,
     private val permissionGateway: MediaPermissionGateway,
     private val tokenCodec: OpaqueMediaTokenCodec = OpaqueMediaTokenCodec(),
 ) : MediaRepository {
+    private val pageCacheLock = Any()
+    private var pageCacheState: MediaLibraryState? = null
+    private val pageCache = object : LinkedHashMap<PageCacheKey, MediaPageResult.Success>(
+        PAGE_CACHE_CAPACITY,
+        0.75f,
+        true,
+    ) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<PageCacheKey, MediaPageResult.Success>?,
+        ): Boolean = size > PAGE_CACHE_CAPACITY
+    }
+
     override suspend fun getSyncState(): MediaSyncStateResult {
         val types = MediaType.entries.toSet()
         val missingPermissions = permissionGateway.missingPermissions(types)
@@ -101,6 +113,16 @@ class DefaultMediaRepository(
             return MediaPageResult.InvalidCursor
         }
 
+        val libraryState = dataSource.libraryState()
+        val pageCacheKey = PageCacheKey(
+            cursor = query.cursor,
+            before = query.before,
+            limit = query.limit,
+            types = query.types.toSet(),
+            albumId = query.albumId,
+        )
+        cachedPage(pageCacheKey, libraryState)?.let { return it }
+
         val total = dataSource.count(query.types, query.albumId)
         val rows = dataSource.query(
             MediaStoreRequest(
@@ -112,7 +134,7 @@ class DefaultMediaRepository(
         )
         val hasNextPage = rows.size > query.limit
         val pageRows = rows.take(query.limit)
-        return MediaPageResult.Success(
+        val result = MediaPageResult.Success(
             MediaPage(
                 items = pageRows.map(::toRecord),
                 nextCursor = if (hasNextPage) {
@@ -124,6 +146,8 @@ class DefaultMediaRepository(
                 total = total,
             ),
         )
+        rememberPage(pageCacheKey, libraryState, result)
+        return result
     }
 
     override suspend fun getById(id: String): MediaItemResult {
@@ -168,31 +192,36 @@ class DefaultMediaRepository(
                 MediaType.IMAGE -> "image/*"
                 MediaType.VIDEO -> "video/*"
             }
-        val entity = dataSource.openContent(locator.mediaStoreId, locator.type, 0)
-            ?.use(::computeEntity)
-            ?: return MediaContentResult.NotFound
-        if (entity.length != row.fileSize) {
-            return MediaContentResult.NotFound
-        }
         return MediaContentResult.Found(
-            MediaContent(row.fileSize, contentType, entity.entityTag) { offset ->
+            MediaContent(row.fileSize, contentType, contentEntityTag(row)) { offset ->
                 dataSource.openContent(locator.mediaStoreId, locator.type, offset)
             },
         )
     }
 
-    private fun computeEntity(input: java.io.InputStream): ContentEntity {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        var length = 0L
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) break
-            digest.update(buffer, 0, read)
-            length += read
+    private fun cachedPage(
+        key: PageCacheKey,
+        state: MediaLibraryState,
+    ): MediaPageResult.Success? = synchronized(pageCacheLock) {
+        if (pageCacheState != state) {
+            pageCache.clear()
+            pageCacheState = state
+            null
+        } else {
+            pageCache[key]
         }
-        val hash = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-        return ContentEntity(length, "\"sha256-$hash\"")
+    }
+
+    private fun rememberPage(
+        key: PageCacheKey,
+        state: MediaLibraryState,
+        result: MediaPageResult.Success,
+    ) = synchronized(pageCacheLock) {
+        if (pageCacheState != state) {
+            pageCache.clear()
+            pageCacheState = state
+        }
+        pageCache[key] = result
     }
 
     private fun toRecord(row: MediaStoreRow): MediaRecord {
@@ -222,8 +251,19 @@ class DefaultMediaRepository(
         "\"thumb-${row.type.name.lowercase()}-${row.mediaStoreId}-" +
             "${row.generation ?: row.dateModifiedEpochSeconds}-${row.fileSize}-${width}x$height\""
 
-    private data class ContentEntity(
-        val length: Long,
-        val entityTag: String,
+    private fun contentEntityTag(row: MediaStoreRow): String =
+        "\"media-${row.type.name.lowercase()}-${row.mediaStoreId}-" +
+            "${row.generation ?: row.dateModifiedEpochSeconds}-${row.fileSize}\""
+
+    private data class PageCacheKey(
+        val cursor: String?,
+        val before: MediaStoreCursor?,
+        val limit: Int,
+        val types: Set<MediaType>,
+        val albumId: String?,
     )
+
+    private companion object {
+        const val PAGE_CACHE_CAPACITY = 32
+    }
 }

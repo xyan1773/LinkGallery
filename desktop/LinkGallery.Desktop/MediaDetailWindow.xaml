@@ -6,7 +6,7 @@
         Height="760"
         MinWidth="760"
         MinHeight="520"
-        Background="#111827"
+        Background="#1C1C1E"
         KeyDown="OnKeyDown"
         Closed="OnClosed">
     <Grid>
@@ -26,27 +26,36 @@
                 <Button x:Name="PreviousButton"
                         AutomationProperties.AutomationId="PreviousButton"
                         Width="88"
-                        Padding="8"
+                        Height="44"
                         HorizontalAlignment="Left"
                         Click="OnPreviousClick"
-                        Content="← 上一项" />
+                        Content="← 上一项"
+                        Background="#2FFFFFFF"
+                        BorderBrush="#35FFFFFF"
+                        Foreground="White"
+                        Style="{StaticResource LgSecondaryButton}" />
                 <TextBlock x:Name="PositionText"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"
-                           Foreground="#D1D5DB" />
+                           Foreground="#CCFFFFFF" />
                 <Button x:Name="NextButton"
                         AutomationProperties.AutomationId="NextButton"
                         Width="88"
-                        Padding="8"
+                        Height="44"
                         HorizontalAlignment="Right"
                         Click="OnNextClick"
-                        Content="下一项 →" />
+                        Content="下一项 →"
+                        Background="#2FFFFFFF"
+                        BorderBrush="#35FFFFFF"
+                        Foreground="White"
+                        Style="{StaticResource LgSecondaryButton}" />
             </Grid>
 
             <Grid Grid.Row="1" Margin="20,0">
                 <Border x:Name="PhotoPanel"
                         AutomationProperties.AutomationId="PhotoPanel"
-                        Background="#030712"
+                        Background="#000000"
+                        CornerRadius="14"
                         ClipToBounds="True"
                         Visibility="Collapsed">
                     <ScrollViewer HorizontalScrollBarVisibility="Auto"
@@ -87,7 +96,7 @@
                                Grid.Row="1"
                                Margin="0,10,0,0"
                                HorizontalAlignment="Center"
-                               Foreground="#D1D5DB"
+                               Foreground="#CCFFFFFF"
                                Text="正在加载视频…" />
                     <Grid Grid.Row="2" Margin="0,10,0,0">
                         <Grid.ColumnDefinitions>
@@ -98,10 +107,10 @@
                         <Button x:Name="PlayPauseButton"
                                 AutomationProperties.AutomationId="PlayPauseButton"
                                 Width="72"
-                                Padding="8"
                                 IsEnabled="False"
                                 Click="OnPlayPauseClick"
-                                Content="播放" />
+                                Content="播放"
+                                Style="{StaticResource LgSecondaryButton}" />
                         <Slider x:Name="VideoProgress"
                                 AutomationProperties.AutomationId="VideoProgress"
                                 Grid.Column="1"
@@ -114,7 +123,7 @@
                         <TextBlock x:Name="VideoTimeText"
                                    Grid.Column="2"
                                    VerticalAlignment="Center"
-                                   Foreground="#D1D5DB"
+                                   Foreground="#CCFFFFFF"
                                    Text="00:00 / 00:00" />
                     </Grid>
                 </Grid>
@@ -129,7 +138,7 @@
                     <TextBlock x:Name="LoadingText"
                                Margin="0,12,0,0"
                                HorizontalAlignment="Center"
-                               Foreground="#D1D5DB"
+                               Foreground="#CCFFFFFF"
                                Text="正在加载…" />
                 </StackPanel>
 
@@ -141,12 +150,12 @@
                             Visibility="Collapsed">
                     <TextBlock FontSize="18"
                                FontWeight="SemiBold"
-                               Foreground="#F9FAFB"
+                               Foreground="White"
                                Text="无法打开此媒体"
                                TextAlignment="Center" />
                     <TextBlock x:Name="ErrorText"
                                Margin="0,10,0,0"
-                               Foreground="#D1D5DB"
+                               Foreground="#CCFFFFFF"
                                TextAlignment="Center"
                                TextWrapping="Wrap" />
                 </StackPanel>
@@ -159,76 +168,76 @@
                 <Button x:Name="ZoomOutButton"
                         AutomationProperties.AutomationId="ZoomOutButton"
                         Width="72"
-                        Padding="8"
                         Click="OnZoomOutClick"
                         Content="缩小"
+                        Style="{StaticResource LgSecondaryButton}"
                         Visibility="Collapsed" />
                 <Button x:Name="ZoomResetButton"
                         AutomationProperties.AutomationId="ZoomResetButton"
                         Width="72"
                         Margin="8,0"
-                        Padding="8"
                         Click="OnZoomResetClick"
                         Content="适合"
+                        Style="{StaticResource LgSecondaryButton}"
                         Visibility="Collapsed" />
                 <Button x:Name="ZoomActualButton"
                         AutomationProperties.AutomationId="ZoomActualButton"
                         Width="72"
                         Margin="0,0,8,0"
-                        Padding="8"
                         Click="OnZoomActualClick"
                         Content="100%"
+                        Style="{StaticResource LgSecondaryButton}"
                         Visibility="Collapsed" />
                 <Button x:Name="ZoomInButton"
                         AutomationProperties.AutomationId="ZoomInButton"
                         Width="72"
-                        Padding="8"
                         Click="OnZoomInClick"
                         Content="放大"
+                        Style="{StaticResource LgSecondaryButton}"
                         Visibility="Collapsed" />
             </StackPanel>
         </Grid>
 
         <Border Grid.Column="1"
                 Padding="24"
-                Background="#F9FAFB">
+                Background="{StaticResource LgBrushSurfaceAlt}">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
                     <TextBlock x:Name="FileNameText"
                                AutomationProperties.AutomationId="FileNameText"
-                               FontSize="20"
+                               FontSize="21"
                                FontWeight="SemiBold"
                                TextWrapping="Wrap" />
                     <Border Margin="0,14,0,22"
                             Padding="10,6"
                             HorizontalAlignment="Left"
-                            Background="#E5E7EB"
-                            CornerRadius="12">
+                             Background="{StaticResource LgBrushAccentSoft}"
+                             CornerRadius="999">
                         <TextBlock x:Name="AvailabilityText"
-                                   Foreground="#374151" />
+                                   Foreground="{StaticResource LgBrushAccent}" />
                     </Border>
 
                     <TextBlock FontWeight="SemiBold" Text="拍摄时间" />
-                    <TextBlock x:Name="TakenAtText" Margin="0,5,0,16" Foreground="#4B5563" />
+                    <TextBlock x:Name="TakenAtText" Margin="0,5,0,16" Foreground="{StaticResource LgBrushMuted}" />
                     <TextBlock FontWeight="SemiBold" Text="尺寸" />
-                    <TextBlock x:Name="DimensionsText" Margin="0,5,0,16" Foreground="#4B5563" />
+                    <TextBlock x:Name="DimensionsText" Margin="0,5,0,16" Foreground="{StaticResource LgBrushMuted}" />
                     <TextBlock FontWeight="SemiBold" Text="大小" />
-                    <TextBlock x:Name="SizeText" Margin="0,5,0,16" Foreground="#4B5563" />
+                    <TextBlock x:Name="SizeText" Margin="0,5,0,16" Foreground="{StaticResource LgBrushMuted}" />
                     <TextBlock FontWeight="SemiBold" Text="来源" />
                     <TextBlock x:Name="SourceText"
                                Margin="0,5,0,16"
-                               Foreground="#4B5563"
+                               Foreground="{StaticResource LgBrushMuted}"
                                TextWrapping="Wrap" />
                     <TextBlock FontWeight="SemiBold" Text="相对路径" />
                     <TextBlock x:Name="PathText"
                                Margin="0,5,0,16"
-                               Foreground="#4B5563"
+                               Foreground="{StaticResource LgBrushMuted}"
                                TextWrapping="Wrap" />
                     <TextBlock FontWeight="SemiBold" Text="类型" />
-                    <TextBlock x:Name="TypeText" Margin="0,5,0,16" Foreground="#4B5563" />
+                    <TextBlock x:Name="TypeText" Margin="0,5,0,16" Foreground="{StaticResource LgBrushMuted}" />
 
                     <Separator Margin="0,8,0,16" />
-                    <TextBlock Foreground="#6B7280"
+                    <TextBlock Foreground="{StaticResource LgBrushMuted}"
                                Text="只读预览 · 不会修改手机中的原件"
                                TextWrapping="Wrap" />
                 </StackPanel>

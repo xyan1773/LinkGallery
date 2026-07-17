@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.os.Build
+import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -65,9 +66,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -95,6 +94,7 @@ import com.linkgallery.companion.pairing.Ipv4AddressCode
 import java.text.NumberFormat
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.LinkedHashMap
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -105,6 +105,23 @@ import kotlinx.coroutines.withContext
 
 private val LgEase = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
 private val ThumbnailLoadGate = Semaphore(6)
+private val ThumbnailMemoryCache = object : LruCache<String, ImageBitmap>(32 * 1024) {
+    override fun sizeOf(key: String, value: ImageBitmap): Int =
+        (value.width * value.height * 4 / 1024).coerceAtLeast(1)
+}
+private class AlbumPageCache {
+    private val pages = object : LinkedHashMap<String, List<MediaRecord>>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, List<MediaRecord>>?,
+        ): Boolean = size > 12
+    }
+
+    operator fun get(key: String): List<MediaRecord>? = pages[key]
+
+    operator fun set(key: String, items: List<MediaRecord>) {
+        pages[key] = items
+    }
+}
 
 @Composable
 fun PermissionScreen(
@@ -168,6 +185,7 @@ internal fun LinkGalleryApp(
     var selectedFilter by remember { mutableStateOf(MediaFilter.All) }
     var galleryState by remember { mutableStateOf<GalleryState>(GalleryState.Loading) }
     var toastMessage by remember { mutableStateOf<String?>(null) }
+    val albumPageCache = remember(mediaRepository) { AlbumPageCache() }
 
     fun showToast(message: String) {
         toastMessage = message
@@ -211,30 +229,28 @@ internal fun LinkGalleryApp(
         bottomBar = {
             Surface(
                 color = LgCanvas,
-                shadowElevation = 8.dp,
+                shadowElevation = 0.dp,
                 modifier = Modifier.testTag("bottom_navigation"),
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .height(58.dp)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .height(72.dp)
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AppTab.entries.forEach { tab ->
                         val selected = selectedTab == tab
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .clip(RoundedCornerShape(15.dp))
-                                .background(if (selected) LgBlue.copy(alpha = 0.11f) else Color.Transparent)
                                 .clickable { selectedTab = tab }
                                 .testTag(tab.testTag),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
                         ) {
                             Text(
                                 text = tab.symbol,
@@ -242,11 +258,11 @@ internal fun LinkGalleryApp(
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.SemiBold,
                             )
-                            Spacer(Modifier.width(7.dp))
+                            Spacer(Modifier.height(2.dp))
                             Text(
                                 text = tab.label(strings),
                                 color = if (selected) LgBlueStrong else LgMuted,
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.labelSmall,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             )
                         }
@@ -258,23 +274,7 @@ internal fun LinkGalleryApp(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .drawBehind {
-                    drawRect(
-                        brush = Brush.radialGradient(
-                            colors = listOf(Color(0x140066CC), Color.Transparent),
-                            center = androidx.compose.ui.geometry.Offset(size.width * 0.18f, size.height * 0.10f),
-                            radius = size.width * 0.5f
-                        )
-                    )
-                    drawRect(
-                        brush = Brush.radialGradient(
-                            colors = listOf(Color(0x0F34C759), Color.Transparent),
-                            center = androidx.compose.ui.geometry.Offset(size.width * 0.88f, size.height * 0.86f),
-                            radius = size.width * 0.4f
-                        )
-                    )
-                },
+                .padding(padding),
         ) {
             Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
                 when (selectedTab) {
@@ -292,6 +292,7 @@ internal fun LinkGalleryApp(
                         AppTab.Albums -> AlbumsPage(
                             galleryState = galleryState,
                             mediaRepository = mediaRepository,
+                            albumPageCache = albumPageCache,
                             permissionGranted = permissionGranted,
                             onPermissionRequest = onPermissionRequest,
                             onManageDevices = { selectedTab = AppTab.Connection },
@@ -342,6 +343,7 @@ internal fun PermissionContent(
 private fun AlbumsPage(
     galleryState: GalleryState,
     mediaRepository: MediaRepository?,
+    albumPageCache: AlbumPageCache,
     permissionGranted: Boolean,
     onPermissionRequest: () -> Unit,
     onManageDevices: () -> Unit,
@@ -351,27 +353,60 @@ private fun AlbumsPage(
     val mediaItems = (galleryState as? GalleryState.Ready)?.items.orEmpty()
     val smartAlbums = remember(mediaItems, strings.uiLanguage) { buildSmartAlbums(mediaItems, strings) }
     val deviceAlbums = remember(mediaItems, strings.uiLanguage) { buildDeviceAlbums(mediaItems, strings) }
-    val customAlbums = remember(mediaItems) { emptyList<AlbumUi>() }
     val scope = rememberCoroutineScope()
+    val libraryCacheVersion = remember(mediaItems) {
+        val fingerprint = mediaItems.fold(1_125_899_906_842_597L) { value, item ->
+            val generation = item.generation ?: item.modifiedAt.toEpochMilli()
+            (value * 31 + item.id.hashCode()) * 31 + generation
+        }
+        "${mediaItems.size}:$fingerprint"
+    }
     var activeAlbum by remember { mutableStateOf<AlbumUi?>(null) }
     var activeAlbumItems by remember { mutableStateOf<List<MediaRecord>>(emptyList()) }
     var albumLoading by remember { mutableStateOf(false) }
+    var activeAlbumFilter by remember { mutableStateOf(MediaFilter.All) }
 
     if (activeAlbum != null) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(20.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
         ) {
-            TopBar(
-                title = activeAlbum!!.name,
-                subtitle = strings.itemCount(activeAlbumItems.size),
-                action = strings.back,
-                onAction = {
+            TextButton(
+                onClick = {
                     activeAlbum = null
                     activeAlbumItems = emptyList()
+                    activeAlbumFilter = MediaFilter.All
                 },
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+            ) {
+                Text("\u2039 ${strings.albums}", color = LgBlue, fontWeight = FontWeight.SemiBold)
+            }
+            Text(
+                activeAlbum!!.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
             )
+            Text(
+                strings.itemCount(activeAlbumItems.size),
+                color = LgMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MediaFilter.entries.forEach { filter ->
+                    PressScale(targetScale = 0.96f) { pressModifier ->
+                        FilterChip(
+                            selected = activeAlbumFilter == filter,
+                            onClick = { activeAlbumFilter = filter },
+                            label = { Text(filter.label(strings)) },
+                            shape = RoundedCornerShape(999.dp),
+                            modifier = pressModifier,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
             if (albumLoading) {
                 StateCard(strings.loadingMedia, strings.preparingFirstPage)
             } else if (activeAlbumItems.isEmpty()) {
@@ -379,7 +414,7 @@ private fun AlbumsPage(
             } else {
                 MediaGrid(
                     items = activeAlbumItems,
-                    selectedFilter = MediaFilter.All,
+                    selectedFilter = activeAlbumFilter,
                     mediaRepository = mediaRepository,
                     selectionMode = false,
                     selectedIds = emptySet(),
@@ -392,17 +427,33 @@ private fun AlbumsPage(
     }
 
     fun openAlbum(album: AlbumUi) {
+        val embeddedItems = album.members
+        val albumIdentity = album.albumId ?: album.relativePath ?: album.name
+        val cacheKey = "$albumIdentity:$libraryCacheVersion"
+        if (embeddedItems != null) {
+            activeAlbum = album
+            activeAlbumItems = embeddedItems
+            albumLoading = false
+            return
+        }
         if (album.albumId == null || mediaRepository == null) {
             onToast(strings.albumUnavailable)
             return
         }
         activeAlbum = album
+        albumPageCache[cacheKey]?.let { cached ->
+            activeAlbumItems = cached
+            albumLoading = false
+            return
+        }
         albumLoading = true
         scope.launch {
             activeAlbumItems = when (val result = withContext(Dispatchers.IO) {
                 mediaRepository.getPage(MediaQuery(limit = 200, albumId = album.albumId))
             }) {
-                is MediaPageResult.Success -> result.page.items
+                is MediaPageResult.Success -> result.page.items.also { items ->
+                    albumPageCache[cacheKey] = items
+                }
                 else -> emptyList()
             }
             albumLoading = false
@@ -412,13 +463,14 @@ private fun AlbumsPage(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         TopBar(
             title = strings.albums,
             subtitle = strings.itemCount(mediaItems.size),
-            action = strings.newAlbum,
-            onAction = { onToast(strings.newAlbum) },
+            action = "",
+            onAction = {},
+            eyebrow = "LinkGallery",
         )
         if (!permissionGranted || galleryState is GalleryState.PermissionRequired) {
             PermissionGate(permissionGranted, onPermissionRequest, strings)
@@ -430,7 +482,7 @@ private fun AlbumsPage(
 
         AlbumSection(
             strings.smartAlbums,
-            strings.seeAll,
+            null,
             smartAlbums,
             mediaRepository = mediaRepository,
             strings = strings,
@@ -443,16 +495,6 @@ private fun AlbumsPage(
             albums = deviceAlbums,
             mediaRepository = mediaRepository,
             onAction = onManageDevices,
-            onAlbumClick = ::openAlbum,
-            strings = strings,
-        )
-        Spacer(Modifier.height(20.dp))
-        AlbumSection(
-            title = strings.myAlbums,
-            action = null,
-            albums = customAlbums,
-            mediaRepository = mediaRepository,
-            emptyMessage = strings.noCustomAlbums,
             onAlbumClick = ::openAlbum,
             strings = strings,
         )
@@ -781,7 +823,7 @@ private fun AlbumSection(
     }
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
-        modifier = Modifier.height(((albums.size + 1) / 2 * 190).dp),
+        modifier = Modifier.height(((albums.size + 1) / 2 * 166).dp),
         userScrollEnabled = false,
         contentPadding = PaddingValues(0.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -800,46 +842,71 @@ private fun AlbumCard(
     strings: UiStrings,
     onClick: (AlbumUi) -> Unit,
 ) {
-    Column(modifier = Modifier.clickable { onClick(album) }) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1.65f)
-                .clip(RoundedCornerShape(13.dp))
-                .background(album.color),
-            contentAlignment = Alignment.TopStart,
-        ) {
-            MediaThumbnailPreview(
-                item = album.cover,
-                mediaRepository = mediaRepository,
-                modifier = Modifier.fillMaxSize(),
-                fallbackText = album.name.take(1).uppercase(Locale.getDefault()),
-            )
-            if (album.tag != null) {
-                Text(
-                    text = album.tag,
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .padding(start = 12.dp, top = 12.dp)
-                        .background(Color.Black.copy(alpha = 0.22f), RoundedCornerShape(999.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
+    PressScale(targetScale = 0.98f, onClick = { onClick(album) }) { pressModifier ->
+        Column(modifier = pressModifier) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.65f)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(album.color),
+                contentAlignment = Alignment.TopStart,
+            ) {
+                MediaThumbnailPreview(
+                    item = album.cover,
+                    mediaRepository = mediaRepository,
+                    modifier = Modifier.fillMaxSize(),
+                    fallbackText = album.name.take(1).uppercase(Locale.getDefault()),
+                    fallbackBackground = album.color,
                 )
+                if (album.cover == null) {
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 12.dp, top = 12.dp)
+                            .size(31.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.58f)),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 14.dp, bottom = 16.dp)
+                            .size(width = 48.dp, height = 21.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(LgInk.copy(alpha = 0.34f)),
+                    )
+                }
+                if (album.tag != null) {
+                    Text(
+                        text = album.tag,
+                        color = if (album.isSmart) LgBlue else Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .padding(start = 12.dp, top = 12.dp)
+                            .background(
+                                if (album.isSmart) Color.White.copy(alpha = 0.9f)
+                                else Color.Black.copy(alpha = 0.35f),
+                                RoundedCornerShape(999.dp),
+                            )
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                }
             }
+            Text(
+                text = album.name,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                text = strings.itemCount(album.count),
+                color = LgMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
-        Text(
-            text = album.name,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = 8.dp),
-        )
-        Text(
-            text = strings.itemCount(album.count),
-            color = LgMuted,
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }
 
@@ -853,21 +920,25 @@ private fun MediaGrid(
     onToggleSelection: (String) -> Unit,
     strings: UiStrings,
 ) {
-    val filtered = when (selectedFilter) {
-        MediaFilter.All -> items
-        MediaFilter.Photos -> items.filter { it.type == MediaType.IMAGE }
-        MediaFilter.Videos -> items.filter { it.type == MediaType.VIDEO }
+    val filtered = remember(items, selectedFilter) {
+        when (selectedFilter) {
+            MediaFilter.All -> items
+            MediaFilter.Photos -> items.filter { it.type == MediaType.IMAGE }
+            MediaFilter.Videos -> items.filter { it.type == MediaType.VIDEO }
+        }
     }
-    val grouped = filtered.sortedByDescending { it.takenAt }.groupBy {
-        it.takenAt.atZone(ZoneId.systemDefault()).toLocalDate()
+    val grouped = remember(filtered) {
+        filtered.sortedByDescending { it.takenAt }.groupBy {
+            it.takenAt.atZone(ZoneId.systemDefault()).toLocalDate()
+        }
     }
     LazyVerticalGrid(
         columns = GridCells.Fixed(3),
         modifier = Modifier
             .fillMaxSize()
             .testTag("gallery_grid"),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         grouped.forEach { (date, dateItems) ->
             item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
@@ -900,13 +971,13 @@ private fun MediaTile(
     onToggleSelection: (String) -> Unit,
     strings: UiStrings,
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(10.dp)
     Box(
         modifier = Modifier
-            .aspectRatio(1f)
+            .aspectRatio(1.18f)
             .clip(shape)
             .background(LgCanvas)
-            .border(1.dp, LgLine, shape)
+            .then(if (selected) Modifier.border(2.dp, LgBlue, shape) else Modifier)
             .clickable(enabled = selectionMode) { onToggleSelection(item.id) }
             .testTag("media_tile"),
         contentAlignment = Alignment.BottomEnd,
@@ -939,15 +1010,17 @@ private fun MediaTile(
                 }
             }
         }
-        Text(
-            text = if (item.type == MediaType.VIDEO) strings.video else strings.photo,
-            color = Color.White,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier
-                .padding(6.dp)
-                .background(Color.Black.copy(alpha = 0.28f), RoundedCornerShape(999.dp))
-                .padding(horizontal = 7.dp, vertical = 3.dp),
-        )
+        if (item.type == MediaType.VIDEO) {
+            Text(
+                text = formatDuration(item.durationMilliseconds) ?: strings.video,
+                color = Color.White,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .padding(6.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(5.dp))
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+            )
+        }
     }
 }
 
@@ -957,13 +1030,19 @@ private fun MediaThumbnailPreview(
     mediaRepository: MediaRepository?,
     modifier: Modifier = Modifier,
     fallbackText: String,
+    fallbackBackground: Color = LgCanvas,
 ) {
-    var image by remember(item?.id, mediaRepository) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(item?.id, mediaRepository) {
-        image = null
+    val cacheKey = item?.let { record ->
+        "${record.id}:${record.generation ?: record.modifiedAt.toEpochMilli()}:256"
+    }
+    var image by remember(cacheKey, mediaRepository) {
+        mutableStateOf(cacheKey?.let(ThumbnailMemoryCache::get))
+    }
+    LaunchedEffect(cacheKey, mediaRepository) {
+        if (image != null) return@LaunchedEffect
         val record = item ?: return@LaunchedEffect
         val repository = mediaRepository ?: return@LaunchedEffect
-        image = ThumbnailLoadGate.withPermit {
+        val decoded = ThumbnailLoadGate.withPermit {
             withContext(Dispatchers.IO) {
                 when (val result = repository.getThumbnail(record.id, 256, 256)) {
                     is MediaThumbnailResult.Found -> BitmapFactory
@@ -973,6 +1052,10 @@ private fun MediaThumbnailPreview(
                 }
             }
         }
+        if (decoded != null && cacheKey != null) {
+            ThumbnailMemoryCache.put(cacheKey, decoded)
+        }
+        image = decoded
     }
 
     if (image != null) {
@@ -984,14 +1067,20 @@ private fun MediaThumbnailPreview(
         )
     } else {
         Box(
-            modifier = modifier.background(LgCanvas),
+            modifier = modifier.background(fallbackBackground),
             contentAlignment = Alignment.Center,
         ) {}
     }
 }
 
 @Composable
-private fun TopBar(title: String, subtitle: String, action: String, onAction: () -> Unit) {
+private fun TopBar(
+    title: String,
+    subtitle: String,
+    action: String,
+    onAction: () -> Unit,
+    eyebrow: String? = null,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1000,11 +1089,21 @@ private fun TopBar(title: String, subtitle: String, action: String, onAction: ()
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column {
+            if (eyebrow != null) {
+                Text(
+                    eyebrow,
+                    color = LgBlue,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             Text(subtitle, color = LgMuted, style = MaterialTheme.typography.bodySmall)
         }
-        PressScale(targetScale = 0.94f) { pressModifier ->
-            TextButton(onClick = onAction, modifier = pressModifier) { Text(action) }
+        if (action.isNotBlank()) {
+            PressScale(targetScale = 0.94f) { pressModifier ->
+                TextButton(onClick = onAction, modifier = pressModifier) { Text(action) }
+            }
         }
     }
 }
@@ -1024,7 +1123,7 @@ private fun PermissionGate(permissionGranted: Boolean, onPermissionRequest: () -
         Spacer(Modifier.height(12.dp))
         Button(
             onClick = onPermissionRequest,
-            shape = RoundedCornerShape(999.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(containerColor = LgBlueStrong),
             modifier = Modifier.testTag("grant_media_permission"),
         ) {
@@ -1135,6 +1234,7 @@ private fun ToastOverlay(message: String?, modifier: Modifier = Modifier) {
 @Composable
 private fun PressScale(
     targetScale: Float,
+    onClick: () -> Unit = {},
     content: @Composable (Modifier) -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
@@ -1150,7 +1250,7 @@ private fun PressScale(
             .clickable(
                 interactionSource = interaction,
                 indication = null,
-                onClick = {},
+                onClick = onClick,
             ),
     )
 }
@@ -1165,7 +1265,7 @@ private fun StateCard(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (tag == null) Modifier else Modifier.testTag(tag)),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = LgCanvas),
     ) {
         Column(Modifier.padding(16.dp)) {
@@ -1211,6 +1311,8 @@ private data class AlbumUi(
     val cover: MediaRecord? = null,
     val albumId: String? = null,
     val relativePath: String? = null,
+    val isSmart: Boolean = false,
+    val members: List<MediaRecord>? = null,
 )
 
 private fun buildSmartAlbums(items: List<MediaRecord>, strings: UiStrings): List<AlbumUi> {
@@ -1220,22 +1322,47 @@ private fun buildSmartAlbums(items: List<MediaRecord>, strings: UiStrings): List
             it.albumName?.contains("screenshot", ignoreCase = true) == true ||
                 it.fileName.contains("screenshot", ignoreCase = true)
     }
+    val recentCutoff = java.time.Instant.now().minusSeconds(30L * 24L * 60L * 60L)
+    val recent = items.filter { it.takenAt >= recentCutoff }
 
-    return listOfNotNull(
-        videos.takeIf { it.isNotEmpty() }?.let {
-            AlbumUi(strings.videos, it.size, Color(0xFF5AC8FA), strings.smartTag, it.first())
-        },
-        photos.takeIf { it.isNotEmpty() }?.let {
-            AlbumUi(strings.photos, it.size, Color(0xFFAF52DE), strings.smartTag, it.first())
-        },
-        screenshots.takeIf { it.isNotEmpty() }?.let {
-            AlbumUi(strings.screenshots, it.size, Color(0xFFFFB340), strings.smartTag, it.first())
-        },
+    return listOf(
+        AlbumUi(
+            strings.photos,
+            photos.size,
+            Color(0xFFB7C9D6),
+            strings.smartTag,
+            isSmart = true,
+            members = photos,
+        ),
+        AlbumUi(
+            strings.videos,
+            videos.size,
+            Color(0xFFD9B8A7),
+            strings.smartTag,
+            isSmart = true,
+            members = videos,
+        ),
+        AlbumUi(
+            strings.screenshots,
+            screenshots.size,
+            Color(0xFF9FB6A0),
+            strings.smartTag,
+            isSmart = true,
+            members = screenshots,
+        ),
+        AlbumUi(
+            strings.recentlyAdded,
+            recent.size,
+            Color(0xFFC8B6D9),
+            strings.smartTag,
+            isSmart = true,
+            members = recent,
+        ),
     )
 }
 
 private fun buildDeviceAlbums(items: List<MediaRecord>, strings: UiStrings): List<AlbumUi> {
-    val colors = listOf(LgSuccess, LgBlue, Color(0xFF8E8E93), Color(0xFF5856D6))
+    val colors = listOf(LgBlueSoft, Color(0xFFF5F5F7), Color(0xFFFAFAFC))
     return items
         .groupBy {
             it.albumId
@@ -1256,8 +1383,21 @@ private fun buildDeviceAlbums(items: List<MediaRecord>, strings: UiStrings): Lis
                 cover = first,
                 albumId = first.albumId,
                 relativePath = first.relativePath,
+                members = albumItems.takeIf { first.albumId == null },
             )
         }
+}
+
+private fun formatDuration(durationMilliseconds: Long?): String? {
+    val totalSeconds = durationMilliseconds?.div(1_000) ?: return null
+    val hours = totalSeconds / 3_600
+    val minutes = (totalSeconds % 3_600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(Locale.ROOT, hours, minutes, seconds)
+    } else {
+        "%d:%02d".format(Locale.ROOT, minutes, seconds)
+    }
 }
 
 private enum class UiLanguage {
@@ -1281,6 +1421,7 @@ private class UiStrings(val uiLanguage: UiLanguage) {
     val video get() = t("Video", "视频")
     val photo get() = t("Photo", "照片")
     val screenshots get() = t("Screenshots", "截图")
+    val recentlyAdded get() = t("Recently Added", "最近添加")
     val smartAlbums get() = t("Smart Albums", "智能相册")
     val deviceAlbums get() = t("Device Albums", "设备相册")
     val myAlbums get() = t("My Albums", "我的相册")

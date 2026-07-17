@@ -12,6 +12,7 @@ import com.linkgallery.companion.media.MediaType
 class AndroidDeviceInfoProvider(
     private val context: Context,
     private val permissionGateway: MediaPermissionGateway,
+    private val friendlyDeviceNameProvider: AndroidFriendlyDeviceNameProvider,
 ) : DeviceInfoProvider {
     override fun get(): DeviceInfoResult {
         val missingPermissions = permissionGateway.missingPermissions(MediaType.entries.toSet())
@@ -40,7 +41,7 @@ class AndroidDeviceInfoProvider(
                     context.contentResolver,
                     Settings.Secure.ANDROID_ID,
                 ) ?: "unknown",
-                name = Build.MODEL.ifBlank { "Android device" },
+                name = friendlyDeviceNameProvider.get(),
                 model = Build.MODEL.takeIf(String::isNotBlank),
                 battery = battery,
                 mediaCount = mediaCount,

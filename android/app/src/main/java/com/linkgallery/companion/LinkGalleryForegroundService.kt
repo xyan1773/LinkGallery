@@ -21,6 +21,7 @@ import com.linkgallery.companion.media.DefaultMediaRepository
 import com.linkgallery.companion.pairing.AndroidPairingCredentialStore
 import com.linkgallery.companion.pairing.PairingManager
 import com.linkgallery.companion.server.AndroidDeviceInfoProvider
+import com.linkgallery.companion.server.AndroidFriendlyDeviceNameProvider
 import com.linkgallery.companion.server.AndroidPublicDeviceInfoProvider
 import com.linkgallery.companion.server.ApiController
 import com.linkgallery.companion.server.LinkGalleryHttpServer
@@ -113,10 +114,12 @@ class LinkGalleryForegroundService : Service() {
 
         val permissionGateway = AndroidMediaPermissionGateway(applicationContext)
         val credentialStore = AndroidPairingCredentialStore(applicationContext)
+        val friendlyDeviceNameProvider = AndroidFriendlyDeviceNameProvider(applicationContext)
         pairingManager = PairingManager(credentialStore = credentialStore)
         publicDeviceInfoProvider = AndroidPublicDeviceInfoProvider(
             applicationContext,
             AndroidKeystoreDeviceIdentityProvider(),
+            friendlyDeviceNameProvider,
             pairingAvailableProvider = pairingManager::isPairingAvailable,
         )
         nsdRegistrar = AndroidNsdServiceRegistrar(applicationContext, publicDeviceInfoProvider)
@@ -131,7 +134,11 @@ class LinkGalleryForegroundService : Service() {
         httpServer = LinkGalleryHttpServer(
             ApiController(
                 publicDeviceInfoProvider,
-                AndroidDeviceInfoProvider(applicationContext, permissionGateway),
+                AndroidDeviceInfoProvider(
+                    applicationContext,
+                    permissionGateway,
+                    friendlyDeviceNameProvider,
+                ),
                 repository,
                 pairingManager,
                 pairingManager,

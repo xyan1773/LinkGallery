@@ -116,6 +116,25 @@ class DefaultMediaRepositoryTest {
     }
 
     @Test
+    fun `reuses album pages until the MediaStore generation changes`() = runSuspend {
+        val source = FakeDataSource(rows = listOf(row(id = 1, generation = 10)))
+        val repository = DefaultMediaRepository(source, FakePermissionGateway())
+        val query = MediaQuery(limit = 20, albumId = "camera")
+
+        repository.getPage(query)
+        repository.getPage(query)
+
+        assertEquals(1, source.queryCount)
+        assertEquals(1, source.countCount)
+
+        source.rows = listOf(row(id = 2, generation = 11))
+        repository.getPage(query)
+
+        assertEquals(2, source.queryCount)
+        assertEquals(2, source.countCount)
+    }
+
+    @Test
     fun `returns permissions without querying MediaStore`() = runSuspend {
         val source = FakeDataSource(rows = listOf(row()))
         val repository = DefaultMediaRepository(
@@ -278,11 +297,13 @@ class DefaultMediaRepositoryTest {
             ).page.items.single().id
 
         val result = repository.getContent(id) as MediaContentResult.Found
+        assertEquals(0, source.contentOpenCount)
         val bytes = result.content.open(3)!!.use { it.readBytes() }
 
         assertEquals(10L, result.content.length)
         assertEquals("video/mp4", result.content.contentType)
-        assertTrue(result.content.entityTag!!.startsWith("\"sha256-"))
+        assertEquals("\"media-video-7-10-10\"", result.content.entityTag)
+        assertEquals(1, source.contentOpenCount)
         assertEquals(3L, source.lastContentOffset)
         assertEquals("3456789", String(bytes))
     }
@@ -314,17 +335,23 @@ class DefaultMediaRepositoryTest {
     ) : MediaStoreDataSource {
         var lastRequest: MediaStoreRequest? = null
         var lastContentOffset: Long? = null
+        var queryCount: Int = 0
+        var countCount: Int = 0
+        var contentOpenCount: Int = 0
 
         override fun query(request: MediaStoreRequest): List<MediaStoreRow> {
             lastRequest = request
+            queryCount++
             return rows
                 .filter { it.type in request.types }
                 .filter { request.albumId == null || it.albumId == request.albumId }
                 .keysetPage(request.after, request.limit)
         }
 
-        override fun count(types: Set<MediaType>, albumId: String?): Int =
-            rows.count { it.type in types && (albumId == null || it.albumId == albumId) }
+        override fun count(types: Set<MediaType>, albumId: String?): Int {
+            countCount++
+            return rows.count { it.type in types && (albumId == null || it.albumId == albumId) }
+        }
 
         override fun libraryState(): MediaLibraryState = MediaLibraryState(
             libraryVersion = "library-test",
@@ -390,6 +417,7 @@ class DefaultMediaRepositoryTest {
             type: MediaType,
             offset: Long,
         ): ByteArrayInputStream {
+            contentOpenCount++
             lastContentOffset = offset
             val bytes = "0123456789".toByteArray()
             return ByteArrayInputStream(bytes, offset.toInt(), bytes.size - offset.toInt())

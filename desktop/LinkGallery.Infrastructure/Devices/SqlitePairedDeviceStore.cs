@@ -7,7 +7,7 @@ namespace LinkGallery.Infrastructure.Devices;
 
 public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
     private readonly string _connectionString;
     private readonly SemaphoreSlim _migrationLock = new(1, 1);
     private bool _initialized;
@@ -54,6 +54,7 @@ public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
                 CREATE TABLE IF NOT EXISTS paired_devices (
                     device_id TEXT PRIMARY KEY,
                     display_name TEXT NOT NULL,
+                    display_name_custom INTEGER NOT NULL DEFAULT 0,
                     manufacturer TEXT NULL,
                     model TEXT NULL,
                     identity_public_key TEXT NOT NULL,
@@ -80,6 +81,13 @@ public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
                 );
                 """, cancellationToken).ConfigureAwait(false);
 
+            await EnsureColumnAsync(
+                connection,
+                "paired_devices",
+                "display_name_custom",
+                "INTEGER NOT NULL DEFAULT 0",
+                cancellationToken).ConfigureAwait(false);
+
             await using var migration = connection.CreateCommand();
             migration.CommandText = """
                 INSERT OR IGNORE INTO device_schema_migrations(version, applied_at)
@@ -102,7 +110,7 @@ public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
         await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT device_id, display_name, manufacturer, model, identity_public_key,
+            SELECT device_id, display_name, display_name_custom, manufacturer, model, identity_public_key,
                    certificate_fingerprint, credential_key, last_host, last_port,
                    last_instance_id, last_seen_at, last_connected_at, auto_connect,
                    status, created_at
@@ -127,17 +135,18 @@ public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO paired_devices(
-                device_id, display_name, manufacturer, model, identity_public_key,
+                device_id, display_name, display_name_custom, manufacturer, model, identity_public_key,
                 certificate_fingerprint, credential_key, last_host, last_port,
                 last_instance_id, last_seen_at, last_connected_at, auto_connect,
                 status, created_at)
             VALUES(
-                $deviceId, $displayName, $manufacturer, $model, $identityPublicKey,
+                $deviceId, $displayName, $displayNameCustom, $manufacturer, $model, $identityPublicKey,
                 $certificateFingerprint, $credentialKey, $lastHost, $lastPort,
                 $lastInstanceId, $lastSeenAt, $lastConnectedAt, $autoConnect,
                 $status, $createdAt)
             ON CONFLICT(device_id) DO UPDATE SET
                 display_name = excluded.display_name,
+                display_name_custom = excluded.display_name_custom,
                 manufacturer = excluded.manufacturer,
                 model = excluded.model,
                 identity_public_key = excluded.identity_public_key,
@@ -294,10 +303,37 @@ public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = $"PRAGMA table_info({tableName});";
+        await using (var reader = await inspect.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+        }
+
+        await ExecuteAsync(
+            connection,
+            $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};",
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private static void AddDeviceParameters(SqliteCommand command, PairedDevice device)
     {
         command.Parameters.AddWithValue("$deviceId", device.DeviceId);
         command.Parameters.AddWithValue("$displayName", device.DisplayName);
+        command.Parameters.AddWithValue("$displayNameCustom", device.IsDisplayNameCustom);
         command.Parameters.AddWithValue("$manufacturer", Db(device.Manufacturer));
         command.Parameters.AddWithValue("$model", Db(device.Model));
         command.Parameters.AddWithValue("$identityPublicKey", device.IdentityPublicKey);
@@ -317,19 +353,20 @@ public sealed class SqlitePairedDeviceStore : IPairedDeviceStore, IDisposable
     {
         DeviceId = reader.GetString(0),
         DisplayName = reader.GetString(1),
-        Manufacturer = NullableString(reader, 2),
-        Model = NullableString(reader, 3),
-        IdentityPublicKey = reader.GetString(4),
-        CertificateFingerprint = reader.GetString(5),
-        CredentialKey = reader.GetString(6),
-        LastHost = NullableString(reader, 7),
-        LastPort = NullableInt32(reader, 8),
-        LastInstanceId = NullableString(reader, 9),
-        LastSeenAt = NullableDateTimeOffset(reader, 10),
-        LastConnectedAt = NullableDateTimeOffset(reader, 11),
-        AutoConnect = reader.GetBoolean(12),
-        Status = ParseStatus(reader.GetString(13)),
-        CreatedAt = Parse(reader.GetString(14)),
+        IsDisplayNameCustom = reader.GetBoolean(2),
+        Manufacturer = NullableString(reader, 3),
+        Model = NullableString(reader, 4),
+        IdentityPublicKey = reader.GetString(5),
+        CertificateFingerprint = reader.GetString(6),
+        CredentialKey = reader.GetString(7),
+        LastHost = NullableString(reader, 8),
+        LastPort = NullableInt32(reader, 9),
+        LastInstanceId = NullableString(reader, 10),
+        LastSeenAt = NullableDateTimeOffset(reader, 11),
+        LastConnectedAt = NullableDateTimeOffset(reader, 12),
+        AutoConnect = reader.GetBoolean(13),
+        Status = ParseStatus(reader.GetString(14)),
+        CreatedAt = Parse(reader.GetString(15)),
     };
 
     private static PairedDeviceStatus ParseStatus(string value) =>

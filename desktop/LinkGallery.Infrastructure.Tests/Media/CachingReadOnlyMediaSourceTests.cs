@@ -81,6 +81,50 @@ public sealed class CachingReadOnlyMediaSourceTests
     }
 
     [TestMethod]
+    public async Task AlbumPagesRemainDistinctInThePersistentOfflineCache()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"LinkGallery-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            using (var online = new CachingReadOnlyMediaSource(
+                       new StubSource(),
+                       root,
+                       "phone-address",
+                       1024))
+            {
+                _ = await online.GetDeviceInfoAsync(CancellationToken.None);
+                _ = await online.GetMediaPageAsync(
+                    new MediaQuery(Limit: 50, AlbumId: "camera"),
+                    CancellationToken.None);
+                _ = await online.GetMediaPageAsync(
+                    new MediaQuery(Limit: 50, AlbumId: "screenshots"),
+                    CancellationToken.None);
+            }
+
+            using var offline = new CachingReadOnlyMediaSource(
+                new StubSource { Fail = true },
+                root,
+                "phone-address",
+                1024);
+            _ = await offline.GetDeviceInfoAsync(CancellationToken.None);
+            var camera = await offline.GetMediaPageAsync(
+                new MediaQuery(Limit: 50, AlbumId: "camera"),
+                CancellationToken.None);
+            var screenshots = await offline.GetMediaPageAsync(
+                new MediaQuery(Limit: 50, AlbumId: "screenshots"),
+                CancellationToken.None);
+
+            Assert.AreEqual("camera-item", camera.Items.Single().RemoteId);
+            Assert.AreEqual("screenshots-item", screenshots.Items.Single().RemoteId);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [TestMethod]
     public async Task GenerationControlsThumbnailInvalidationAndSqliteMetadata()
     {
         var root = Path.Combine(Path.GetTempPath(), $"LinkGallery-{Guid.NewGuid():N}");
@@ -184,12 +228,13 @@ public sealed class CachingReadOnlyMediaSourceTests
                     new MediaItem
                     {
                         DeviceId = "phone-1",
-                        RemoteId = "media-1",
+                        RemoteId = query.AlbumId is null ? "media-1" : $"{query.AlbumId}-item",
                         FileName = "photo.jpg",
                         Type = MediaType.Image,
                         ModifiedAt = DateTimeOffset.UnixEpoch,
                         TakenAt = DateTimeOffset.UnixEpoch,
                         Generation = Generation,
+                        AlbumId = query.AlbumId,
                     },
                 ],
                 null));

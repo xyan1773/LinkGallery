@@ -5,14 +5,15 @@
         Title="LinkGallery"
         Width="1480"
         Height="920"
-        MinWidth="980"
-        MinHeight="700"
+        MinWidth="900"
+        MinHeight="560"
+        WindowStartupLocation="CenterScreen"
         Background="{StaticResource LgBrushCanvas}"
-        WindowStyle="None"
+        WindowStyle="SingleBorderWindow"
         ResizeMode="CanResizeWithGrip"
         Loaded="OnWindowLoaded"
         Closing="OnWindowClosing"
-        MouseLeftButtonDown="OnWindowMouseLeftButtonDown">
+        SizeChanged="OnWindowSizeChanged">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <Style x:Key="SidebarLabel" TargetType="TextBlock">
@@ -20,6 +21,18 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource LgBrushMuted}" />
             <Setter Property="Margin" Value="12,18,0,7" />
+        </Style>
+        <Style x:Key="SidebarGlyph" TargetType="TextBlock">
+            <Setter Property="Width" Value="24" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+            <Setter Property="TextOptions.TextRenderingMode" Value="Grayscale" />
         </Style>
         <Style x:Key="SectionTitle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="21" />
@@ -43,10 +56,67 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="AlbumCardButton" TargetType="Button">
+            <Setter Property="Margin" Value="0,0,16,20" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+            <Setter Property="RenderTransform">
+                <Setter.Value><ScaleTransform ScaleX="1" ScaleY="1" /></Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="CardChrome" Background="Transparent" BorderBrush="Transparent" BorderThickness="2" CornerRadius="16">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CardChrome" Property="BorderBrush" Value="#380066CC" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="CardChrome" Property="BorderBrush" Value="{StaticResource LgBrushAccentStrong}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="TextActionButton" TargetType="Button">
+            <Setter Property="MinWidth" Value="44" />
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="Foreground" Value="{StaticResource LgBrushAccent}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="8">
+                            <ContentPresenter Margin="{TemplateBinding Padding}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="{StaticResource LgBrushAccentSoft}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="WindowChromeButton" TargetType="Button">
-            <Setter Property="Width" Value="26" />
-            <Setter Property="Height" Value="26" />
-            <Setter Property="Margin" Value="2,0" />
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="44" />
+            <Setter Property="Margin" Value="0" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="FontSize" Value="10" />
             <Setter Property="Foreground" Value="{StaticResource LgBrushMuted}" />
@@ -57,7 +127,7 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="6">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="12">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <ControlTemplate.Triggers>
@@ -75,20 +145,24 @@
     </Window.Resources>
 
     <Border Background="{StaticResource LgBrushSurface}"
-            BorderBrush="#F2FFFFFF"
-            BorderThickness="1"
-            CornerRadius="22"
-            ClipToBounds="True">
+            BorderThickness="0"
+            CornerRadius="0"
+            ClipToBounds="False">
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="NavigationColumn" Width="240" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Background="#E6F5F5F7"
+            <Border x:Name="NavigationPanel"
+                    Background="#E6F5F5F7"
                     BorderBrush="{StaticResource LgBrushLine}"
                     BorderThickness="0,0,1,0"
+                    ClipToBounds="True"
+                    SnapsToDevicePixels="True"
+                    UseLayoutRounding="True"
                     MouseEnter="OnNavigationMouseEnter"
+                    PreviewMouseMove="OnNavigationMouseMove"
                     MouseLeave="OnNavigationMouseLeave">
                 <Grid Margin="12,24,12,16">
                     <Grid.RowDefinitions>
@@ -97,8 +171,12 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <StackPanel>
-                        <TextBlock FontSize="25"
+                    <Grid x:Name="NavigationBrandSlot"
+                          AutomationProperties.AutomationId="NavigationBrandSlot"
+                          Height="64">
+                        <StackPanel x:Name="ExpandedBrandStack">
+                        <TextBlock x:Name="BrandTitleText"
+                                   FontSize="25"
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource LgBrushInk}"
                                    Text="LinkGallery" />
@@ -106,7 +184,16 @@
                                    Margin="0,4,0,16"
                                    Foreground="{StaticResource LgBrushMuted}"
                                    Text="Your media, nearby." />
-                    </StackPanel>
+                        </StackPanel>
+                        <TextBlock x:Name="CompactBrandIcon"
+                                   Margin="0,0,0,16"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="20"
+                                   Foreground="{StaticResource LgBrushAccent}"
+                                   HorizontalAlignment="Center"
+                                   Text="&#xEB9F;"
+                                   Visibility="Collapsed" />
+                    </Grid>
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
@@ -121,7 +208,7 @@
                                         <ColumnDefinition Width="24" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="15" Text="&#xEB9F;" VerticalAlignment="Center" />
+                                    <TextBlock Style="{StaticResource SidebarGlyph}" Text="&#xEB9F;" />
                                     <TextBlock x:Name="NavGalleryLabelText" Grid.Column="1" Margin="8,0,0,0" FontSize="13" FontWeight="SemiBold" Text="Photos" VerticalAlignment="Center" />
                                 </Grid>
                             </Button>
@@ -136,22 +223,14 @@
                                         <ColumnDefinition Width="24" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="15" Text="&#xE8B7;" VerticalAlignment="Center" />
-                                    <TextBlock x:Name="NavAlbumsLabelText" Grid.Column="1" Margin="8,0,40,0" FontSize="13" FontWeight="SemiBold" Text="Albums" VerticalAlignment="Center" />
-                                    <Border Grid.Column="1"
-                                            Width="28"
-                                            Height="22"
-                                            HorizontalAlignment="Right"
-                                            Background="{StaticResource LgBrushAccentStrong}"
-                                            CornerRadius="11">
-                                        <TextBlock x:Name="AlbumBadgeText" Foreground="White" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" Text="0" />
-                                    </Border>
+                                    <TextBlock Style="{StaticResource SidebarGlyph}" Text="&#xE8B7;" />
+                                    <TextBlock x:Name="NavAlbumsLabelText" Grid.Column="1" Margin="8,0,0,0" FontSize="13" FontWeight="SemiBold" Text="Albums" VerticalAlignment="Center" />
                                 </Grid>
                             </Button>
 
                             <TextBlock x:Name="SidebarSmartAlbumsHeadingText" Style="{StaticResource SidebarLabel}" Text="SMART ALBUMS" />
                             <Button Style="{StaticResource LgNavButton}" Tag="SmartFavorites" Click="OnSidebarAlbumClick">
-                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE734;" VerticalAlignment="Center" /><TextBlock x:Name="SidebarFavoritesLabelText" Grid.Column="1" Margin="8,0,0,0" FontSize="13" FontWeight="SemiBold" Text="Favorites" VerticalAlignment="Center" /></Grid>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Style="{StaticResource SidebarGlyph}" Text="&#xE734;" /><TextBlock x:Name="SidebarFavoritesLabelText" Grid.Column="1" Margin="8,0,0,0" FontSize="13" FontWeight="SemiBold" Text="Favorites" VerticalAlignment="Center" /></Grid>
                             </Button>
                             <Button x:Name="SidebarVideosButton" Style="{StaticResource LgNavButton}" Tag="SmartVideos" Click="OnSidebarAlbumClick" Visibility="Collapsed">
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE714;" VerticalAlignment="Center" /><TextBlock x:Name="SidebarVideosLabelText" Grid.Column="1" Margin="8,0,0,0" FontSize="13" FontWeight="SemiBold" Text="Videos" VerticalAlignment="Center" /></Grid>
@@ -178,11 +257,11 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
 
-                            <TextBlock x:Name="SidebarMyAlbumsHeadingText" Style="{StaticResource SidebarLabel}" Text="MY ALBUMS" />
-                            <Button x:Name="SidebarMyAlbumsEmptyButton" Style="{StaticResource LgNavButton}" IsEnabled="False">
+                            <TextBlock x:Name="SidebarMyAlbumsHeadingText" Style="{StaticResource SidebarLabel}" Text="MY ALBUMS" Visibility="Collapsed" />
+                            <Button x:Name="SidebarMyAlbumsEmptyButton" Style="{StaticResource LgNavButton}" IsEnabled="False" Visibility="Collapsed">
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8B7;" VerticalAlignment="Center" /><TextBlock x:Name="SidebarMyAlbumsEmptyText" Grid.Column="1" Margin="8,0,0,0" FontSize="13" FontWeight="SemiBold" Text="No custom albums yet" VerticalAlignment="Center" /></Grid>
                             </Button>
-                            <ItemsControl ItemsSource="{Binding SidebarMyAlbumRows}">
+                            <ItemsControl x:Name="SidebarMyAlbumsList" ItemsSource="{Binding SidebarMyAlbumRows}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Style="{StaticResource LgNavButton}" Click="OnSidebarAlbumClick">
@@ -232,7 +311,8 @@
                                 ToolTip="Settings">
                             <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="24" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE713;" VerticalAlignment="Center" /><TextBlock x:Name="NavSettingsLabelText" Grid.Column="1" Margin="8,0,0,0" FontSize="13" FontWeight="SemiBold" Text="Settings" VerticalAlignment="Center" /></Grid>
                         </Button>
-                        <Border Margin="0,12,0,0"
+                        <Border x:Name="SidebarStatusCard"
+                                Margin="0,12,0,0"
                                 Padding="12,10"
                                 Background="{StaticResource LgBrushAccentSoft}"
                                 CornerRadius="{StaticResource LgRadiusLg}">
@@ -294,7 +374,8 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Border MinHeight="76"
+                <Border x:Name="ToolbarBorder"
+                        MinHeight="76"
                         Padding="32,12,14,12"
                         Background="#F9FFFFFF"
                         BorderBrush="{StaticResource LgBrushLine}"
@@ -302,14 +383,22 @@
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="360" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition x:Name="SearchColumn" Width="*" MinWidth="160" MaxWidth="360" />
+                            <ColumnDefinition Width="0" />
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="112" />
+                            <ColumnDefinition Width="0" />
                         </Grid.ColumnDefinitions>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button x:Name="SidebarToggleButton"
+                                    AutomationProperties.AutomationId="SidebarToggleButton"
+                                    Margin="0,0,10,0"
+                                    Content="&#xE700;"
+                                    FontFamily="Segoe MDL2 Assets"
+                                    Style="{StaticResource WindowChromeButton}"
+                                    Click="OnSidebarToggleClick"
+                                    ToolTip="Hide navigation" />
                             <Button x:Name="BackToAlbumsButton"
                                     Margin="0,0,18,0"
                                     Content="&#x2039; Albums"
@@ -340,7 +429,8 @@
                                 Background="{StaticResource LgBrushSurfaceAlt}"
                                 BorderBrush="{StaticResource LgBrushLine}"
                                 BorderThickness="1"
-                                CornerRadius="{StaticResource LgRadiusPill}"
+                                CornerRadius="12"
+                                HorizontalAlignment="Stretch"
                                 VerticalAlignment="Center">
                             <Grid>
                                 <TextBlock Text="&#xE721;"
@@ -377,7 +467,8 @@
                                 Content="Search"
                                 Style="{StaticResource LgSecondaryButton}"
                                 HorizontalAlignment="Left"
-                                VerticalAlignment="Center" />
+                                VerticalAlignment="Center"
+                                Visibility="Collapsed" />
                         <StackPanel x:Name="FilterPanel"
                                     Grid.Column="4"
                                     Margin="12,0,0,0"
@@ -403,8 +494,10 @@
                         </StackPanel>
                         <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
                             <Border x:Name="DevicePanel"
+                                    AutomationProperties.AutomationId="ToolbarDevicePanel"
                                     Margin="0,0,14,0"
                                     Padding="12,8"
+                                    MaxWidth="280"
                                     Background="{StaticResource LgBrushSurfaceAlt}"
                                     BorderBrush="{StaticResource LgBrushLine}"
                                     BorderThickness="1"
@@ -412,10 +505,15 @@
                                     Visibility="Collapsed">
                                 <StackPanel Orientation="Horizontal">
                                     <StackPanel>
-                                        <TextBlock x:Name="DeviceNameText" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="DeviceNameText"
+                                                   MaxWidth="126"
+                                                   FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" />
                                         <TextBlock x:Name="DeviceModelText"
+                                                   MaxWidth="126"
                                                    FontSize="12"
-                                                   Foreground="{StaticResource LgBrushMuted}" />
+                                                   Foreground="{StaticResource LgBrushMuted}"
+                                                   TextTrimming="CharacterEllipsis" />
                                     </StackPanel>
                                     <StackPanel Margin="18,0,0,0">
                                         <TextBlock x:Name="BatteryText" HorizontalAlignment="Right" />
@@ -434,7 +532,8 @@
                             <Button x:Name="NewAlbumButton"
                                     Content="New album"
                                     Click="OnNewAlbumClick"
-                                    Style="{StaticResource LgCommandButton}" />
+                                    Style="{StaticResource LgCommandButton}"
+                                    Visibility="Collapsed" />
                             <Button x:Name="EnterIpButton"
                                     AutomationProperties.AutomationId="EnterIpButton"
                                     Margin="12,0,0,0"
@@ -455,31 +554,10 @@
                                     Style="{StaticResource LgCommandButton}"
                                     Visibility="Collapsed" />
                         </StackPanel>
-                        <StackPanel Grid.Column="6"
-                                    Margin="8,-8,-8,0"
-                                    Orientation="Horizontal"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Top">
-                            <Button Content="&#xE921;"
-                                    FontFamily="Segoe MDL2 Assets"
-                                    Style="{StaticResource WindowChromeButton}"
-                                    Click="OnMinimizeClick"
-                                    ToolTip="Minimize" />
-                            <Button Content="&#xE922;"
-                                    FontFamily="Segoe MDL2 Assets"
-                                    Style="{StaticResource WindowChromeButton}"
-                                    Click="OnMaximizeRestoreClick"
-                                    ToolTip="Maximize" />
-                            <Button Content="&#xE8BB;"
-                                    FontFamily="Segoe MDL2 Assets"
-                                    Style="{StaticResource WindowChromeButton}"
-                                    Click="OnCloseWindowClick"
-                                    ToolTip="Close" />
-                        </StackPanel>
                     </Grid>
                 </Border>
 
-                <Grid Grid.Row="1" Margin="32,26,32,0">
+                <Grid Grid.Row="1" Margin="32,26,32,0" Background="{StaticResource LgBrushSurface}">
                     <StackPanel x:Name="PageActionBar"
                                 Panel.ZIndex="25"
                                 Orientation="Horizontal"
@@ -518,24 +596,56 @@
                                        Background="{StaticResource LgBrushSurfaceAlt}"
                                        Foreground="{StaticResource LgBrushMuted}"
                                        Visibility="Collapsed" />
-                            <ScrollViewer x:Name="TimelineScrollViewer"
-                                          AutomationProperties.AutomationId="TimelineList"
-                                          VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled"
-                                          ScrollChanged="OnTimelineScrollChanged"
-                                          Visibility="Collapsed">
-                                <ItemsControl x:Name="TimelineList"
-                                              ItemsSource="{Binding TimelineGroups}"
-                                              KeyDown="OnTimelineKeyDown"
-                                              MouseDoubleClick="OnTimelineDoubleClick">
-                                    <ItemsControl.ItemTemplate>
+                            <ListBox x:Name="TimelineScrollViewer"
+                                     AutomationProperties.AutomationId="TimelineList"
+                                     ItemsSource="{Binding TimelineGroups}"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Focusable="False"
+                                     HorizontalContentAlignment="Stretch"
+                                     ScrollViewer.CanContentScroll="True"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.ScrollChanged="OnTimelineScrollChanged"
+                                     VirtualizingPanel.CacheLength="1,1"
+                                     VirtualizingPanel.CacheLengthUnit="Page"
+                                     VirtualizingPanel.IsContainerVirtualizable="True"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.ScrollUnit="Pixel"
+                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                     KeyDown="OnTimelineKeyDown"
+                                     MouseDoubleClick="OnTimelineDoubleClick"
+                                     Visibility="Collapsed">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <VirtualizingStackPanel />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Background" Value="Transparent" />
+                                        <Setter Property="BorderThickness" Value="0" />
+                                        <Setter Property="Focusable" Value="False" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <ContentPresenter />
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <StackPanel Margin="0,0,0,28">
+                                            <StackPanel Margin="0,0,0,12">
                                                 <TextBlock Margin="0,0,0,12"
                                                            FontSize="18"
                                                            FontWeight="SemiBold"
                                                            Foreground="{StaticResource LgBrushInk}"
-                                                           Text="{Binding Date}" />
+                                                           Text="{Binding Date}"
+                                                           Visibility="{Binding HeaderVisibility}" />
                                                 <ItemsControl ItemsSource="{Binding Rows}">
                                                     <ItemsControl.ItemContainerStyle>
                                                         <Style TargetType="ContentPresenter">
@@ -559,11 +669,11 @@
                                                                     HorizontalContentAlignment="Stretch"
                                                                     VerticalContentAlignment="Stretch"
                                                                     Focusable="True"
+                                                                    MouseDoubleClick="OnMediaTileDoubleClick"
                                                                     PreviewKeyDown="OnMediaTileKeyDown"
                                                                     Loaded="OnTimelineItemLoaded"
                                                                     Unloaded="OnTimelineItemUnloaded"
-                                                                    PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp"
-                                                                    SizeChanged="OnMediaTileSizeChanged">
+                                                                    PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp">
                                                                 <Button.Style>
                                                                     <Style TargetType="Button">
                                                                         <Setter Property="BorderBrush" Value="Transparent" />
@@ -583,7 +693,7 @@
                                                                         </Setter>
                                                                         <Style.Triggers>
                                                                             <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                                                <Setter Property="BorderBrush" Value="#FF6FA8BF" />
+                                                                                <Setter Property="BorderBrush" Value="{StaticResource LgBrushAccent}" />
                                                                             </DataTrigger>
                                                                         </Style.Triggers>
                                                                     </Style>
@@ -609,19 +719,18 @@
                                                 </ItemsControl>
                                             </StackPanel>
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Grid>
                     </Grid>
 
                     <ScrollViewer x:Name="AlbumsPage"
                                   Grid.ColumnSpan="2"
+                                  Background="{StaticResource LgBrushSurface}"
                                   VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <Grid Margin="0,0,0,12">
                                 <TextBlock x:Name="SmartAlbumsTitleText" Style="{StaticResource SectionTitle}" Text="Smart Albums" />
-                                <Button x:Name="SeeAllSmartButton" HorizontalAlignment="Right" Content="See all" Style="{StaticResource LgSecondaryButton}" />
                             </Grid>
                             <ItemsControl ItemsSource="{Binding SmartAlbumRows}">
                                 <ItemsControl.ItemsPanel>
@@ -631,27 +740,27 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Style="{StaticResource AlbumCard}" Cursor="Hand" MouseLeftButtonUp="OnAlbumCardClick">
+                                        <Button AutomationProperties.Name="{Binding Name}" Style="{StaticResource AlbumCardButton}" Tag="AlbumCard" Click="OnAlbumCardClick">
                                             <StackPanel>
-                                                <Border MinHeight="90" Background="{Binding CoverBrush}" CornerRadius="15" ClipToBounds="True" SizeChanged="OnAlbumCoverSizeChanged">
+                                                <Border MinHeight="90" Background="{Binding CoverBrush}" CornerRadius="14" ClipToBounds="True" SizeChanged="OnAlbumCoverSizeChanged">
                                                     <Grid>
-                                                        <Ellipse Width="38" Height="38" Fill="#8FFFFFFF" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12" />
-                                                        <Border Width="74" Height="26" Background="#3D1D1D1F" CornerRadius="13" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12">
-                                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White" FontSize="10" FontWeight="Bold" Text="SMART" />
+                                                        <Ellipse Width="38" Height="38" Margin="12" HorizontalAlignment="Left" VerticalAlignment="Top" Fill="#8FFFFFFF" />
+                                                        <Border Width="50" Height="24" Margin="0,0,18,20" HorizontalAlignment="Right" VerticalAlignment="Bottom" Background="#571D1D1F" CornerRadius="6" />
+                                                        <Border Height="26" Padding="8,0" Background="White" BorderBrush="{StaticResource LgBrushLine}" BorderThickness="1" CornerRadius="13" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12">
+                                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource LgBrushAccent}" FontSize="12" FontWeight="SemiBold" Text="SMART" />
                                                         </Border>
-                                                        <Border Width="50" Height="24" Background="#571D1D1F" CornerRadius="6" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="18,0,18,20" />
                                                     </Grid>
                                                 </Border>
                                                  <TextBlock Margin="0,9,0,0" FontSize="14" FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                                 <TextBlock Margin="0,2,0,0" FontSize="11" Foreground="{StaticResource LgBrushMuted}" Text="{Binding CountText}" />
+                                                 <TextBlock Margin="0,2,0,0" FontSize="12" Foreground="{StaticResource LgBrushMuted}" Text="{Binding CountText}" />
                                             </StackPanel>
-                                        </Border>
+                                        </Button>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <Grid x:Name="DeviceAlbumsHeader" Margin="0,12,0,12" Visibility="Collapsed">
+                            <Grid x:Name="DeviceAlbumsHeader" Margin="0,24,0,12" Visibility="Collapsed">
                                 <TextBlock x:Name="DeviceAlbumsTitleText" Style="{StaticResource SectionTitle}" Text="Device Albums" />
-                                <Button x:Name="ManageSourcesButton" HorizontalAlignment="Right" Content="Manage sources" Style="{StaticResource LgSecondaryButton}" Tag="Devices" Click="OnNavClick" />
+                                <Button x:Name="ManageSourcesButton" HorizontalAlignment="Right" Content="Manage sources" Style="{StaticResource TextActionButton}" Tag="Devices" Click="OnNavClick" />
                             </Grid>
                             <ItemsControl x:Name="DeviceAlbumsList" ItemsSource="{Binding DeviceAlbumRows}" Visibility="Collapsed">
                                 <ItemsControl.ItemsPanel>
@@ -661,43 +770,43 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Style="{StaticResource AlbumCard}" Cursor="Hand" MouseLeftButtonUp="OnAlbumCardClick">
+                                        <Button AutomationProperties.Name="{Binding Name}" Style="{StaticResource AlbumCardButton}" Tag="AlbumCard" Click="OnAlbumCardClick">
                                             <StackPanel>
-                                                <Border MinHeight="90" Background="{Binding CoverBrush}" CornerRadius="15" ClipToBounds="True" SizeChanged="OnAlbumCoverSizeChanged">
+                                                <Border MinHeight="90" Background="{Binding CoverBrush}" CornerRadius="14" ClipToBounds="True" SizeChanged="OnAlbumCoverSizeChanged">
                                                     <Grid>
-                                                        <Ellipse Width="38" Height="38" Fill="#8FFFFFFF" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12" />
-                                                        <Border Width="74" Height="26" Background="#3D1D1D1F" CornerRadius="13" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12">
-                                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White" FontSize="10" FontWeight="Bold" Text="DEVICE" />
+                                                        <Ellipse Width="38" Height="38" Margin="12" HorizontalAlignment="Left" VerticalAlignment="Top" Fill="#8FFFFFFF" />
+                                                        <Border Width="50" Height="24" Margin="0,0,18,20" HorizontalAlignment="Right" VerticalAlignment="Bottom" Background="#571D1D1F" CornerRadius="6" />
+                                                        <Border Height="26" Padding="8,0" Background="#B31C1C1E" CornerRadius="13" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12">
+                                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="White" FontSize="12" FontWeight="SemiBold" Text="DEVICE" />
                                                         </Border>
-                                                        <Border Width="50" Height="24" Background="#571D1D1F" CornerRadius="6" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="18,0,18,20" />
                                                     </Grid>
                                                 </Border>
                                                 <TextBlock Margin="0,9,0,0" FontSize="14" FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Margin="0,2,0,0" FontSize="11" Foreground="{StaticResource LgBrushMuted}" Text="{Binding CountText}" />
+                                                <TextBlock Margin="0,2,0,0" FontSize="12" Foreground="{StaticResource LgBrushMuted}" Text="{Binding CountText}" />
                                             </StackPanel>
-                                        </Border>
+                                        </Button>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <Grid Margin="0,12,0,12">
+                            <Grid Margin="0,24,0,12" Visibility="Collapsed">
                                 <TextBlock x:Name="MyAlbumsTitleText" Style="{StaticResource SectionTitle}" Text="My Albums" />
-                                <Button x:Name="AlbumsPageNewAlbumButton" HorizontalAlignment="Right" Content="New album" Click="OnNewAlbumClick" Style="{StaticResource LgCommandButton}" />
+                                <Button x:Name="AlbumsPageNewAlbumButton" HorizontalAlignment="Right" Content="New album" Click="OnNewAlbumClick" Style="{StaticResource LgCommandButton}" Visibility="Collapsed" />
                             </Grid>
-                            <TextBlock x:Name="MyAlbumsEmptyText" Foreground="{StaticResource LgBrushMuted}" Text="No custom albums yet" />
-                            <ItemsControl ItemsSource="{Binding MyAlbumRows}">
+                            <TextBlock x:Name="MyAlbumsEmptyText" Foreground="{StaticResource LgBrushMuted}" Text="No custom albums yet" Visibility="Collapsed" />
+                            <ItemsControl ItemsSource="{Binding MyAlbumRows}" Visibility="Collapsed">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
-                                        <WrapPanel />
+                                        <UniformGrid Columns="4" />
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Style="{StaticResource AlbumCard}" Cursor="Hand" MouseLeftButtonUp="OnAlbumCardClick">
+                                        <Button AutomationProperties.Name="{Binding Name}" Style="{StaticResource AlbumCardButton}" Tag="AlbumCard" Click="OnAlbumCardClick">
                                             <StackPanel>
-                                                <Border MinHeight="90" Background="{Binding CoverBrush}" CornerRadius="15" ClipToBounds="True" SizeChanged="OnAlbumCoverSizeChanged">
+                                                <Border MinHeight="90" Background="{Binding CoverBrush}" CornerRadius="14" ClipToBounds="True" SizeChanged="OnAlbumCoverSizeChanged">
                                                     <Grid>
-                                                        <Ellipse Width="38" Height="38" Fill="#8FFFFFFF" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12" />
-                                                        <Border Width="50" Height="24" Background="#571D1D1F" CornerRadius="6" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="18,0,18,20" />
+                                                        <Ellipse Width="38" Height="38" Margin="12" HorizontalAlignment="Left" VerticalAlignment="Top" Fill="#8FFFFFFF" />
+                                                        <Border Width="50" Height="24" Margin="0,0,18,20" HorizontalAlignment="Right" VerticalAlignment="Bottom" Background="#571D1D1F" CornerRadius="6" />
                                                     </Grid>
                                                 </Border>
                                                 <TextBlock Margin="0,12,0,0"
@@ -706,19 +815,21 @@
                                                            TextTrimming="CharacterEllipsis" />
                                                 <TextBlock Foreground="{StaticResource LgBrushMuted}" Text="{Binding CountText}" />
                                             </StackPanel>
-                                        </Border>
+                                        </Button>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </StackPanel>
                     </ScrollViewer>
 
-                    <ScrollViewer x:Name="AlbumDetailPage"
-                                  Grid.ColumnSpan="2"
-                                  VerticalScrollBarVisibility="Auto"
-                                  Visibility="Collapsed">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,18">
+                    <Grid x:Name="AlbumDetailPage"
+                          Grid.ColumnSpan="2"
+                          Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,8,0,18">
                                 <Button x:Name="AlbumFilterAllButton"
                                         Content="All"
                                         Tag="All"
@@ -738,24 +849,61 @@
                                         Style="{StaticResource LgSegmentButton}" />
                             </StackPanel>
                             <TextBlock x:Name="AlbumDetailEmptyText"
+                                       Grid.Row="1"
                                        HorizontalAlignment="Center"
                                        Margin="0,120,0,0"
                                        FontSize="16"
                                        Foreground="{StaticResource LgBrushMuted}"
                                        Text="No media in this album"
                                        Visibility="Collapsed" />
-                            <ItemsControl x:Name="AlbumDetailList"
-                                          AutomationProperties.AutomationId="AlbumDetailList"
-                                          ItemsSource="{Binding AlbumDetailGroups}"
-                                          MouseDoubleClick="OnAlbumDetailDoubleClick">
-                                <ItemsControl.ItemTemplate>
+                            <ListBox x:Name="AlbumDetailList"
+                                     Grid.Row="1"
+                                     AutomationProperties.AutomationId="AlbumDetailList"
+                                     ItemsSource="{Binding AlbumDetailGroups}"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Focusable="False"
+                                     HorizontalContentAlignment="Stretch"
+                                     ScrollViewer.CanContentScroll="True"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     VirtualizingPanel.CacheLength="1,1"
+                                     VirtualizingPanel.CacheLengthUnit="Page"
+                                     VirtualizingPanel.IsContainerVirtualizable="True"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.ScrollUnit="Pixel"
+                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                     MouseDoubleClick="OnAlbumDetailDoubleClick">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <VirtualizingStackPanel />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Background" Value="Transparent" />
+                                        <Setter Property="BorderThickness" Value="0" />
+                                        <Setter Property="Focusable" Value="False" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <ContentPresenter />
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <StackPanel Margin="0,0,0,28">
+                                        <StackPanel Margin="0,0,0,12">
                                             <TextBlock Margin="0,0,0,12"
                                                        FontSize="18"
                                                        FontWeight="SemiBold"
                                                        Foreground="{StaticResource LgBrushInk}"
-                                                       Text="{Binding Date}" />
+                                                       Text="{Binding Date}"
+                                                       Visibility="{Binding HeaderVisibility}" />
                                             <ItemsControl ItemsSource="{Binding Rows}">
                                                 <ItemsControl.ItemContainerStyle>
                                                     <Style TargetType="ContentPresenter">
@@ -779,11 +927,11 @@
                                                                 HorizontalContentAlignment="Stretch"
                                                                 VerticalContentAlignment="Stretch"
                                                                 Focusable="True"
+                                                                MouseDoubleClick="OnMediaTileDoubleClick"
                                                                 PreviewKeyDown="OnMediaTileKeyDown"
                                                                 Loaded="OnTimelineItemLoaded"
                                                                 Unloaded="OnTimelineItemUnloaded"
-                                                                PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp"
-                                                                SizeChanged="OnMediaTileSizeChanged">
+                                                                PreviewMouseLeftButtonUp="OnMediaTilePreviewMouseLeftButtonUp">
                                                             <Button.Style>
                                                                 <Style TargetType="Button">
                                                                     <Setter Property="BorderBrush" Value="Transparent" />
@@ -829,16 +977,17 @@
                                             </ItemsControl>
                                         </StackPanel>
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </ScrollViewer>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                    </Grid>
 
-                    <ScrollViewer x:Name="DevicePage"
-                                  Grid.ColumnSpan="2"
-                                  VerticalScrollBarVisibility="Auto"
-                                  Visibility="Collapsed">
-                        <StackPanel>
+                    <Grid x:Name="DevicePage"
+                          Grid.ColumnSpan="2"
+                          Background="{StaticResource LgBrushSurface}"
+                          Visibility="Collapsed">
+                        <ScrollViewer Background="{StaticResource LgBrushSurface}"
+                                      VerticalScrollBarVisibility="Auto">
+                            <StackPanel Background="{StaticResource LgBrushSurface}">
                             <TextBlock x:Name="DevicesEmptyText"
                                        HorizontalAlignment="Center"
                                        Margin="0,120,0,0"
@@ -852,7 +1001,7 @@
                                     Background="#FAFFFFFF"
                                     BorderBrush="#4734C759"
                                     BorderThickness="1"
-                                    CornerRadius="20">
+                                    CornerRadius="18">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal">
                                             <Border Width="48" Height="48" Background="{StaticResource LgBrushAccentSoft}" CornerRadius="15">
@@ -864,7 +1013,24 @@
                                                            Text="&#xE8EA;" />
                                             </Border>
                                             <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                                                <TextBlock x:Name="DeviceCardTitleText" FontSize="16" FontWeight="SemiBold" Text="Connected device" />
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock x:Name="DeviceCardTitleText" FontSize="16" FontWeight="SemiBold" Text="Connected device" VerticalAlignment="Center" />
+                                                    <Button x:Name="RenameDeviceButton"
+                                                            AutomationProperties.AutomationId="RenameDeviceButton"
+                                                            Width="32"
+                                                            MinWidth="32"
+                                                            Height="32"
+                                                            MinHeight="32"
+                                                            Margin="8,0,0,0"
+                                                            Padding="0"
+                                                            FontFamily="Segoe MDL2 Assets"
+                                                            FontSize="14"
+                                                            IsEnabled="False"
+                                                            Click="OnRenameDeviceClick"
+                                                            Content="&#xE70F;"
+                                                            Style="{StaticResource LgIconButton}"
+                                                            ToolTip="Rename device" />
+                                                </StackPanel>
                                                 <TextBlock x:Name="DeviceCardSubtitleText" Margin="0,5,0,0" FontSize="12" Foreground="{StaticResource LgBrushMuted}" Text="Connected" />
                                             </StackPanel>
                                         </StackPanel>
@@ -892,20 +1058,23 @@
                                     </StackPanel>
                                 </Border>
                             </UniformGrid>
-                        </StackPanel>
-                    </ScrollViewer>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
 
                     <ScrollViewer x:Name="SettingsPage"
                                   Grid.ColumnSpan="2"
+                                  Background="{StaticResource LgBrushSurface}"
                                   VerticalScrollBarVisibility="Auto"
                                   Visibility="Collapsed">
                         <Border Width="820"
                                 HorizontalAlignment="Left"
+                                VerticalAlignment="Top"
                                 Padding="20"
                                 Background="{StaticResource LgBrushSurface}"
                                 BorderBrush="{StaticResource LgBrushLine}"
                                 BorderThickness="1"
-                                CornerRadius="20">
+                                CornerRadius="18">
                             <StackPanel>
                                 <Grid MinHeight="66">
                                     <Grid.ColumnDefinitions>
@@ -1074,7 +1243,14 @@
                             BorderBrush="{StaticResource LgBrushLine}"
                             BorderThickness="1"
                             CornerRadius="20,0,0,20"
+                            PreviewMouseLeftButtonDown="OnInspectorDragStarted"
+                            PreviewMouseMove="OnInspectorDragMoved"
+                            PreviewMouseLeftButtonUp="OnInspectorDragEnded"
+                            LostMouseCapture="OnInspectorLostMouseCapture"
                             Visibility="Collapsed">
+                        <Border.RenderTransform>
+                            <TranslateTransform x:Name="InspectorTranslate" />
+                        </Border.RenderTransform>
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="32" ShadowDepth="8" Opacity="0.12" Color="#33000000" />
                         </Border.Effect>
@@ -1240,6 +1416,58 @@
                     </StackPanel>
                 </Border>
             </Grid>
+            <Grid x:Name="RenameDeviceModal"
+                  Grid.ColumnSpan="2"
+                  Background="#66000000"
+                  MouseLeftButtonDown="OnRenameDeviceModalBackgroundClick"
+                  Visibility="Collapsed">
+                <Border Width="440"
+                        Padding="22"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Background="{StaticResource LgBrushSurface}"
+                        BorderBrush="{StaticResource LgBrushLine}"
+                        BorderThickness="1"
+                        CornerRadius="18">
+                    <StackPanel>
+                        <TextBlock x:Name="RenameDeviceTitleText"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource LgBrushInk}"
+                                   Text="Rename device" />
+                        <TextBlock x:Name="RenameDeviceSubtitleText"
+                                   Margin="0,7,0,0"
+                                   FontSize="13"
+                                   Foreground="{StaticResource LgBrushMuted}"
+                                   Text="This name is stored on this computer and will not be overwritten when the device reconnects."
+                                   TextWrapping="Wrap" />
+                        <TextBox x:Name="RenameDeviceTextBox"
+                                 AutomationProperties.AutomationId="RenameDeviceTextBox"
+                                 Margin="0,18,0,0"
+                                 KeyDown="OnRenameDeviceTextBoxKeyDown"
+                                 Style="{StaticResource LgTextBox}" />
+                        <Grid Margin="0,20,0,0">
+                            <Button x:Name="UseDetectedDeviceNameButton"
+                                    HorizontalAlignment="Left"
+                                    Click="OnUseDetectedDeviceNameClick"
+                                    Content="Use detected name"
+                                    Style="{StaticResource LgSecondaryButton}" />
+                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                <Button x:Name="CancelRenameDeviceButton"
+                                        Content="Cancel"
+                                        Click="OnCancelRenameDeviceClick"
+                                        Style="{StaticResource LgSecondaryButton}" />
+                                <Button x:Name="SaveRenameDeviceButton"
+                                        AutomationProperties.AutomationId="SaveRenameDeviceButton"
+                                        Margin="10,0,0,0"
+                                        Content="Save"
+                                        Click="OnSaveRenameDeviceClick"
+                                        Style="{StaticResource LgCommandButton}" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Grid>
             <Grid x:Name="ClosePromptModal"
                   Grid.ColumnSpan="2"
                   Background="#66000000"
@@ -1289,17 +1517,20 @@
             <Grid x:Name="ViewerOverlay"
                   Grid.ColumnSpan="2"
                   Background="#FF050505"
+                  Focusable="True"
+                  Panel.ZIndex="100"
                   Visibility="Collapsed">
                 <Grid>
                     <Grid x:Name="ViewerStage"
-                          ClipToBounds="True">
+                          ClipToBounds="True"
+                          IsHitTestVisible="False">
                         <Border x:Name="ViewerPhoto"
                                 Width="880"
                                 MaxWidth="880"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 Background="#FF111111"
-                                CornerRadius="22"
+                                CornerRadius="14"
                                 RenderTransformOrigin="0.5,0.5"
                                 SizeChanged="OnViewerPhotoSizeChanged">
                             <Border.RenderTransform>
@@ -1307,8 +1538,18 @@
                             </Border.RenderTransform>
                             <Grid ClipToBounds="True">
                                 <Image x:Name="ViewerImage"
-                                       Stretch="UniformToFill"
+                                       RenderOptions.BitmapScalingMode="Linear"
+                                       Stretch="Uniform"
                                        Visibility="Collapsed" />
+                                <ProgressBar x:Name="ViewerPreviewProgress"
+                                             Width="160"
+                                             Height="3"
+                                             Margin="0,0,0,20"
+                                             HorizontalAlignment="Center"
+                                             VerticalAlignment="Bottom"
+                                             Foreground="{StaticResource LgBrushAccentStrong}"
+                                             IsIndeterminate="True"
+                                             Visibility="Collapsed" />
                             </Grid>
                         </Border>
                     </Grid>
@@ -1316,12 +1557,13 @@
                     <Border Margin="24,20,24,0"
                             Padding="14,10"
                             MinHeight="64"
+                            Panel.ZIndex="2"
                             HorizontalAlignment="Stretch"
                             VerticalAlignment="Top"
                             Background="#7A1D1D1F"
                             BorderBrush="#29FFFFFF"
                             BorderThickness="1"
-                            CornerRadius="24">
+                            CornerRadius="14">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -1345,13 +1587,13 @@
                                 <TextBlock x:Name="ViewerNameText"
                                            AutomationProperties.AutomationId="ViewerNameText"
                                            Foreground="White"
-                                           FontSize="13"
+                                           FontSize="14"
                                            FontWeight="SemiBold"
                                            TextTrimming="CharacterEllipsis" />
                                 <TextBlock x:Name="ViewerMetaText"
                                            Margin="0,2,0,0"
                                            Foreground="#94FFFFFF"
-                                           FontSize="10" />
+                                           FontSize="12" />
                             </StackPanel>
                             <Button x:Name="ViewerZoomOutButton"
                                     AutomationProperties.AutomationId="ViewerZoomOutButton"
@@ -1394,7 +1636,9 @@
                     HorizontalAlignment="Center"
                     VerticalAlignment="Bottom"
                     Background="#DB1D1D1F"
-                    CornerRadius="{StaticResource LgRadiusPill}"
+                    BorderBrush="#38FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="10"
                     IsHitTestVisible="False"
                     Opacity="0"
                     RenderTransformOrigin="0.5,0.5">
