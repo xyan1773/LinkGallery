@@ -196,7 +196,6 @@ internal fun LinkGalleryApp(
     val albumPageCache = remember(mediaRepository) { AlbumPageCache() }
     val photosGridState = rememberLazyGridState()
     val albumsScrollState = rememberScrollState()
-    val albumDetailGridState = rememberLazyGridState()
 
     fun showToast(message: String) {
         toastMessage = message
@@ -321,7 +320,6 @@ internal fun LinkGalleryApp(
                                         gridColumns = gridColumns,
                                         onGridColumnsChange = { gridColumns = it },
                                         albumsScrollState = albumsScrollState,
-                                        albumDetailGridState = albumDetailGridState,
                                     )
                                 }
                             }
@@ -431,7 +429,6 @@ private fun AlbumsPage(
     gridColumns: Int,
     onGridColumnsChange: (Int) -> Unit,
     albumsScrollState: ScrollState,
-    albumDetailGridState: LazyGridState,
 ) {
     val mediaItems = (galleryState as? GalleryState.Ready)?.items.orEmpty()
     val smartAlbums = remember(mediaItems, strings.uiLanguage) { buildSmartAlbums(mediaItems, strings) }
@@ -448,6 +445,10 @@ private fun AlbumsPage(
     var activeAlbumItems by remember { mutableStateOf<List<MediaRecord>>(emptyList()) }
     var albumLoading by remember { mutableStateOf(false) }
     var activeAlbumFilter by remember { mutableStateOf(MediaFilter.All) }
+    val activeAlbumIdentity = activeAlbum?.let { album ->
+        album.albumId ?: album.relativePath ?: album.name
+    }
+    val albumDetailGridState = remember(activeAlbumIdentity) { LazyGridState() }
 
     if (activeAlbum != null) {
         Column(
