@@ -39,6 +39,7 @@ public partial class MainWindow : Window, IDisposable
     private const int MediaRowsPerVisualGroup = 40;
     private const int DecodedThumbnailCapacity = 192;
     private const int DecodedPreviewCapacity = 8;
+    private const string Pocket3SourceDevice = "DJI Pocket 3";
     private static readonly JsonSerializerOptions PreferencesJsonOptions = new() { WriteIndented = true };
     private static readonly Dictionary<string, string> KnownDeviceMarketingNames =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -310,6 +311,13 @@ public partial class MainWindow : Window, IDisposable
         {
             "image" => new HashSet<MediaType> { MediaType.Image },
             "video" => new HashSet<MediaType> { MediaType.Video },
+            _ => null,
+        };
+
+    private string? GetSelectedSourceDevice() =>
+        ((SourceFilterComboBox.SelectedItem as ComboBoxItem)?.Tag as string) switch
+        {
+            "pocket3" => Pocket3SourceDevice,
             _ => null,
         };
 
@@ -1456,7 +1464,8 @@ public partial class MainWindow : Window, IDisposable
                     FromInclusive: fromInclusive,
                     ToExclusive: toExclusive,
                     Limit: PageSize,
-                    Offset: _indexedOffset),
+                    Offset: _indexedOffset,
+                    SourceDevice: GetSelectedSourceDevice()),
                 cancellationToken);
             _indexedOffset += items.Count;
             var visibleItems = ShouldRequireCachedThumbnailForIndexedMedia()
@@ -2054,10 +2063,12 @@ public partial class MainWindow : Window, IDisposable
             : Visibility.Collapsed;
 
         var showTypeFilter = _currentPage == "Gallery" && toolbarContentWidth >= 1000;
+        var showSourceFilter = _currentPage == "Gallery" && toolbarContentWidth >= 1080;
         var showDateFilter = _currentPage == "Gallery" && toolbarContentWidth >= 1120;
         TypeFilterComboBox.Visibility = showTypeFilter ? Visibility.Visible : Visibility.Collapsed;
+        SourceFilterComboBox.Visibility = showSourceFilter ? Visibility.Visible : Visibility.Collapsed;
         DateFilterComboBox.Visibility = showDateFilter ? Visibility.Visible : Visibility.Collapsed;
-        FilterPanel.Visibility = showTypeFilter || showDateFilter
+        FilterPanel.Visibility = showTypeFilter || showSourceFilter || showDateFilter
             ? Visibility.Visible
             : Visibility.Collapsed;
 

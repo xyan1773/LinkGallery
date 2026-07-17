@@ -613,6 +613,7 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
               AND ($fromInclusive IS NULL OR sort_time >= $fromInclusive)
               AND ($toExclusive IS NULL OR sort_time < $toExclusive)
               AND ($albumId IS NULL OR album_id = $albumId)
+              AND ($sourceDevice IS NULL OR source_device = $sourceDevice)
               AND ($pattern IS NULL
                    OR file_name LIKE $pattern ESCAPE '\'
                    OR album_name LIKE $pattern ESCAPE '\'
@@ -635,6 +636,7 @@ public sealed class SqliteMediaIndex : IMediaIndex, IDisposable
             "$toExclusive",
             Db(query.ToExclusive?.ToUnixTimeMilliseconds()));
         command.Parameters.AddWithValue("$albumId", Db(query.AlbumId));
+        command.Parameters.AddWithValue("$sourceDevice", Db(query.SourceDevice));
         command.Parameters.AddWithValue(
             "$pattern",
             Db(string.IsNullOrWhiteSpace(query.SearchText)

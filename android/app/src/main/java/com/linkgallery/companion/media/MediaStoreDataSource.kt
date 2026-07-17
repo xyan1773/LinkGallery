@@ -34,6 +34,8 @@ data class MediaStoreRow(
     val albumId: String? = null,
     val generationAdded: Long? = null,
     val generationModified: Long? = null,
+    val mimeType: String? = null,
+    val ownerPackageName: String? = null,
 ) {
     val sortTimestampEpochMillis: Long
         get() = dateTakenEpochMillis?.takeIf { it > 0 } ?: dateModifiedEpochSeconds * 1000

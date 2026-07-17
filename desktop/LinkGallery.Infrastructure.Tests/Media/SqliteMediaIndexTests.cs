@@ -14,6 +14,7 @@ public sealed class SqliteMediaIndexTests
     private static readonly string[] ExpectedRemainingMediaIds = ["media-1", "media-3"];
     private static readonly string[] ExpectedScreenshotAlbumIds =
         ["dcim/screenshots", "pictures/screenshots"];
+    private static readonly string[] ExpectedPocket3MediaIds = ["media-1", "media-3"];
     private string _databasePath = null!;
 
     [TestInitialize]
@@ -296,6 +297,34 @@ public sealed class SqliteMediaIndexTests
     }
 
     [TestMethod]
+    public async Task SearchFiltersPocket3WithoutMixingPhoneMedia()
+    {
+        var source = new FakeMediaSource(
+            Item(1, 1, sourceDevice: "DJI Pocket 3"),
+            Item(2, 2),
+            Item(3, 3, sourceDevice: "DJI Pocket 3"));
+        var index = new SqliteMediaIndex(_databasePath);
+        await new IncrementalMediaIndexSynchronizer(index)
+            .SynchronizeAsync(source, CancellationToken.None);
+
+        var results = await index.SearchAsync(
+            new MediaIndexQuery(
+                DeviceId: source.Device.Id,
+                SearchText: null,
+                Types: null,
+                FromInclusive: null,
+                ToExclusive: null,
+                Limit: 100,
+                Offset: 0,
+                SourceDevice: "DJI Pocket 3"),
+            CancellationToken.None);
+
+        CollectionAssert.AreEquivalent(
+            ExpectedPocket3MediaIds,
+            results.Select(item => item.RemoteId).ToArray());
+    }
+
+    [TestMethod]
     public async Task NewAndRemovedItemsAreReconciledAndRemainSearchableOffline()
     {
         var source = new FakeMediaSource(
@@ -448,7 +477,8 @@ public sealed class SqliteMediaIndexTests
         int modifiedSeconds,
         string? fileName = null,
         string relativePath = "DCIM/Camera",
-        MediaType type = MediaType.Image) => new()
+        MediaType type = MediaType.Image,
+        string? sourceDevice = null) => new()
     {
         DeviceId = "phone-1",
         RemoteId = $"media-{id}",
@@ -462,6 +492,7 @@ public sealed class SqliteMediaIndexTests
         Generation = id,
         AlbumName = "Camera",
         RelativePath = relativePath,
+        SourceDevice = sourceDevice,
     };
 
     private sealed class FakeMediaSource(params MediaItem[] items) : IReadOnlyMediaSource

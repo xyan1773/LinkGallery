@@ -486,6 +486,16 @@
                                     <ComboBoxItem Content="Photos" Tag="image" />
                                     <ComboBoxItem Content="Videos" Tag="video" />
                                 </ComboBox>
+                                <ComboBox x:Name="SourceFilterComboBox"
+                                          AutomationProperties.AutomationId="SourceFilterComboBox"
+                                          Width="112"
+                                          Margin="8,0,0,0"
+                                          SelectionChanged="OnSearchFilterChanged"
+                                          SelectedIndex="0"
+                                          Style="{StaticResource LgComboBox}">
+                                    <ComboBoxItem Content="All sources" Tag="all" />
+                                    <ComboBoxItem Content="Pocket 3" Tag="pocket3" />
+                                </ComboBox>
                                 <ComboBox x:Name="DateFilterComboBox"
                                           AutomationProperties.AutomationId="DateFilterComboBox"
                                           Width="120"

@@ -89,7 +89,8 @@ public sealed record MediaIndexQuery(
     DateTimeOffset? ToExclusive,
     int Limit,
     int Offset,
-    string? AlbumId = null);
+    string? AlbumId = null,
+    string? SourceDevice = null);
 
 public sealed record MediaAlbum(
     string DeviceId,

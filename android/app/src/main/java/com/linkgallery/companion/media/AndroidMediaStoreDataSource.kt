@@ -262,6 +262,8 @@ class AndroidMediaStoreDataSource(
             relativePath = nullableString(RELATIVE_PATH),
             generationAdded = nullableLongIfPresent(GENERATION_ADDED),
             generationModified = nullableLongIfPresent(GENERATION_MODIFIED),
+            mimeType = nullableString(MIME_TYPE),
+            ownerPackageName = nullableString(OWNER_PACKAGE_NAME),
         )
     }
 
@@ -322,6 +324,8 @@ class AndroidMediaStoreDataSource(
         const val BUCKET_DISPLAY_NAME = MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME
         const val RELATIVE_PATH = MediaStore.MediaColumns.RELATIVE_PATH
         const val MEDIA_TYPE = MediaStore.Files.FileColumns.MEDIA_TYPE
+        const val MIME_TYPE = MediaStore.MediaColumns.MIME_TYPE
+        const val OWNER_PACKAGE_NAME = MediaStore.MediaColumns.OWNER_PACKAGE_NAME
         const val GENERATION_ADDED = MediaStore.MediaColumns.GENERATION_ADDED
         const val GENERATION_MODIFIED = MediaStore.MediaColumns.GENERATION_MODIFIED
         val BASE_PROJECTION = arrayOf(
@@ -337,6 +341,8 @@ class AndroidMediaStoreDataSource(
             BUCKET_DISPLAY_NAME,
             RELATIVE_PATH,
             MEDIA_TYPE,
+            MIME_TYPE,
+            OWNER_PACKAGE_NAME,
         )
     }
 

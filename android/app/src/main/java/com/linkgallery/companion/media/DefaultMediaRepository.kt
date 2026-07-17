@@ -226,6 +226,13 @@ class DefaultMediaRepository(
 
     private fun toRecord(row: MediaStoreRow): MediaRecord {
         val modifiedAt = Instant.ofEpochSecond(row.dateModifiedEpochSeconds)
+        val source = Pocket3MediaClassifier.classify(
+            fileName = row.fileName,
+            albumName = row.albumName,
+            relativePath = row.relativePath,
+            mimeType = row.mimeType,
+            ownerPackageName = row.ownerPackageName,
+        )
         return MediaRecord(
             id = tokenCodec.encodeId(row),
             fileName = row.fileName,
@@ -244,6 +251,9 @@ class DefaultMediaRepository(
             relativePath = row.relativePath,
             generation = row.generation,
             thumbnailUrl = "/api/v1/media/${tokenCodec.encodeId(row)}/thumbnail?size=256",
+            sourceDevice = source.sourceDevice,
+            sourceApplication = source.sourceApplication,
+            isEditedExport = source.isEditedExport,
         )
     }
 
