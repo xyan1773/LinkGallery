@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#f5f5f7" />
-  <title>LinkGallery | 局域网无线相册备份工具 / LAN Wireless Photo Backup</title>
-  <meta name="description" content="LinkGallery是一款强大的局域网相册备份工具。基于 mDNS 自动发现，提供 HTTP Range 断点续传和严格的只读保护，让您的照片管理极速且安全。" />
+  <title>LinkGallery | 跨设备统一相册终端 / Unified Photo Terminal</title>
+  <meta name="description" content="LinkGallery is a local-first Windows photo terminal that unifies media from multiple personal devices and lets users find and transfer photos using natural language." />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body class="lang-zh">
@@ -46,12 +46,12 @@
     <section class="hero">
       <div class="hero-content">
         <h1 class="hero-title">
-          <span class="zh">局域网无线相册<br/><span class="text-gradient">安全备份工具</span></span>
-          <span class="en">Seamless LAN<br/><span class="text-gradient">Photo Backup</span></span>
+          <span class="zh">跨设备相册<br/><span class="text-gradient">统一管理终端</span></span>
+          <span class="en">Unified Photo<br/><span class="text-gradient">Terminal</span></span>
         </h1>
         <p class="hero-subtitle">
-          <span class="zh">自动发现配对设备，极速浏览并可靠地将手机原画质媒体备份至 Windows。绝对安全，全程局域网，不消耗流量。</span>
-          <span class="en">Auto-discover devices on your local network. Browse and reliably backup original media to Windows. Completely local, fast, and secure.</span>
+          <span class="zh">LinkGallery 是一个 local-first 的 Windows 统一终端，让您在一个界面中聚合浏览、使用自然语言搜索，并可靠传输来自所有个人设备的照片与视频。</span>
+          <span class="en">LinkGallery is a local-first Windows photo terminal that unifies media from multiple personal devices and lets users find and transfer photos using natural language.</span>
         </p>
         <div class="hero-cta">
           <a href="https://github.com/xyan1773/LinkGallery/releases/latest/download/LinkGallery-Windows-x64.exe" class="btn btn-primary" download>
@@ -67,11 +67,11 @@
         </div>
         <div class="coming-soon">
           <span class="badge">
-            <span class="zh">MVP 阶段</span>
-            <span class="en">MVP Phase</span>
+            <span class="zh">Build Week MVP</span>
+            <span class="en">Build Week MVP</span>
           </span>
-          <span class="zh">完美支持 DJI Pocket 3 桥接工作流</span>
-          <span class="en">Perfectly supports DJI Pocket 3 bridge workflow</span>
+          <span class="zh">首发搭载 Android 与 Windows 本地核心适配器</span>
+          <span class="en">Featuring Android and Windows Local adapters</span>
         </div>
       </div>
 
@@ -94,14 +94,14 @@
         </h2>
         <div class="intro-text">
           <p class="zh">
-            LinkGallery 的诞生源于对数据安全与原生体验的极致追求。市面上的云盘同步不仅缓慢且会压缩画质，而现有的相册管理工具又常常因误操作导致手机端的珍贵数据被意外删除。<br/><br/>
-            我们重构了照片备份的逻辑：<strong>手机端数据受到绝对保护。</strong> 我们在 Android (Kotlin / Jetpack Compose) 上构建了严格的只读路由边界，不提供任何删除、移动或修改接口。所有复杂的备份状态管理，全权交由性能强劲的 Windows (.NET 8 / WPF) 客户端完成。<br/><br/>
-            针对创作者的特殊需求，如 DJI Pocket 3 拍摄的素材，在 MVP 阶段只需通过 Mimo App 导入手机，LinkGallery 即可在局域网内无缝发现、预览并极速接管至电脑，打造完整且安全的创作链路。
+            现代人的照片管理极度割裂：Android 有自己的图库协议，iPhone 依赖 Apple 生态，DJI Pocket 3 有专门的 App，相机依靠 SD 卡，而 Windows 本地照片又散落在不同文件夹。每个平台的搜索、预览和导出方式都截然不同。<br/><br/>
+            <strong>我们要解决的不是“如何把照片从手机传到电脑”，而是“如何通过一个一致的界面管理所有个人设备的照片？”</strong><br/><br/>
+            因此我们设计了核心平台 + 设备适配器（Adapters）的统一架构。Windows UI 不需要关心照片来自哪里，它只对接统一的 <code>IMediaSource</code> 接口。这使得跨设备聚合浏览与全局 AI 搜索成为可能。
           </p>
           <p class="en">
-            LinkGallery was born out of a pursuit for data security and native experiences. Cloud syncing is slow and often compresses media, while existing gallery managers risk accidental deletion of precious memories.<br/><br/>
-            We rebuilt backup logic: <strong>Your phone data is absolutely protected.</strong> We've built strict read-only boundaries on Android (Kotlin / Jetpack Compose), providing zero endpoints for deletion or modification. All complex backup state management is handled exclusively by the powerful Windows (.NET 8 / WPF) client.<br/><br/>
-            For creators using devices like the DJI Pocket 3, simply sync to your phone via the Mimo App, and LinkGallery will instantly discover, preview, and take over the transfer to your PC entirely over your local network—creating a complete and safe creative workflow.
+            Photo management today is highly fragmented: Android has its own protocols, iPhone relies on Apple's ecosystem, DJI requires specific apps, cameras use SD cards, and Windows local photos are scattered. Every platform has a completely different way to search, preview, and export.<br/><br/>
+            <strong>We aren't just solving "how to copy photos to a PC". We are solving "how to manage photos across all personal devices through one consistent interface".</strong><br/><br/>
+            LinkGallery introduces a Core Platform + Device Adapters architecture. The Windows UI doesn't care where photos come from; it talks to a unified <code>IMediaSource</code> interface. This makes true cross-device aggregation and global AI search possible.
           </p>
         </div>
       </div>
@@ -114,48 +114,61 @@
           <span class="en">Core Features</span>
         </h2>
         <p class="section-subtitle">
-          <span class="zh">极客级别的可靠传输与优雅原生体验</span>
-          <span class="en">Geek-level reliable transfer & elegant native experience</span>
+          <span class="zh">统一、智能、可扩展的基础设施</span>
+          <span class="en">Unified, intelligent, and extensible infrastructure</span>
         </p>
       </div>
       <div class="feature-grid">
         <div class="feature-card">
           <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path><path d="M12 12v9"></path><path d="m8 17 4 4 4-4"></path></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
           </div>
           <h3>
-            <span class="zh">局域网自动发现</span>
-            <span class="en">LAN Auto-Discovery</span>
+            <span class="zh">跨设备统一终端</span>
+            <span class="en">Unified Interface</span>
           </h3>
           <p>
-            <span class="zh">基于 mDNS / DNS-SD 协议。只需处于同一 Wi-Fi 网络，Windows 即可自动发现您的手机，无需繁琐的扫码或插拔数据线。</span>
-            <span class="en">Powered by mDNS / DNS-SD. Simply connect to the same Wi-Fi, and Windows automatically discovers your phone. No more QR codes or USB cables.</span>
+            <span class="zh">左侧同时显示本地 PC 和各种智能设备。用户在一个界面聚合浏览多个来源的照片，按时间、文件类型或设备进行全局筛选。</span>
+            <span class="en">Browse "This PC" and your phone side-by-side. View photos from multiple sources in a single aggregated timeline, and filter by date, type, or device.</span>
           </p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><polyline points="11 8 11 11 14 14"></polyline></svg>
           </div>
           <h3>
-            <span class="zh">断点续传与完整校验</span>
-            <span class="en">Reliable Resumable Transfers</span>
+            <span class="zh">自然语言全局搜索 (AI)</span>
+            <span class="en">Natural Language Search</span>
           </h3>
           <p>
-            <span class="zh">底层采用 HTTP Range 技术。即便是几个G大小的 4K 视频，也支持断点续传。传输完成后严格校验，拒绝任何损坏的“半截文件”。</span>
-            <span class="en">Built on HTTP Range technology. Large 4K videos support resumable downloads, with strict post-transfer validation to prevent corrupted "half-downloaded" files.</span>
+            <span class="zh">"找一下上周末在手机和电脑里的所有美食照片"。AI 会解析意图，自动在所有已连接设备中统一检索，并标明来源。</span>
+            <span class="en">"Show me all photos of food taken last weekend across my phone and computer." AI translates this into a structured query across all connected adapters.</span>
           </p>
         </div>
         <div class="feature-card">
           <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
           </div>
           <h3>
-            <span class="zh">绝对安全：只读保护</span>
-            <span class="en">Strictly Read-Only Guarantee</span>
+            <span class="zh">可插拔适配器架构</span>
+            <span class="en">Pluggable Adapters</span>
           </h3>
           <p>
-            <span class="zh">手机端的 MediaStore 接口完全只读，不提供任何写入权限。所有的照片浏览与复制操作，都不会对您手机里的原数据产生一丝一毫的影响。</span>
-            <span class="en">The Android MediaStore interface is completely read-only. Browsing and copying photos will never alter, move, or delete original data on your phone.</span>
+            <span class="zh">底层抽象统一接口。除了 Android 和 Windows，未来可轻松扩展 DJI、iPhone、SD 卡或 NAS 作为标准数据源。</span>
+            <span class="en">Built on a foundational source interface. Future-proof and extensible for DJI, iPhone, SD cards, and NAS as standardized data sources.</span>
+          </p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"></path><path d="m17 5-5-3-5 3"></path><path d="m17 19-5 3-5-3"></path><path d="M2 12h20"></path><path d="m5 7-3 5 3 5"></path><path d="m19 7 3 5-3 5"></path></svg>
+          </div>
+          <h3>
+            <span class="zh">极客级可靠传输</span>
+            <span class="en">Reliable Local Transfer</span>
+          </h3>
+          <p>
+            <span class="zh">跨设备复制照片时支持断点续传与完备的文件校验，杜绝损坏文件。同时设备源端始终保持只读，保障绝对安全。</span>
+            <span class="en">Copy photos across devices with resumable transfer support and post-transfer validation. Source devices remain strictly read-only.</span>
           </p>
         </div>
       </div>
