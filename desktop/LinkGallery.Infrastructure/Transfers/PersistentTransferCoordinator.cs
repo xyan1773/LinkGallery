@@ -555,8 +555,20 @@ public sealed class PersistentTransferCoordinator : ITransferCoordinator
         await CommitCompletionAsync(
             job,
             sha256,
-            publishFinalFile: () => _fileSystem.Move(job.PartialPath, job.DestinationPath))
+            publishFinalFile: () => PublishFinalFile(job))
             .ConfigureAwait(false);
+    }
+
+    private void PublishFinalFile(TransferJob job)
+    {
+        _fileSystem.Move(job.PartialPath, job.DestinationPath);
+        if (!_fileSystem.FileExists(job.DestinationPath) ||
+            _fileSystem.FileExists(job.PartialPath) ||
+            _fileSystem.GetFileLength(job.DestinationPath) != job.TotalBytes)
+        {
+            throw new IOException(
+                "The completed transfer could not be published under its original file name.");
+        }
     }
 
     private async Task CompleteExistingDestinationAsync(

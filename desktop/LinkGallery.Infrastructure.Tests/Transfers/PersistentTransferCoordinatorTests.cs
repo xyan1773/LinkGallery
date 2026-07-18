@@ -171,6 +171,56 @@ public sealed class PersistentTransferCoordinatorTests
     }
 
     [TestMethod]
+    public async Task AlbumBatchPublishesOriginalNamesAndRemovesAllPartialFiles()
+    {
+        var directory = CreateTemporaryDirectory();
+        try
+        {
+            var data = new byte[64 * 1024];
+            RandomNumberGenerator.Fill(data);
+            var source = new RecordingMediaSource(data, TimeSpan.Zero);
+            await using var queue = CreateQueue(Path.Combine(directory, "queue.json"), source);
+            await queue.StartAsync();
+            var fileNames = new[] { "photo.jpg", "portrait.heic", "graphic.png", "clip.mp4" };
+            var jobs = new List<TransferJob>();
+            foreach (var fileName in fileNames)
+            {
+                jobs.Add(await queue.EnqueueAsync(
+                    new MediaItem
+                    {
+                        DeviceId = "phone",
+                        RemoteId = $"media-{fileName}",
+                        FileName = fileName,
+                        Type = fileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)
+                            ? MediaType.Video
+                            : MediaType.Image,
+                        FileSize = data.Length,
+                        TakenAt = DateTimeOffset.UtcNow,
+                        ModifiedAt = DateTimeOffset.UtcNow,
+                    },
+                    directory));
+            }
+
+            await WaitUntilAsync(() =>
+                queue.GetJobs().All(job => job.Status == TransferStatus.Completed));
+
+            CollectionAssert.AreEquivalent(
+                fileNames,
+                jobs.Select(job => Path.GetFileName(job.DestinationPath)).ToArray());
+            foreach (var job in jobs)
+            {
+                Assert.IsTrue(File.Exists(job.DestinationPath));
+                Assert.IsFalse(File.Exists(job.PartialPath));
+                CollectionAssert.AreEqual(data, await File.ReadAllBytesAsync(job.DestinationPath));
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task MetadataConflictFallsBackToSha256AndReusesIdenticalCopy()
     {
         var directory = CreateTemporaryDirectory();

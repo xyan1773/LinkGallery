@@ -101,6 +101,32 @@ class PermissionScreenUiTest {
     }
 
     @Test
+    fun emulatorNatAddressUsesAdbLoopbackPairingCode() {
+        var submittedCode: String? = null
+        compose.setContent {
+            PermissionContent(
+                connectionGuide = emulatorGuide(),
+                permissionGranted = true,
+                onPermissionRequest = {},
+                onOpenPairingWindow = { code ->
+                    submittedCode = code
+                    0L
+                },
+                serviceState = LinkGalleryServiceState(
+                    running = true,
+                    port = 39570,
+                    addresses = listOf("10.0.2.16"),
+                ),
+            )
+        }
+
+        compose.onNodeWithTag("tab_connection").performClick()
+        compose.onNodeWithText("7F00-0001").assertIsDisplayed()
+        compose.onNodeWithTag("enable_address_pairing").performClick()
+        compose.runOnIdle { assertEquals("7F000001", submittedCode) }
+    }
+
+    @Test
     fun transferStatusShowsOnlyDisplayNameAndCanStopSharing() {
         var serviceEnabled = true
         compose.setContent {
