@@ -71,6 +71,25 @@ public sealed class SqlitePairedDeviceStoreTests
     }
 
     [TestMethod]
+    public async Task PairingAnotherDeviceKeepsBothLocalRecords()
+    {
+        using var store = new SqlitePairedDeviceStore(_databasePath);
+        var first = Device(PairedDeviceStatus.Offline);
+        var second = Device(
+            PairedDeviceStatus.Online,
+            deviceId: "phone-2",
+            displayName: "Xiaomi Pad 5");
+
+        await store.UpsertPairedDeviceAsync(first, CancellationToken.None);
+        await store.UpsertPairedDeviceAsync(second, CancellationToken.None);
+
+        var devices = await store.ListPairedDevicesAsync(CancellationToken.None);
+        Assert.HasCount(2, devices);
+        Assert.IsTrue(devices.Any(static device => device.DeviceId == "phone-1"));
+        Assert.IsTrue(devices.Any(static device => device.DeviceId == "phone-2"));
+    }
+
+    [TestMethod]
     public async Task StoresOnlyCredentialKeyNotPlainAccessToken()
     {
         using var store = new SqlitePairedDeviceStore(_databasePath);
@@ -213,15 +232,18 @@ public sealed class SqlitePairedDeviceStoreTests
         Assert.AreEqual(0L, (long)(await command.ExecuteScalarAsync())!);
     }
 
-    private static PairedDevice Device(PairedDeviceStatus status) => new()
+    private static PairedDevice Device(
+        PairedDeviceStatus status,
+        string deviceId = "phone-1",
+        string displayName = "Pixel") => new()
     {
-        DeviceId = "phone-1",
-        DisplayName = "Pixel",
+        DeviceId = deviceId,
+        DisplayName = displayName,
         Manufacturer = "Google",
         Model = "Pixel 9",
         IdentityPublicKey = "public-key",
         CertificateFingerprint = "AA:BB",
-        CredentialKey = "credential-phone-1",
+        CredentialKey = $"credential-{deviceId}",
         LastHost = "192.168.1.20",
         LastPort = 39570,
         Status = status,

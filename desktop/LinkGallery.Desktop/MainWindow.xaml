@@ -1010,71 +1010,68 @@
                                        Margin="0,120,0,0"
                                        FontSize="14"
                                        Foreground="{StaticResource LgBrushMuted}"
-                                       Text="No connected devices" />
-                            <UniformGrid x:Name="DeviceCardsGrid" Margin="0,28,0,0" Columns="2" Visibility="Collapsed">
-                                <Border x:Name="ConnectedDeviceCard"
-                                    Margin="0,0,18,0"
-                                    Padding="20"
-                                    Background="#FAFFFFFF"
-                                    BorderBrush="#4734C759"
-                                    BorderThickness="1"
-                                    CornerRadius="18">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal">
-                                            <Border Width="48" Height="48" Background="{StaticResource LgBrushAccentSoft}" CornerRadius="15">
-                                                <TextBlock FontFamily="Segoe MDL2 Assets"
-                                                           FontSize="24"
-                                                           Foreground="{StaticResource LgBrushAccent}"
-                                                           HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center"
-                                                           Text="&#xE8EA;" />
-                                            </Border>
-                                            <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                                       Text="No paired devices" />
+                            <ItemsControl x:Name="DeviceCardsGrid"
+                                          Margin="0,28,0,0"
+                                          ItemsSource="{Binding DeviceCards}"
+                                          Visibility="Collapsed">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="2" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,18,18" Padding="20" BorderThickness="1" CornerRadius="18">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="#FAFFFFFF" />
+                                                    <Setter Property="BorderBrush" Value="{StaticResource LgBrushLine}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="#4734C759" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <StackPanel>
                                                 <StackPanel Orientation="Horizontal">
-                                                    <TextBlock x:Name="DeviceCardTitleText" FontSize="16" FontWeight="SemiBold" Text="Connected device" VerticalAlignment="Center" />
-                                                    <Button x:Name="RenameDeviceButton"
-                                                            AutomationProperties.AutomationId="RenameDeviceButton"
-                                                            Width="32"
-                                                            MinWidth="32"
-                                                            Height="32"
-                                                            MinHeight="32"
-                                                            Margin="8,0,0,0"
-                                                            Padding="0"
-                                                            FontFamily="Segoe MDL2 Assets"
-                                                            FontSize="14"
-                                                            IsEnabled="False"
-                                                            Click="OnRenameDeviceClick"
-                                                            Content="&#xE70F;"
-                                                            Style="{StaticResource LgIconButton}"
-                                                            ToolTip="Rename device" />
+                                                    <Border Width="48" Height="48" Background="{StaticResource LgBrushAccentSoft}" CornerRadius="15">
+                                                        <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="24" Foreground="{StaticResource LgBrushAccent}"
+                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" Text="&#xE8EA;" />
+                                                    </Border>
+                                                    <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock FontSize="16" FontWeight="SemiBold" Text="{Binding DisplayName}" VerticalAlignment="Center" />
+                                                            <Button AutomationProperties.AutomationId="RenameDeviceButton"
+                                                                    Width="32" MinWidth="32" Height="32" MinHeight="32" Margin="8,0,0,0" Padding="0"
+                                                                    FontFamily="Segoe MDL2 Assets" FontSize="14" IsEnabled="{Binding CanManage}"
+                                                                    Click="OnRenameDeviceClick" Content="&#xE70F;"
+                                                                    Style="{StaticResource LgIconButton}" ToolTip="{Binding RenameLabel}" />
+                                                        </StackPanel>
+                                                        <TextBlock Margin="0,5,0,0" FontSize="12" Foreground="{StaticResource LgBrushMuted}" Text="{Binding Subtitle}" />
+                                                    </StackPanel>
                                                 </StackPanel>
-                                                <TextBlock x:Name="DeviceCardSubtitleText" Margin="0,5,0,0" FontSize="12" Foreground="{StaticResource LgBrushMuted}" Text="Connected" />
+                                                <UniformGrid Margin="0,18,0,0" Columns="3">
+                                                    <Button AutomationProperties.AutomationId="BrowseDevicePhotosButton"
+                                                            Margin="0,0,5,0" HorizontalAlignment="Stretch"
+                                                            IsEnabled="{Binding CanManage}" Click="OnBrowseDevicePhotosClick"
+                                                            Content="{Binding BrowseLabel}" Style="{StaticResource LgCommandButton}" />
+                                                    <Button AutomationProperties.AutomationId="DisconnectButton"
+                                                            Margin="5,0" HorizontalAlignment="Stretch" IsEnabled="{Binding CanManage}"
+                                                            Visibility="{Binding IsConnected, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                            Click="OnDisconnectClick" Content="{Binding DisconnectLabel}"
+                                                            Style="{StaticResource LgSecondaryButton}" />
+                                                    <Button AutomationProperties.AutomationId="ForgetDeviceButton"
+                                                            Margin="5,0,0,0" HorizontalAlignment="Stretch" IsEnabled="{Binding CanManage}"
+                                                            Click="OnForgetDeviceClick" Content="{Binding ForgetLabel}"
+                                                            Style="{StaticResource LgSecondaryButton}" />
+                                                </UniformGrid>
                                             </StackPanel>
-                                        </StackPanel>
-                                        <StackPanel Margin="0,18,0,0" Orientation="Horizontal">
-                                            <Button x:Name="BrowseDevicePhotosButton"
-                                                    AutomationProperties.AutomationId="BrowseDevicePhotosButton"
-                                                    Click="OnBrowseDevicePhotosClick"
-                                                    Content="Browse photos"
-                                                    Style="{StaticResource LgCommandButton}" />
-                                            <Button x:Name="DisconnectButton"
-                                                    AutomationProperties.AutomationId="DisconnectButton"
-                                                    Margin="10,0,0,0"
-                                                    IsEnabled="False"
-                                                    Click="OnDisconnectClick"
-                                                    Content="Disconnect"
-                                                    Style="{StaticResource LgSecondaryButton}" />
-                                            <Button x:Name="ForgetDeviceButton"
-                                                    AutomationProperties.AutomationId="ForgetDeviceButton"
-                                                    Margin="10,0,0,0"
-                                                    IsEnabled="False"
-                                                    Click="OnForgetDeviceClick"
-                                                    Content="Forget device"
-                                                    Style="{StaticResource LgSecondaryButton}" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                </Border>
-                            </UniformGrid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
@@ -1401,6 +1398,27 @@
                                            Text="Enter the eight-character code shown on the phone." />
                             </StackPanel>
                         </StackPanel>
+                        <Border x:Name="ConnectionErrorPanel"
+                                Margin="0,18,0,0"
+                                Padding="14,12"
+                                Background="#FFFFF3F2"
+                                BorderBrush="#55D92D20"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock x:Name="ConnectionErrorTitleText"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="#FFB42318"
+                                           Text="Connection failed" />
+                                <TextBlock x:Name="ConnectionErrorMessageText"
+                                           Margin="0,5,0,0"
+                                           FontSize="12"
+                                           Foreground="#FF7A271A"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
                         <TextBox x:Name="AddressTextBox"
                                  AutomationProperties.AutomationId="AddressTextBox"
                                  Margin="0,20,0,0"

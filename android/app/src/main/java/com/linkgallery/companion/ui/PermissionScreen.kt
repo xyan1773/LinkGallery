@@ -712,8 +712,16 @@ private fun DevicesPage(
     onOpenNotificationSettings: () -> Unit,
 ) {
     var showSettings by remember { mutableStateOf(false) }
-    val ipv4Address = remember(serviceState.addresses) {
-        serviceState.addresses.firstOrNull { Ipv4AddressCode.encode(it) != null }
+    val ipv4Address = remember(serviceState.addresses, connectionGuide.address) {
+        val serviceAddress = serviceState.addresses.firstOrNull { Ipv4AddressCode.encode(it) != null }
+        if (
+            serviceAddress?.startsWith("10.0.2.") == true &&
+            connectionGuide.address.contains("127.0.0.1")
+        ) {
+            "127.0.0.1"
+        } else {
+            serviceAddress
+        }
     }
     val addressCode = remember(ipv4Address) { ipv4Address?.let(Ipv4AddressCode::encode) }
     val serviceAddress = remember(ipv4Address, serviceState.port, connectionGuide.address) {
@@ -1064,7 +1072,7 @@ private fun AlbumCard(
                     item = album.cover,
                     mediaRepository = mediaRepository,
                     modifier = Modifier.fillMaxSize(),
-                    fallbackText = album.name.take(1).uppercase(Locale.getDefault()),
+                    fallbackText = album.name.take(1).uppercase(Locale.ROOT),
                     fallbackBackground = album.color,
                 )
                 if (album.cover == null) {
@@ -1199,7 +1207,7 @@ private fun MediaTile(
             modifier = Modifier.fillMaxSize(),
             fallbackText = item.fileName.substringAfterLast('.', "Media")
                 .take(5)
-                .uppercase(Locale.getDefault()),
+                .uppercase(Locale.ROOT),
         )
         if (selectionMode) {
             Box(

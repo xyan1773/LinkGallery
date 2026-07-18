@@ -139,7 +139,10 @@ public partial class MainWindow : Window, IDisposable
     private string? _pendingPairingCode;
     private PairedDevice? _activePairedDevice;
     private PairedDevice? _savedDeviceCard;
+    private string? _renameDeviceId;
     private LinkGallery.Domain.Devices.Device? _connectedDevice;
+    private readonly Dictionary<string, PairedDevice> _pairedDevices =
+        new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _pairedDeviceNames =
         new(StringComparer.Ordinal);
     private Uri? _activeApiAddress;
@@ -396,13 +399,7 @@ public partial class MainWindow : Window, IDisposable
         AlbumFilterVideosButton.Content = L("Videos", "视频");
         AlbumDetailEmptyText.Text = L("No media in this album", "这个相册里没有媒体");
 
-        DevicesEmptyText.Text = L("No connected devices", "没有已连接的设备");
-        DeviceCardTitleText.Text = L("Connected device", "已连接设备");
-        DeviceCardSubtitleText.Text = L("Connected", "已连接");
-        BrowseDevicePhotosButton.Content = L("Browse photos", "浏览照片");
-        DisconnectButton.Content = L("Disconnect", "断开连接");
-        ForgetDeviceButton.Content = L("Forget device", "忘记设备");
-        RenameDeviceButton.ToolTip = L("Rename device", "重命名设备");
+        DevicesEmptyText.Text = L("No paired devices", "没有已配对的设备");
         RenameDeviceTitleText.Text = L("Rename device", "重命名设备");
         RenameDeviceSubtitleText.Text = L(
             "This name is stored on this computer and will not be overwritten when the device reconnects.",
@@ -416,6 +413,8 @@ public partial class MainWindow : Window, IDisposable
             "在手机端开启配对，然后在这里输入八位地址码。");
         ConnectButton.Content = L("Connect", "连接");
         CancelManualConnectionButton.Content = L("Cancel", "取消");
+        ConnectionErrorTitleText.Text = L("Connection failed", "连接失败");
+        RefreshDevicePresentation();
 
         LanguageTitleText.Text = L("Language", "语言");
         LanguageSubtitleText.Text = L("Choose interface language", "选择界面显示语言");
@@ -720,6 +719,8 @@ public partial class MainWindow : Window, IDisposable
 
     public ObservableCollection<TransferRow> TransferRows { get; } = [];
 
+    public ObservableCollection<DeviceCardRow> DeviceCards { get; } = [];
+
     private AlbumRow? _activeAlbum;
     private string _activeAlbumFilter = "All";
     private AlbumDetailCacheKey? _loadedAlbumDetailKey;
@@ -741,9 +742,11 @@ public partial class MainWindow : Window, IDisposable
             UpdateIndexedStatus();
             var pairedDevices = await _pairedDeviceStore.ListPairedDevicesAsync(CancellationToken.None);
             await NormalizeSavedDeviceNamesAsync(pairedDevices, CancellationToken.None);
+            _pairedDevices.Clear();
             _pairedDeviceNames.Clear();
             foreach (var pairedDevice in pairedDevices)
             {
+                _pairedDevices[pairedDevice.DeviceId] = pairedDevice;
                 _pairedDeviceNames[pairedDevice.DeviceId] = pairedDevice.DisplayName;
             }
             _savedDeviceCard = pairedDevices
@@ -886,8 +889,8 @@ public partial class MainWindow : Window, IDisposable
     private void UpdateAddressHint()
     {
         var defaultHint = L(
-            "Example: AC17-2D6C. The code contains the complete IPv4 address; no network scan is performed.",
-            "例如 AC17-2D6C。地址码包含完整 IPv4 地址，程序不会扫描局域网。");
+            "Enter the eight-character address code shown on the phone.",
+            "请输入手机上显示的八位地址码。");
         if (string.IsNullOrWhiteSpace(AddressTextBox.Text))
         {
             AddressHintText.Text = defaultHint;
@@ -897,21 +900,22 @@ public partial class MainWindow : Window, IDisposable
 
         try
         {
-            if (Ipv4AddressCode.TryDecode(AddressTextBox.Text, out var decoded))
+            if (Ipv4AddressCode.TryDecode(AddressTextBox.Text, out _))
             {
                 AddressHintText.Text = L(
-                    $"Will connect directly to {decoded}:39570.",
-                    $"将直接连接 {decoded}:39570。");
+                    "Address code is valid. Ready to connect.",
+                    "地址码有效，可以连接。");
                 AddressHintText.Foreground = System.Windows.Media.Brushes.SeaGreen;
                 return;
             }
+
             var address = HttpReadOnlyMediaSource.NormalizeApiAddress(AddressTextBox.Text);
             var couldBeEmulatorNat =
                 HttpReadOnlyMediaSource.IsPotentialAndroidEmulatorNatAddress(address);
             AddressHintText.Text = couldBeEmulatorNat
                 ? L(
-                    "Hint: 10.0.2.x is usually the emulator NAT address. Use adb forward and 127.0.0.1 for emulator; real Wi-Fi phones can still connect directly.",
-                    "提示：10.0.2.x 常见于模拟器内部 NAT，模拟器应使用 adb forward 和 127.0.0.1；若这是真实手机的 Wi-Fi 地址，仍可直接连接。")
+                    "This may be an emulator address. Set up ADB forwarding before connecting.",
+                    "这可能是模拟器地址，请先配置 ADB 转发再连接。")
                 : defaultHint;
             AddressHintText.Foreground = couldBeEmulatorNat
                 ? System.Windows.Media.Brushes.DarkOrange
@@ -926,6 +930,7 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnConnectClick(object sender, RoutedEventArgs e)
     {
+        HideConnectionError();
         var rawAddressOrCode = AddressTextBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(rawAddressOrCode))
         {
@@ -965,18 +970,20 @@ public partial class MainWindow : Window, IDisposable
             SetManualConnectionOpen(true);
         }
 
+        DeviceAuthorization? authorization = null;
         try
         {
-            var endpoint = $"{apiAddress.Host}:{apiAddress.Port}";
-            SetLoading(true, L($"Connecting to {endpoint}...", $"正在连接 {endpoint}…"));
-            SetEmptyState(L($"Connecting to {endpoint}...", $"正在连接 {endpoint}…"));
+            SetLoading(true, L("Connecting to device...", "正在连接设备…"));
+            SetEmptyState(L("Connecting to device...", "正在连接设备…"));
             _connectionCancellation = new CancellationTokenSource();
             var cancellationToken = _connectionCancellation.Token;
             var pairingCode = _pendingPairingCode;
-            var authorization = await ResolveAuthorizationAsync(
+            authorization = await ResolveAuthorizationAsync(
                 apiAddress,
                 cancellationToken,
                 pairingCode);
+            _pairedDevices[authorization.PairedDevice.DeviceId] = authorization.PairedDevice;
+            _savedDeviceCard = authorization.PairedDevice;
             SetPendingPairingCode(null);
             var httpSource = new HttpReadOnlyMediaSource(
                 _httpClient,
@@ -1009,6 +1016,7 @@ public partial class MainWindow : Window, IDisposable
             await _pairedDeviceStore.UpsertPairedDeviceAsync(
                 authorization.PairedDevice,
                 cancellationToken);
+            _pairedDevices[authorization.PairedDevice.DeviceId] = authorization.PairedDevice;
             _pairedDeviceNames[authorization.PairedDevice.DeviceId] =
                 authorization.PairedDevice.DisplayName;
             await _pairedDeviceStore.UpsertAddressAsync(
@@ -1026,8 +1034,6 @@ public partial class MainWindow : Window, IDisposable
             SetLoading(false);
             SetManualConnectionOpen(false);
             _deviceRefreshTimer.Start();
-            DisconnectButton.IsEnabled = true;
-            ForgetDeviceButton.IsEnabled = true;
             StatusText.Text = L(
                 $"Connected to {device.Name} · Loading first media page",
                 $"已连接 {device.Name} · 正在加载第一页媒体");
@@ -1037,10 +1043,20 @@ public partial class MainWindow : Window, IDisposable
             SetLoading(false);
             SetManualConnectionOpen(false);
             ShowPage("Gallery");
-            StartBackgroundSync(_source, endpoint);
+            StartBackgroundSync(_source);
         }
         catch (OperationCanceledException)
         {
+            if (authorization is not null)
+            {
+                authorization.PairedDevice.Status = PairedDeviceStatus.Offline;
+                _pairedDevices[authorization.PairedDevice.DeviceId] = authorization.PairedDevice;
+                _savedDeviceCard = authorization.PairedDevice;
+                await _pairedDeviceStore.UpsertPairedDeviceAsync(
+                    authorization.PairedDevice,
+                    CancellationToken.None);
+            }
+            Disconnect(clearTimeline: true);
             StatusText.Text = L("Connection cancelled", "连接已取消");
             if (!_suppressConnectionModal)
             {
@@ -1049,11 +1065,18 @@ public partial class MainWindow : Window, IDisposable
         }
         catch (Exception exception)
         {
-            ShowConnectionError(exception);
-            if (!_suppressConnectionModal)
+            if (authorization is not null)
             {
-                SetManualConnectionOpen(true);
+                authorization.PairedDevice.Status = PairedDeviceStatus.Offline;
+                _pairedDevices[authorization.PairedDevice.DeviceId] = authorization.PairedDevice;
+                _savedDeviceCard = authorization.PairedDevice;
+                await _pairedDeviceStore.UpsertPairedDeviceAsync(
+                    authorization.PairedDevice,
+                    CancellationToken.None);
             }
+            Disconnect(clearTimeline: true);
+            ShowConnectionError(exception);
+            SetManualConnectionOpen(true);
             await LoadIndexedPageAsync(
                 reset: true,
                 L("Phone unavailable and local cache is empty", "手机当前不可用，本地缓存中还没有媒体"),
@@ -1235,14 +1258,13 @@ public partial class MainWindow : Window, IDisposable
             CancellationToken.None);
     }
 
-    private void StartBackgroundSync(CachingReadOnlyMediaSource source, string endpoint)
+    private void StartBackgroundSync(CachingReadOnlyMediaSource source)
     {
         _backgroundSyncCancellation?.Cancel();
         _backgroundSyncCancellation?.Dispose();
         _backgroundSyncCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             _connectionCancellation?.Token ?? CancellationToken.None);
-        var progress = new Progress<MediaSyncProgress>(
-            update => UpdateBackgroundSyncProgress(endpoint, update));
+        var progress = new Progress<MediaSyncProgress>(UpdateBackgroundSyncProgress);
         _ = SynchronizeInBackgroundAsync(source, progress, _backgroundSyncCancellation.Token);
     }
 
@@ -1272,7 +1294,7 @@ public partial class MainWindow : Window, IDisposable
         }
     }
 
-    private void UpdateBackgroundSyncProgress(string endpoint, MediaSyncProgress progress)
+    private void UpdateBackgroundSyncProgress(MediaSyncProgress progress)
     {
         if (progress.Device is not null)
         {
@@ -1286,8 +1308,8 @@ public partial class MainWindow : Window, IDisposable
         StatusText.Text = progress.Stage switch
         {
             MediaSyncStage.Connecting => L(
-                $"Showing first page · Connecting to {endpoint} in background...",
-                $"已显示第一页 · 后台连接 {endpoint}…"),
+                "Showing first page · Connecting to device in background...",
+                "已显示第一页 · 正在后台连接设备…"),
             MediaSyncStage.DeviceLoaded =>
                 L(
                     $"Connected to {progress.Device?.Name} · Preparing to sync {totalText} media items",
@@ -1309,8 +1331,8 @@ public partial class MainWindow : Window, IDisposable
                     $"Showing first page · Completed {mode} · {progress.ItemsReceived:N0}/{totalText}",
                     $"已显示第一页 · 后台完成 {mode} · {progress.ItemsReceived:N0}/{totalText}"),
             _ => L(
-                $"Showing first page · Syncing {endpoint} in background...",
-                $"已显示第一页 · 后台同步 {endpoint}…"),
+                "Showing first page · Syncing device in background...",
+                "已显示第一页 · 正在后台同步设备…"),
         };
     }
 
@@ -1347,6 +1369,7 @@ public partial class MainWindow : Window, IDisposable
             _activePairedDevice.LastSeenAt = DateTimeOffset.UtcNow;
             _activePairedDevice.Status = PairedDeviceStatus.Online;
             _savedDeviceCard = _activePairedDevice;
+            _pairedDevices[_activePairedDevice.DeviceId] = _activePairedDevice;
         }
 
         RefreshDevicePresentation();
@@ -1374,36 +1397,42 @@ public partial class MainWindow : Window, IDisposable
             DevicePanel.Visibility = CanShowToolbarDevicePanel()
                 ? Visibility.Visible
                 : Visibility.Collapsed;
-            DeviceCardsGrid.Visibility = Visibility.Visible;
-            ConnectedDeviceCard.Visibility = Visibility.Visible;
-            DevicesEmptyText.Visibility = Visibility.Collapsed;
-            DeviceCardTitleText.Text = displayName;
-            DeviceCardSubtitleText.Text = L(
-                $"Connected · {device.MediaCount:N0} items",
-                $"已连接 · {device.MediaCount:N0} 项");
-            BrowseDevicePhotosButton.Content = L("Browse photos", "浏览照片");
-        }
-        else if (saved is not null)
-        {
-            DevicePanel.Visibility = Visibility.Collapsed;
-            DeviceCardsGrid.Visibility = Visibility.Visible;
-            ConnectedDeviceCard.Visibility = Visibility.Visible;
-            DevicesEmptyText.Visibility = Visibility.Collapsed;
-            DeviceCardTitleText.Text = ResolveEffectiveDeviceName(null, saved);
-            DeviceCardSubtitleText.Text = L("Saved · Offline", "已保存 · 离线");
-            BrowseDevicePhotosButton.Content = L("Reconnect", "重新连接");
         }
         else
         {
             DevicePanel.Visibility = Visibility.Collapsed;
-            DeviceCardsGrid.Visibility = Visibility.Collapsed;
-            ConnectedDeviceCard.Visibility = Visibility.Collapsed;
-            DevicesEmptyText.Visibility = Visibility.Visible;
         }
 
-        DisconnectButton.IsEnabled = !isLoading && online;
-        ForgetDeviceButton.IsEnabled = !isLoading && saved is not null;
-        RenameDeviceButton.IsEnabled = !isLoading && saved is not null;
+        DeviceCards.Clear();
+        foreach (var paired in _pairedDevices.Values
+                     .OrderByDescending(device =>
+                         online && string.Equals(device.DeviceId, _activeDeviceId, StringComparison.Ordinal))
+                     .ThenByDescending(static device => device.LastConnectedAt ?? device.CreatedAt)
+                     .ThenBy(static device => device.DisplayName, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var isConnected = online &&
+                              string.Equals(paired.DeviceId, _activeDeviceId, StringComparison.Ordinal);
+            var connected = isConnected ? _connectedDevice : null;
+            DeviceCards.Add(new DeviceCardRow(
+                paired.DeviceId,
+                ResolveEffectiveDeviceName(connected, paired),
+                isConnected && connected is not null
+                    ? L($"Connected · {connected.MediaCount:N0} items", $"已连接 · {connected.MediaCount:N0} 项")
+                    : L("Saved · Offline", "已保存 · 离线"),
+                isConnected ? L("Browse photos", "浏览照片") : L("Reconnect", "重新连接"),
+                L("Disconnect", "断开连接"),
+                L("Forget device", "忘记设备"),
+                L("Rename device", "重命名设备"),
+                isConnected,
+                !isLoading));
+        }
+
+        DeviceCardsGrid.Visibility = DeviceCards.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        DevicesEmptyText.Visibility = DeviceCards.Count == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         if (_currentPage == "Devices")
         {
             UpdatePageSubtitle("Devices");
@@ -2215,13 +2244,20 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnBrowseDevicePhotosClick(object sender, RoutedEventArgs e)
     {
-        if (_isDeviceOnline && _source is { IsOffline: false })
+        var saved = GetDeviceForAction(sender);
+        if (saved is null)
+        {
+            return;
+        }
+
+        if (_isDeviceOnline &&
+            _source is { IsOffline: false } &&
+            string.Equals(_activeDeviceId, saved.DeviceId, StringComparison.Ordinal))
         {
             ShowPage("Gallery");
             return;
         }
 
-        var saved = _activePairedDevice ?? _savedDeviceCard;
         if (saved is { LastHost.Length: > 0, LastPort: not null })
         {
             AddressTextBox.Text = $"{saved.LastHost}:{saved.LastPort.Value}";
@@ -2234,12 +2270,13 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnRenameDeviceClick(object sender, RoutedEventArgs e)
     {
-        var device = _activePairedDevice ?? _savedDeviceCard;
+        var device = GetDeviceForAction(sender);
         if (device is null)
         {
             return;
         }
 
+        _renameDeviceId = device.DeviceId;
         RenameDeviceTextBox.Text = device.DisplayName;
         UseDetectedDeviceNameButton.IsEnabled = device.IsDisplayNameCustom;
         RenameDeviceModal.Visibility = Visibility.Visible;
@@ -2252,20 +2289,24 @@ public partial class MainWindow : Window, IDisposable
             });
     }
 
-    private void OnCancelRenameDeviceClick(object sender, RoutedEventArgs e) =>
+    private void OnCancelRenameDeviceClick(object sender, RoutedEventArgs e)
+    {
+        _renameDeviceId = null;
         RenameDeviceModal.Visibility = Visibility.Collapsed;
+    }
 
     private void OnRenameDeviceModalBackgroundClick(object sender, MouseButtonEventArgs e)
     {
         if (ReferenceEquals(e.OriginalSource, RenameDeviceModal))
         {
+            _renameDeviceId = null;
             RenameDeviceModal.Visibility = Visibility.Collapsed;
         }
     }
 
     private async void OnSaveRenameDeviceClick(object sender, RoutedEventArgs e)
     {
-        var device = _activePairedDevice ?? _savedDeviceCard;
+        var device = FindPairedDevice(_renameDeviceId);
         var displayName = RenameDeviceTextBox.Text.Trim();
         if (device is null || string.IsNullOrWhiteSpace(displayName))
         {
@@ -2276,8 +2317,10 @@ public partial class MainWindow : Window, IDisposable
         device.DisplayName = displayName;
         device.IsDisplayNameCustom = true;
         _savedDeviceCard = device;
+        _pairedDevices[device.DeviceId] = device;
         _pairedDeviceNames[device.DeviceId] = device.DisplayName;
         await _pairedDeviceStore.UpsertPairedDeviceAsync(device, CancellationToken.None);
+        _renameDeviceId = null;
         RenameDeviceModal.Visibility = Visibility.Collapsed;
         RefreshDevicePresentation();
         ShowToast(L("Device name saved", "设备名称已保存"));
@@ -2285,20 +2328,25 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnUseDetectedDeviceNameClick(object sender, RoutedEventArgs e)
     {
-        var device = _activePairedDevice ?? _savedDeviceCard;
+        var device = FindPairedDevice(_renameDeviceId);
         if (device is null)
         {
             return;
         }
 
         device.IsDisplayNameCustom = false;
+        var connected = string.Equals(_activeDeviceId, device.DeviceId, StringComparison.Ordinal)
+            ? _connectedDevice
+            : null;
         device.DisplayName = ResolveAutomaticDeviceName(
-            _connectedDevice?.Name ?? device.DisplayName,
-            _connectedDevice?.Model ?? device.Model,
+            connected?.Name ?? device.DisplayName,
+            connected?.Model ?? device.Model,
             device.Manufacturer);
         _savedDeviceCard = device;
+        _pairedDevices[device.DeviceId] = device;
         _pairedDeviceNames[device.DeviceId] = device.DisplayName;
         await _pairedDeviceStore.UpsertPairedDeviceAsync(device, CancellationToken.None);
+        _renameDeviceId = null;
         RenameDeviceModal.Visibility = Visibility.Collapsed;
         RefreshDevicePresentation();
         ShowToast(L("Detected device name restored", "已恢复识别名称"));
@@ -2313,14 +2361,31 @@ public partial class MainWindow : Window, IDisposable
         }
         else if (e.Key == Key.Escape)
         {
+            _renameDeviceId = null;
             RenameDeviceModal.Visibility = Visibility.Collapsed;
             e.Handled = true;
         }
     }
 
+    private PairedDevice? GetDeviceForAction(object sender) =>
+        sender is FrameworkElement { DataContext: DeviceCardRow row }
+            ? FindPairedDevice(row.DeviceId)
+            : _activePairedDevice ?? _savedDeviceCard;
+
+    private PairedDevice? FindPairedDevice(string? deviceId) =>
+        !string.IsNullOrWhiteSpace(deviceId) && _pairedDevices.TryGetValue(deviceId, out var device)
+            ? device
+            : null;
+
     private void SetManualConnectionOpen(bool isOpen)
     {
         ManualConnectionModal.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void HideConnectionError()
+    {
+        ConnectionErrorPanel.Visibility = Visibility.Collapsed;
+        ConnectionErrorMessageText.Text = "";
     }
 
     private void SetPendingPairingCode(string? code)
@@ -2357,6 +2422,7 @@ public partial class MainWindow : Window, IDisposable
     private void OnEnterIpClick(object sender, RoutedEventArgs e)
     {
         SetPendingPairingCode(null);
+        HideConnectionError();
         AddressTextBox.Clear();
         SetManualConnectionOpen(true);
         StatusText.Text = L(
@@ -2368,6 +2434,7 @@ public partial class MainWindow : Window, IDisposable
     private void OnCancelManualConnectionClick(object sender, RoutedEventArgs e)
     {
         SetPendingPairingCode(null);
+        HideConnectionError();
         SetManualConnectionOpen(false);
     }
 
@@ -3963,11 +4030,18 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnDisconnectClick(object sender, RoutedEventArgs e)
     {
-        var saved = _activePairedDevice ?? _savedDeviceCard;
+        var saved = GetDeviceForAction(sender);
+        if (saved is null ||
+            !string.Equals(saved.DeviceId, _activeDeviceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         if (saved is not null)
         {
             saved.Status = PairedDeviceStatus.Offline;
             _savedDeviceCard = saved;
+            _pairedDevices[saved.DeviceId] = saved;
         }
         Disconnect(clearTimeline: true);
         if (saved is not null)
@@ -3990,15 +4064,21 @@ public partial class MainWindow : Window, IDisposable
 
     private async void OnForgetDeviceClick(object sender, RoutedEventArgs e)
     {
-        var device = _activePairedDevice ?? _savedDeviceCard;
-        var accessToken = _activeAccessToken;
-        var apiAddress = _activeApiAddress;
+        var device = GetDeviceForAction(sender);
         if (device is null)
         {
             return;
         }
 
-        ForgetDeviceButton.IsEnabled = false;
+        var isActive = string.Equals(device.DeviceId, _activeDeviceId, StringComparison.Ordinal);
+        var accessToken = isActive
+            ? _activeAccessToken
+            : await _accessTokenStore.ReadAsync(device.CredentialKey, CancellationToken.None);
+        var apiAddress = isActive
+            ? _activeApiAddress
+            : device is { LastHost.Length: > 0, LastPort: not null }
+                ? new UriBuilder(Uri.UriSchemeHttp, device.LastHost, device.LastPort.Value, "api/v1/").Uri
+                : null;
         var remoteRevoked = false;
         if (apiAddress is not null && !string.IsNullOrWhiteSpace(accessToken))
         {
@@ -4017,9 +4097,19 @@ public partial class MainWindow : Window, IDisposable
 
         await _accessTokenStore.DeleteAsync(device.CredentialKey, CancellationToken.None);
         await _pairedDeviceStore.RemovePairedDeviceAsync(device.DeviceId, CancellationToken.None);
+        _pairedDevices.Remove(device.DeviceId);
         _pairedDeviceNames.Remove(device.DeviceId);
-        _savedDeviceCard = null;
-        Disconnect(clearTimeline: true);
+        _savedDeviceCard = _pairedDevices.Values
+            .OrderByDescending(static paired => paired.LastConnectedAt ?? paired.CreatedAt)
+            .FirstOrDefault();
+        if (isActive)
+        {
+            Disconnect(clearTimeline: true);
+        }
+        else
+        {
+            RefreshDevicePresentation();
+        }
         ShowToast(remoteRevoked
             ? L("Pairing revoked and device forgotten", "已撤销配对并忘记设备")
             : L("Device forgotten locally; the phone was unavailable", "已在本机忘记设备；手机当前不可用"));
@@ -4131,8 +4221,6 @@ public partial class MainWindow : Window, IDisposable
 
         EmptyText.Text = L("Enter a phone address to connect", "输入手机地址开始连接");
         EmptyText.Visibility = Visibility.Visible;
-        DisconnectButton.IsEnabled = false;
-        ForgetDeviceButton.IsEnabled = false;
         SetLoading(false);
         RefreshDevicePresentation();
     }
@@ -4151,15 +4239,11 @@ public partial class MainWindow : Window, IDisposable
 
         ConnectButton.IsEnabled = !isLoading;
         AddressTextBox.IsEnabled = !isLoading;
-        DisconnectButton.IsEnabled = isLoading || _isDeviceOnline;
-        ForgetDeviceButton.IsEnabled =
-            !isLoading && (_activePairedDevice ?? _savedDeviceCard) is not null;
-        RenameDeviceButton.IsEnabled =
-            !isLoading && (_activePairedDevice ?? _savedDeviceCard) is not null;
         if (status is not null)
         {
             StatusText.Text = status;
         }
+        RefreshDevicePresentation();
     }
 
     private void UpdateIndexedStatus()
@@ -4177,8 +4261,7 @@ public partial class MainWindow : Window, IDisposable
 
     private void ShowConnectionError(Exception exception)
     {
-        DisconnectButton.IsEnabled = false;
-        StatusText.Text = exception switch
+        var message = exception switch
         {
             FormatException => exception.Message,
             MediaSourceTimeoutException =>
@@ -4213,6 +4296,13 @@ public partial class MainWindow : Window, IDisposable
                     "无法连接手机。请检查 IP、端口、Wi-Fi 和手机服务状态；仍可浏览本地索引。"),
             _ => L($"Connection failed: {exception.Message}", $"连接失败：{exception.Message}"),
         };
+        StatusText.Text = message;
+        ConnectionErrorTitleText.Text = exception is MediaSourceHttpException
+            { StatusCode: HttpStatusCode.Forbidden }
+                ? L("Permission required on phone", "需要在手机端授予权限")
+                : L("Connection failed", "连接失败");
+        ConnectionErrorMessageText.Text = message;
+        ConnectionErrorPanel.Visibility = Visibility.Visible;
     }
 
     private readonly record struct DecodedThumbnailKey(
@@ -4469,6 +4559,17 @@ public partial class MainWindow : Window, IDisposable
 
         public string? RelativePath { get; } = relativePath;
     }
+
+    public sealed record DeviceCardRow(
+        string DeviceId,
+        string DisplayName,
+        string Subtitle,
+        string BrowseLabel,
+        string DisconnectLabel,
+        string ForgetLabel,
+        string RenameLabel,
+        bool IsConnected,
+        bool CanManage);
 
     public sealed class TransferRow : INotifyPropertyChanged
     {
