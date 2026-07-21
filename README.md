@@ -89,6 +89,19 @@ Desktop / Infrastructure → Application → Domain
 The Android application separates media access, discovery, pairing, server, identity, and UI code so
 that platform behavior does not leak into the shared protocol.
 
+## Key engineering decisions
+
+These decisions were made at specific points in the project rather than being added after the code
+was written:
+
+| Decision point | Question | Decision and reason |
+| --- | --- | --- |
+| Product boundary | Should the desktop be allowed to organize files on the phone? | Keep Android strictly read-only. A gallery bug must never delete or rewrite the source library. |
+| Cross-platform contract | How do C# and Kotlin avoid silently drifting apart? | Treat `protocol/openapi.yaml` and shared JSON fixtures as the source of truth, then test both implementations against them. |
+| Reliable saving | Who owns paths, duplicate names, and interrupted files? | Make Windows own all output and use persistent jobs, `.partial` files, Range validation, and final publication. |
+| Future sources | How can phones, cameras, folders, and NAS devices share one gallery? | Put device-specific behavior behind discovery, media-source, and transfer interfaces. |
+| Release readiness | Is a working local prototype safe to present as production software? | No. Security and release reviews led to an explicit Alpha label and a hardening roadmap before wider use. |
+
 ## Repository layout
 
 ```text
@@ -112,18 +125,75 @@ LinkGallery/
 | Contract | OpenAPI, shared JSON fixtures, Redocly |
 | Quality | MSTest, JUnit, Android UI tests, end-to-end tests, GitHub Actions, Dependabot |
 
-## Build locally
+## Quick start
 
-The main Windows build entry point restores, builds, and tests the .NET solution and then builds the
-Android debug APK with the Gradle Wrapper:
+### Prerequisites
+
+- Windows with PowerShell;
+- .NET 8 SDK (`global.json` currently requests `8.0.422` and allows the latest 8.0 patch);
+- Android Studio with Android SDK 36, platform tools/ADB, and JDK 21;
+- an Android 10+ device, or an Android emulator;
+- a trusted local network when using a physical phone.
+
+The environment helper recognizes standard `DOTNET_ROOT`, `JAVA_HOME`, `ANDROID_HOME`, and
+`ANDROID_SDK_ROOT` variables. See [development setup](docs/development.md) if the tools are not found
+automatically.
+
+### 1. Clone and validate the project
 
 ```powershell
+git clone https://github.com/xyan1773/LinkGallery.git
+cd LinkGallery
 .\scripts\build.ps1
 ```
 
-For individual workflows, open `LinkGallery.sln` in Visual Studio or Rider and open `android/` in
-Android Studio. See [development setup](docs/development.md), [connectivity testing](docs/connectivity-testing.md),
-and [end-to-end testing](docs/e2e-testing.md) for details.
+This restores, builds, and tests the .NET solution, then builds the Android debug APK and runs its
+unit tests. Use `-SkipDesktop`, `-SkipAndroid`, or `-Configuration Release` when working on one side
+only.
+
+### 2. Install the Android companion
+
+Connect a device with USB debugging enabled, then install the APK produced by the build:
+
+```powershell
+adb devices
+adb install -r android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+Open LinkGallery on Android, grant read-only photo/video access and notification permission, and
+leave the media service running. For an emulator, forward the service port before connecting:
+
+```powershell
+adb forward tcp:39570 tcp:39570
+```
+
+### 3. Start the Windows application
+
+```powershell
+dotnet run --project desktop\LinkGallery.Desktop\LinkGallery.Desktop.csproj
+```
+
+On Android, open the two-minute pairing window. On Windows, choose **Find devices** or **Pair
+device**, enter the address code shown by Android, then select the phone to browse its timeline and
+albums. If discovery is blocked, allow LinkGallery through Windows Firewall on private networks and
+follow the [connectivity guide](docs/connectivity-testing.md).
+
+### Optional reproducible demo data
+
+Normal use reads the phone's existing MediaStore library, so example data is not required. For a
+privacy-safe, repeatable emulator demo, place at least one non-sensitive `.JPG` and `.MP4` in a
+separate directory and run:
+
+```powershell
+.\scripts\run-e2e.ps1 -Profile Smoke `
+  -SourceMediaRoot C:\path\to\safe-demo-media
+```
+
+The Smoke profile selects the smallest JPG and MP4, copies them only to the dedicated
+`/sdcard/DCIM/LinkGalleryE2E` directory, runs the Android/API/Windows journey, and writes evidence to
+`artifacts/e2e/<timestamp>-smoke`. The source directory remains read-only. If an appropriate emulator
+does not exist, see [end-to-end testing](docs/e2e-testing.md) before using `-RecreateAvd`; that option
+recreates the named AVD and has substantial disk requirements.
 
 ## Alpha status and security
 
@@ -140,20 +210,37 @@ pairing expiry, path traversal, invalid range requests, and transfer publication
 Please do not disclose a security issue in a public GitHub issue. Follow [SECURITY.md](SECURITY.md)
 for the reporting policy.
 
-## How Codex and GPT-5.6 helped
+## How GPT-5.6 and Codex accelerated the workflow
 
-Codex and GPT-5.6 have been used throughout development to:
+GPT-5.6 and Codex had different, complementary roles. **GPT-5.6** was used for product reasoning,
+trade-off analysis, threat modeling, and challenging assumptions before implementation. **Codex**
+acted as the repository-aware engineering agent: it inspected the existing code and Git history,
+edited C# and Kotlin together, ran builds and tests, compared the implementation with the OpenAPI
+contract, and prepared reviewable GitHub changes.
 
-- review and refine the cross-device architecture;
-- turn the product roadmap into GitHub issues and milestones;
-- implement and debug features across C# and Kotlin;
-- compare both sides of the shared API contract;
-- improve error handling, tests, documentation, and release workflows;
-- review security, privacy, dependency, and distribution risks.
+The working loop was:
 
-The most useful lesson was that AI can act as an engineering reviewer, not only a code generator. It
-helped question assumptions, compare the implementation with the intended design, and identify work
-that must be completed before a wider release.
+1. describe the user journey and acceptance boundary;
+2. use GPT-5.6 to compare designs and expose missing failure or security cases;
+3. let Codex trace the affected code across Android, Windows, protocol, tests, and documentation;
+4. implement the smallest coherent vertical slice;
+5. run targeted tests, the full build, and CI, then review the diff before merging.
+
+Concrete examples:
+
+| Stage | Specific GPT-5.6 / Codex use | Decision or artifact | How it accelerated the work |
+| --- | --- | --- | --- |
+| Product planning | Converted the original Phone Link frustration into user journeys, exclusions, milestones, and GitHub-sized tasks. | `docs/product-scope.md`, roadmap, and focused issues | Replaced an open-ended prototype with testable vertical slices. |
+| Architecture | Compared a device-specific UI with a shared media model and adapter boundaries. Codex then traced dependencies across the solution. | Domain/Application/Infrastructure separation and media-source interfaces | Allowed later device sources to reuse the gallery instead of duplicating it. |
+| Cross-platform protocol | Reviewed `protocol/openapi.yaml`, Kotlin models, and C# DTOs in one repository-wide pass; added shared fixtures and contract tests. | One OpenAPI boundary consumed by both platforms | Turned two manual review passes into one repeatable compatibility check. |
+| Reliable transfer | Enumerated disconnect, retry, disk, permission, duplicate-name, truncated-response, and restart cases before implementation. | Persistent jobs, `.partial` files, Range checks, and safe publication tests | Found failure cases before they became UI bugs or corrupted output. |
+| Security and privacy | Scanned tracked files and Git history, reviewed pairing and token flows, checked dependencies and release artifacts, and inspected demo screenshots. | Alpha warning, privacy-safe preview, hardening priorities, and security regression matrix | Prevented personal media from being published and moved security review earlier in the release cycle. |
+| Delivery | Ran repository checks, kept unrelated worktree changes out of commits, prepared bilingual documentation, pushed branches, and opened PRs. | Small auditable commits with CI evidence | Reduced context switching between implementation, validation, and GitHub handoff. |
+
+The acceleration was not just faster code generation. The main gain was shortening the feedback loop
+between a decision, its cross-platform implementation, its tests, and its review evidence. No
+time-saving number is claimed because it was not measured; the repository artifacts above are the
+evidence of where AI changed the workflow.
 
 ## Challenges and lessons
 
