@@ -44,7 +44,7 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
-    implementation("io.github.antonio2904:android-device-names:2026.07.00")
+    implementation("io.github.antonio2904:android-device-names:2026.08.00")
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 
